@@ -860,7 +860,9 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
   }
   await insertBundleNested(project.db, pluralBundle("bare", true));
   const warn = vi.spyOn(log, "warn");
+  const success = vi.spyOn(log, "success");
   const { provider } = fakeBatchProvider();
+  const translateBatch = vi.spyOn(provider, "translateBatch");
   try {
     const { translated } = await translateCommandAction({ project, provider });
     // de and x-foo for the plurals, every locale for the bare selector
@@ -877,6 +879,16 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
     ]);
+    // the plural report comes at the end of the run: after the last
+    // request, before the success line
+    const [, skippedWarning, unknownWarning] = warn.mock.invocationCallOrder;
+    expect(skippedWarning).toBeGreaterThan(
+      Math.max(...translateBatch.mock.invocationCallOrder),
+    );
+    expect(unknownWarning).toBeGreaterThan(skippedWarning!);
+    expect(success.mock.invocationCallOrder[0]).toBeGreaterThan(
+      unknownWarning!,
+    );
     const bundles = await selectBundleNested(project.db).execute();
     expect(
       bundles

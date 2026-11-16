@@ -58,7 +58,7 @@ type MissingTranslation = {
 export const PLURAL_CATEGORIES = ["zero", "one", "two", "few", "many", "other"];
 
 /** What a bundle's plurals tell the user. */
-export type PluralReport = {
+type PluralReport = {
   /**
    * Target locales left out, with the plural categories they need that no
    * source variant has: translating the source's forms would leave the
@@ -156,8 +156,10 @@ export function planBundleTranslation(
       selectors: targetMessage?.selectors ?? sourceMessage.selectors,
       variants: targetMessage?.variants ?? [],
     };
+    // an empty form is missing, like one the target doesn't have
     const categories = new Set(
       missingVariants(target, declarations, {
+        variants: target.variants.filter((variant) => !isEmpty(variant)),
         referenceVariants: sourceMessage.variants,
       })
         .filter(
@@ -178,7 +180,7 @@ export function planBundleTranslation(
       continue;
     }
 
-    const translated = missing.length;
+    const missingBefore = missing.length;
     for (const sourceVariant of sourceMessage.variants) {
       const existingVariant = findMatchingVariant(
         target.variants,
@@ -187,15 +189,7 @@ export function planBundleTranslation(
         declarations,
       );
 
-      if (
-        existingVariant &&
-        !(
-          existingVariant.pattern.length === 0 ||
-          (existingVariant.pattern.length === 1 &&
-            existingVariant.pattern[0]?.type === "text" &&
-            (existingVariant.pattern[0] as Text).value === "")
-        )
-      ) {
+      if (existingVariant && !isEmpty(existingVariant)) {
         continue;
       }
 
@@ -207,7 +201,7 @@ export function planBundleTranslation(
       });
     }
     if (
-      missing.length > translated &&
+      missing.length > missingBefore &&
       hasUnknownPluralRules(target, declarations)
     ) {
       report.unknownPluralRules.push(targetLocale);
@@ -294,6 +288,16 @@ export function planBundleTranslation(
   };
 }
 
+/** True when a variant has no text: its translation is missing. */
+function isEmpty(variant: VariantRow): boolean {
+  return (
+    variant.pattern.length === 0 ||
+    (variant.pattern.length === 1 &&
+      variant.pattern[0]?.type === "text" &&
+      (variant.pattern[0] as Text).value === "")
+  );
+}
+
 /**
  * The plural categories a missing form needs that no source variant of its
  * branch has: Russian `few` × `female` when no English variant is `few` and
@@ -308,17 +312,16 @@ function newCategories(
   sourceVariants: VariantRow[],
   declarations: BundleNested["declarations"],
 ): string[] {
-  const valueOf = (match: VariantRow["matches"][number]) =>
-    match.type === "literal-match" ? match.value : "*";
   const branch = sourceVariants.filter((variant) =>
     matches.every((match) => {
       if (isPluralSelector(match.key, declarations)) return true;
+      const wanted = matchValue({ matches }, match.key);
       const value = matchValue(variant, match.key);
       return (
-        value === valueOf(match) ||
+        value === wanted ||
         (value === "*" &&
           !sourceVariants.some(
-            (other) => matchValue(other, match.key) === valueOf(match),
+            (other) => matchValue(other, match.key) === wanted,
           ))
       );
     }),

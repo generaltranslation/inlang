@@ -554,6 +554,45 @@ test("a target with its own plural forms is translated: only the empty catch-all
   });
 });
 
+test("empty forms are missing forms: a target whose plural forms are all empty is skipped", async () => {
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: items,
+    ru: {
+      "countPlural=one": "",
+      "countPlural=few": "",
+      "countPlural=many": "",
+      "countPlural=*": "",
+    },
+  });
+  const { calls, result } = await translate(bundle, ["ru"]);
+
+  expect(result.skippedPlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+  expect(calls).toEqual([]);
+});
+
+test("a target's own selectors decide the forms it needs", async () => {
+  // a source without a plural, and a hand-written Russian plural without
+  // `many` and a catch-all
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=*": "Items" },
+    ru: {
+      "countPlural=one": "Один товар",
+      "countPlural=few": "Несколько товаров",
+    },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["ru"]);
+
+  expect(result.skippedPlurals).toEqual([
+    { locale: "ru", categories: ["many"] },
+  ]);
+  expect(calls).toEqual([]);
+});
+
 test("`other` and the catch-all are the same form", async () => {
   // the source's `other` is the target's catch-all: no second one is added
   const other = await translate(
@@ -581,6 +620,20 @@ test("`other` and the catch-all are the same form", async () => {
   expect(Object.entries(formsOf(catchAll.result, "de")!)).toEqual([
     ["countPlural=one", "[de] One item"],
     ["countPlural=other", "Dinge"],
+  ]);
+
+  // an empty `other` is filled, not left next to a second catch-all
+  const emptyOther = await translate(
+    formsBundle(countPlural, ["countPlural"], {
+      en: items,
+      de: { "countPlural=one": "Ein Ding", "countPlural=other": "" },
+    }),
+    ["de"],
+  );
+  expect(emptyOther.calls.map((call) => call.text)).toEqual(["Many items"]);
+  expect(Object.entries(formsOf(emptyOther.result, "de")!)).toEqual([
+    ["countPlural=one", "Ein Ding"],
+    ["countPlural=other", "[de] Many items"],
   ]);
 
   // coverage is the same: Russian still lacks few and many
