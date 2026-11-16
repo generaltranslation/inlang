@@ -834,15 +834,14 @@ test("a form for one number may drop its number: German `one` is 1, French `one`
 
   expect(result.reverted).toEqual([
     { locale: "fr", placeholders: ["{count}"] },
+    { locale: "fr", placeholders: [] },
   ]);
   expect(formsOf(result, "de")).toEqual({
     "countPlural=one": "[de]  item",
     "countPlural=*": "[de] {count} items",
   });
-  // a new message without `one` still has its catch-all
-  expect(formsOf(result, "fr")).toEqual({
-    "countPlural=*": "[fr] {count} items",
-  });
+  // a new message isn't created without one of its forms
+  expect(formsOf(result, "fr")).toBeUndefined();
 });
 
 test("a translation that drops a placeholder doesn't revert the other translations of a message that exists", async () => {
@@ -865,28 +864,52 @@ test("a translation that drops a placeholder doesn't revert the other translatio
   });
 });
 
-test.each(["*", "other"])(
-  "a new message whose catch-all (%s) is reverted isn't created: it would show the bundle id",
-  async (catchAll) => {
-    const bundle = withPlaceholders(
-      formsBundle(countPlural, ["countPlural"], {
-        en: {
-          "countPlural=one": "{count} item",
-          [`countPlural=${catchAll}`]: "{count} items",
-        },
-      }),
-    );
-    const result = await translateEditing(bundle, ["de"], (text) =>
-      text.endsWith(" items") ? dropPlaceholders(text) : text,
-    );
+test("a new message with a reverted translation isn't created: a select without a catch-all", async () => {
+  const bundle = withPlaceholders(
+    formsBundle([input("gender"), input("name")], ["gender"], {
+      en: {
+        "gender=female": "{name} is here",
+        "gender=male": "{name} is here too",
+      },
+    }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" here") ? dropPlaceholders(text) : text,
+  );
 
-    expect(result.reverted).toEqual([
-      { locale: "de", placeholders: [] },
-      { locale: "de", placeholders: ["{count}"] },
-    ]);
-    expect(formsOf(result, "de")).toBeUndefined();
-  },
-);
+  // a German `male` alone would show the bundle id for `female`
+  expect(result.reverted).toEqual([
+    { locale: "de", placeholders: ["{name}"] },
+    { locale: "de", placeholders: [] },
+  ]);
+  expect(formsOf(result, "de")).toBeUndefined();
+});
+
+test("a new message with a reverted translation isn't created: a plural and a gender without a catch-all for both", async () => {
+  const bundle = withPlaceholders(
+    formsBundle([input("gender"), ...countPlural], ["gender", "countPlural"], {
+      en: {
+        "gender=female,countPlural=one": "She has {count} item",
+        "gender=female,countPlural=*": "She has {count} items",
+        "gender=male,countPlural=one": "He has {count} item",
+        "gender=male,countPlural=*": "He has {count} items",
+      },
+    }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.includes("She has") && text.endsWith(" items")
+      ? dropPlaceholders(text)
+      : text,
+  );
+
+  expect(result.reverted).toEqual([
+    { locale: "de", placeholders: [] },
+    { locale: "de", placeholders: ["{count}"] },
+    { locale: "de", placeholders: [] },
+    { locale: "de", placeholders: [] },
+  ]);
+  expect(formsOf(result, "de")).toBeUndefined();
+});
 
 test("a placeholder the source form lacks too doesn't revert: English `one` without `{count}` into `one` for 0 and 1", async () => {
   const bundle = withPlaceholders(
@@ -928,6 +951,28 @@ test("a placeholder dropped from a form whose source lacks another one is revert
   expect(result.reverted).toEqual([{ locale: "fr", placeholders: ["{name}"] }]);
   expect(formsOf(result, "fr")).toEqual({
     "countPlural=*": "{name} a {count} articles",
+  });
+});
+
+test("a form only the target reaches is compared with its source form: English `zero` into Latvian", async () => {
+  // English never selects `zero`, so the SDK compares Latvian `zero` (0,
+  // 10-20, ...) with English `*`, which has `<b>` and `{count}` but not `{name}`
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=zero": "No items for {name}",
+        "countPlural=one": "<b>{count}</b> item",
+        "countPlural=*": "<b>{count}</b> items",
+      },
+    }),
+  );
+  const result = await translateEditing(bundle, ["lv"], (text) => text);
+
+  expect(result.reverted).toEqual([]);
+  expect(formsOf(result, "lv")).toEqual({
+    "countPlural=zero": "[lv] No items for {name}",
+    "countPlural=one": "[lv] <b>{count}</b> item",
+    "countPlural=*": "[lv] <b>{count}</b> items",
   });
 });
 

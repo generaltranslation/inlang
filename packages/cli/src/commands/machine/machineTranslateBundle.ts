@@ -81,7 +81,7 @@ export type BundleTranslationPlan = PluralReport & {
   /**
    * Adds a translation for each of `missing` to a copy of the bundle, except
    * those that dropped or changed a placeholder (see `brokenPlaceholders`),
-   * and a new message whose catch-all is one of them.
+   * and every translation of a new message that has one of them.
    */
   apply: (
     translations: Map<MissingTranslation, VariantRow["pattern"]>,
@@ -99,7 +99,7 @@ type TranslatedBundle = {
   /**
    * Translations left out because they dropped or changed a variable or
    * markup of the source, with those placeholders (`{count}`, `<b>`), and
-   * the other translations of a new message whose catch-all was one of them.
+   * the other translations of a new message that had one of them.
    */
   reverted: Array<{ locale: string; placeholders: string[] }>;
 };
@@ -312,23 +312,18 @@ export function planBundleTranslation(
         locales: args.targetLocales,
         referenceLocale: args.sourceLocale,
       });
-      // a new message without its catch-all (`*`, or a plural's `other`)
-      // shows the bundle id for what no other form matches, worse than no
-      // message, for which the runtime falls back to another locale
+      // a new message missing a form can match nothing and show the bundle
+      // id, while for a missing message the runtime falls back to another
+      // locale
       const brokenNewMessages = new Set(
         [...broken.keys()]
-          .map((id) => first.written.get(id)!)
+          .map((id) => first.written.get(id)!.targetLocale)
           .filter(
-            ({ sourceVariant, targetLocale }) =>
-              sourceVariant.matches.every(
-                (match) =>
-                  match.type === "catchall-match" || match.value === "other",
-              ) &&
+            (locale) =>
               !args.bundle.messages.some(
-                (message) => message.locale === targetLocale,
+                (message) => message.locale === locale,
               ),
-          )
-          .map(({ targetLocale }) => targetLocale),
+          ),
       );
       const reverted = [...first.written].filter(
         ([id, translation]) =>
