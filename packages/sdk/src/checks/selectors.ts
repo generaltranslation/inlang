@@ -760,48 +760,73 @@ export function missingVariants(
 
 /**
  * The reference variant a form of a translation (one of its
- * {@link requiredVariants} in `targetLocale`) is translated from: the one with
- * the same select values and exact numbers (ICU `=0`). A plural category the
- * reference has no variant for in that branch of the other selectors is
- * translated from the branch's explicit `other`, or else its catch-all:
- * Russian `few` from English `*`, `few · female` from `* · female`.
- * Undefined when the reference has no such variant, such as for a select
- * value only the translation uses.
+ * {@link requiredVariants}) is translated from.
+ *
+ * - Exact numbers (ICU `=0`) must match.
+ * - A plural category the reference has no variant for is translated from
+ *   its explicit `other`, or else its catch-all: Russian `few` from English
+ *   `*`. The runtime selects `other` for every number of no other category,
+ *   so the translation's catch-all comes from `other` too.
+ * - The category is taken from the same branch of the other selectors:
+ *   `few · female` from `* · female`, `one · male` from `* · male`. Only when
+ *   that branch has no variant for the category does the select value fall
+ *   back to the reference's catch-all, which the runtime then shows: `few ·
+ *   male` from `* · *` when only `one · male` exists.
+ * - A selector only the reference has stays at its catch-all.
+ * - Variants the reference never selects in `referenceLocale` (English
+ *   `zero`) are skipped.
+ *
+ * Undefined when the reference has no such variant, such as for an exact
+ * number or a select value only the translation uses.
  */
 export function sourceVariantFor<V extends WithMatches>(
 	target: readonly Match[],
 	reference: readonly V[],
 	declarations: readonly Declaration[] | undefined,
-	targetLocale: string
+	referenceLocale: string
 ): V | undefined {
 	const form = { matches: target };
+	const shown = reference.filter(
+		(variant) => !isUnreachableVariant(variant, declarations, referenceLocale)
+	);
+	const names = [
+		...new Set(
+			[form, ...shown].flatMap((variant) =>
+				variant.matches.map((match) => match.key)
+			)
+		),
+	];
 	const groups = selectorGroups(
 		{
-			locale: targetLocale,
-			selectors: target.map(({ key }) => ({
-				type: "variable-reference",
-				name: key,
-			})),
+			locale: referenceLocale,
+			selectors: names.map((name) => ({ type: "variable-reference", name })),
 		},
 		declarations,
-		{ variants: [form], referenceVariants: reference }
+		{ variants: [form], referenceVariants: shown }
 	);
-	// per group, the reference keys that stand in for the form's key, best first: `other`
-	// before the catch-all, as the runtime selects it for every number of no other category
-	let candidates: string[][] = [[]];
-	for (const group of groups) {
+	// per group, the reference keys that stand in for the form's key, best first; the
+	// selects first, so a select falls back only when no plural key of its branch matches
+	let candidates = [new Map<SelectorGroup, string>()];
+	for (const group of [...groups].sort(
+		(a, b) => Number(a.isPlural) - Number(b.isPlural)
+	)) {
 		const key = group.keyOf(form);
-		const keys =
-			group.isPlural && !isNumericKey(key)
-				? [...new Set([key, "other", "*"])]
-				: [key];
+		const keys = !group.isPlural
+			? key !== "*" && shown.some((variant) => group.keyOf(variant) === key)
+				? [key, "*"]
+				: [key]
+			: isNumericKey(key)
+				? [key]
+				: key === "*" || key === "other"
+					? ["other", "*"]
+					: [key, "other", "*"];
 		candidates = candidates.flatMap((candidate) =>
-			keys.map((value) => [...candidate, value])
+			keys.map((value) => new Map([...candidate, [group, value]]))
 		);
 	}
-	for (const keys of candidates) {
-		const variant = reference.find((variant) =>
-			groups.every((group, index) => group.keyOf(variant) === keys[index])
+	for (const candidate of candidates) {
+		const variant = shown.find((variant) =>
+			groups.every((group) => group.keyOf(variant) === candidate.get(group))
 		);
 		if (variant) return variant;
 	}

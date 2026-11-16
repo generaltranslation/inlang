@@ -304,7 +304,8 @@ test("resolveInputVariable follows local aliases", () => {
 const sources = (
 	translation: ReturnType<typeof message>,
 	declarations: Declaration[],
-	reference: { matches: Match[] }[]
+	reference: { matches: Match[] }[],
+	referenceLocale = "en"
 ) =>
 	requiredVariants(translation, declarations, {
 		referenceVariants: reference,
@@ -313,7 +314,7 @@ const sources = (
 			form,
 			reference,
 			declarations,
-			translation.locale
+			referenceLocale
 		);
 		return `${values([form])} <- ${source ? values([source.matches]) : "none"}`;
 	});
@@ -330,7 +331,7 @@ test("a plural category the reference lacks is translated from its catch-all", (
 		"* <- *",
 	]);
 	const form = requiredVariants(message("ru", ["countPlural"]), plural)[1]!;
-	expect(sourceVariantFor(form, english, plural, "ru")).toBe(english[1]);
+	expect(sourceVariantFor(form, english, plural, "en")).toBe(english[1]);
 });
 
 test("an explicit other stands in for the catch-all, and comes first", () => {
@@ -347,7 +348,7 @@ test("an explicit other stands in for the catch-all, and comes first", () => {
 			variant({ countPlural: "other" }),
 			variant({ countPlural: "*" }),
 		])
-	).toEqual(["one <- one", "few <- other", "many <- other", "* <- *"]);
+	).toEqual(["one <- one", "few <- other", "many <- other", "* <- other"]);
 });
 
 test("a category is taken from the same branch of the other selectors", () => {
@@ -376,6 +377,111 @@ test("a category is taken from the same branch of the other selectors", () => {
 	]);
 });
 
+test("a select value falls back to the catch-all only when its branch lacks the category", () => {
+	// "He has one file" / "They have {n} files": English male 5 shows `* · *`
+	const english = [
+		variant({ countPlural: "one", gender: "male" }),
+		variant({ countPlural: "one", gender: "*" }),
+		variant({ countPlural: "*", gender: "*" }),
+	];
+	expect(
+		sources(message("ru", ["countPlural", "gender"]), genderPlural, english)
+	).toEqual([
+		"one · male <- one · male",
+		"one · * <- one · *",
+		"few · male <- * · *",
+		"few · * <- * · *",
+		"many · male <- * · *",
+		"many · * <- * · *",
+		"* · male <- * · *",
+		"* · * <- * · *",
+	]);
+});
+
+test("the earlier of two plural selectors keeps its category first", () => {
+	const twoPlurals: Declaration[] = [
+		...plural,
+		{ type: "input-variable", name: "n" },
+		{
+			type: "local-variable",
+			name: "nPlural",
+			value: {
+				type: "expression",
+				arg: { type: "variable-reference", name: "n" },
+				annotation: {
+					type: "function-reference",
+					name: "plural",
+					options: [],
+				},
+			},
+		},
+	];
+	const english = [
+		variant({ countPlural: "*", nPlural: "other" }),
+		variant({ countPlural: "other", nPlural: "*" }),
+		variant({ countPlural: "*", nPlural: "*" }),
+	];
+	expect(
+		sourceVariantFor(
+			variant({ countPlural: "few", nPlural: "few" }).matches,
+			english,
+			twoPlurals,
+			"en"
+		)
+	).toBe(english[1]);
+});
+
+test("a selector only the reference has stays at its catch-all", () => {
+	expect(
+		sources(message("ru", ["countPlural"]), genderPlural, [
+			variant({ countPlural: "one", gender: "female" }),
+			variant({ countPlural: "*", gender: "female" }),
+			variant({ countPlural: "*", gender: "*" }),
+		])
+	).toEqual(["one <- * · *", "few <- * · *", "many <- * · *", "* <- * · *"]);
+	// the reference's `=0` is not its catch-all
+	expect(
+		sources(message("ru", ["countPlural"]), icuExact, icuEnglish.variants)
+	).toEqual(["one <- * · one", "few <- * · *", "many <- * · *", "* <- * · *"]);
+});
+
+test("a variant the reference never selects is not a source", () => {
+	// English never selects `zero`; Latvian `zero` is 0, 10–20, 30…
+	expect(
+		sources(
+			message("lv", ["countPlural"]),
+			plural,
+			["zero", "one", "*"].map((countPlural) => variant({ countPlural }))
+		)
+	).toEqual(["zero <- *", "one <- one", "* <- *"]);
+});
+
+test("words on the count's own selector make it a select, in the reference or the form", () => {
+	const english = [
+		variant({ countPluralExact: "none", countPlural: "*" }),
+		variant({ countPluralExact: "0", countPlural: "one" }),
+		variant({ countPluralExact: "*", countPlural: "*" }),
+	];
+	// a select, so `0` and `one` are two values: English 0 shows `* · *`
+	expect(
+		sourceVariantFor(
+			variant({ countPluralExact: "0", countPlural: "*" }).matches,
+			english,
+			icuExact,
+			"en"
+		)
+	).toBe(english[2]);
+	// a word only the translation uses has no source
+	expect(
+		sourceVariantFor(
+			variant({ countPluralExact: "none", countPlural: "*" }).matches,
+			icuEnglish.variants,
+			icuExact,
+			"en"
+		)
+	).toBeUndefined();
+});
+
 test("exact numbers and select values are never substituted", () => {
 	expect(
 		sources({ ...icuEnglish, locale: "ru" }, icuExact, icuEnglish.variants)
@@ -399,7 +505,7 @@ test("exact numbers and select values are never substituted", () => {
 			variant({ countPluralExact: "1", countPlural: "*" }).matches,
 			icuEnglish.variants,
 			icuExact,
-			"ru"
+			"en"
 		)
 	).toBeUndefined();
 });
@@ -460,7 +566,7 @@ test("a plural with a variable type takes its forms from the same type", () => {
 		variant({ pluralType: "ordinal", countPlural: "*" }),
 	];
 	expect(
-		sources(message("en", ["pluralType", "countPlural"]), typed, german)
+		sources(message("en", ["pluralType", "countPlural"]), typed, german, "de")
 	).toEqual([
 		"ordinal · one <- ordinal · *",
 		"ordinal · two <- ordinal · *",

@@ -10,6 +10,17 @@ it("compresses Russian cardinal examples into short ranges", () => {
 	});
 });
 
+it("covers all six Arabic categories, with runs that restart every hundred", () => {
+	expect(pluralExamples("ar")).toEqual({
+		zero: "0",
+		one: "1",
+		two: "2",
+		few: "3–10, 103…",
+		many: "11–99, 111…",
+		other: "100–102, 200…",
+	});
+});
+
 it("lists open-ended runs number by number and omits the ellipsis when complete", () => {
 	expect(pluralExamples("en")).toEqual({ one: "1", other: "0, 2, 3…" });
 });
