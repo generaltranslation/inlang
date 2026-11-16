@@ -5,10 +5,13 @@ import {
   isPluralSelector,
   matchValue,
   missingVariants,
+  pluralRules,
+  resolveAnnotation,
   selectorGroups,
   variantCovers,
   Text,
   type BundleNested,
+  type Declaration,
   type NewBundleNested,
   type VariantRow,
 } from "@inlang/sdk";
@@ -180,6 +183,8 @@ export function planBundleTranslation(
       const existingVariant = findMatchingVariant(
         target.variants,
         sourceVariant.matches,
+        sourceMessage.variants,
+        declarations,
       );
 
       if (
@@ -234,6 +239,8 @@ export function planBundleTranslation(
           const existingVariant = findMatchingVariant(
             targetMessage.variants,
             sourceVariant.matches,
+            sourceMessage.variants,
+            copy.declarations,
           );
 
           // only an empty variant is missing a translation
@@ -272,7 +279,12 @@ export function planBundleTranslation(
       const replacedVariantIds: string[] = [];
       for (const [message, added] of addedVariants) {
         replacedVariantIds.push(
-          ...orderLikeSource(message, sourceMessage.variants, added),
+          ...orderLikeSource(
+            message,
+            sourceMessage.variants,
+            added,
+            copy.declarations,
+          ),
         );
       }
       return replacedVariantIds.length > 0
@@ -324,29 +336,27 @@ function newCategories(
  * True when a plural of the message has no known rules in its locale, so the
  * SDK requires only its catch-all: an unknown locale, or options only known
  * at runtime. A plural whose `type` a select chooses (`type=$pluralType`)
- * has rules per type, known when the locale is.
+ * has rules per type, known when its cardinal rules are (the SDK reads the
+ * catch-all type as cardinal).
  */
 function hasUnknownPluralRules(
   message: Parameters<typeof selectorGroups>[0],
   declarations: BundleNested["declarations"],
 ): boolean {
-  return selectorGroups(message, declarations).some(
-    (group) =>
-      group.isPlural &&
-      (group.typeSelector ? !knowsPluralRules(message.locale) : !group.plural),
-  );
-}
-
-/** Whether `Intl` has plural rules for a locale, written as the SDK reads it. */
-function knowsPluralRules(locale: string): boolean {
-  try {
-    return (
-      Intl.PluralRules.supportedLocalesOf(locale.replace(/_/g, "-")).length > 0
-    );
-  } catch {
-    // not a valid locale, e.g. `x-foo`
-    return false;
-  }
+  return selectorGroups(message, declarations).some((group) => {
+    if (!group.isPlural) return false;
+    if (!group.typeSelector) return !group.plural;
+    const annotation = resolveAnnotation(group.selector, declarations)!;
+    const cardinal: Declaration = {
+      type: "input-variable",
+      name: group.selector,
+      annotation: {
+        ...annotation,
+        options: annotation.options.filter((option) => option.name !== "type"),
+      },
+    };
+    return !pluralRules(group.selector, [cardinal], message.locale);
+  });
 }
 
 /**
@@ -470,10 +480,17 @@ export function orderLikeSource(
   message: { variants: VariantRow[] },
   sourceVariants: VariantRow[],
   added: Set<VariantRow>,
+  declarations: BundleNested["declarations"],
 ): string[] {
   const sourceIndex = (variant: VariantRow) =>
     sourceVariants.findIndex(
-      (source) => findMatchingVariant([variant], source.matches) !== undefined,
+      (source) =>
+        findMatchingVariant(
+          [variant],
+          source.matches,
+          sourceVariants,
+          declarations,
+        ) !== undefined,
     );
   let previous = -1;
   const keyed = message.variants.map((variant, position) => {

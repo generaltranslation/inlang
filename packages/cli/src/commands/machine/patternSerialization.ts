@@ -1,4 +1,10 @@
-import { Text, VariableReference, type VariantRow } from "@inlang/sdk";
+import {
+  isPluralSelector,
+  Text,
+  VariableReference,
+  type Declaration,
+  type VariantRow,
+} from "@inlang/sdk";
 
 type PlaceholderMetadata = Record<
   string,
@@ -12,28 +18,48 @@ const escapeStart = `<span class="notranslate">`;
 const escapeEnd = "</span>";
 
 /**
- * The variant with the same matches. An `other` matches a catch-all and the
- * other way around, as a plural's explicit `other` is its catch-all (see the
- * SDK's `variantCovers`).
+ * The variant with the same matches. On a plural selector, an explicit `other`
+ * is the catch-all (see the SDK's `variantCovers`), so either one matches the
+ * other, unless a source variant has that variant's own matches: a source with
+ * both `other` and `*` keeps both.
  */
 export function findMatchingVariant(
   variants: VariantRow[],
   matches: VariantRow["matches"],
+  sourceVariants: VariantRow[],
+  declarations: Declaration[] | undefined,
 ): VariantRow | undefined {
-  const value = (match: VariantRow["matches"][number]) =>
-    match.type === "literal-match" && match.value !== "other"
-      ? match.value
-      : undefined;
-  return variants.find(
-    (variant) =>
-      variant.matches.length === matches.length &&
-      matches.every((sourceMatch) =>
-        variant.matches.some(
-          (targetMatch) =>
-            targetMatch.key === sourceMatch.key &&
-            value(targetMatch) === value(sourceMatch),
+  const valueOf = (list: VariantRow["matches"], key: string) => {
+    const match = list.find((value) => value.key === key);
+    return match && (match.type === "literal-match" ? match.value : "*");
+  };
+  const isOther = (value: string | undefined) =>
+    value === "other" || value === "*";
+  const same = (
+    a: VariantRow["matches"],
+    b: VariantRow["matches"],
+    otherIsCatchAll: boolean,
+  ) =>
+    a.length === b.length &&
+    b.every((match) => {
+      const [value, expected] = [valueOf(a, match.key), valueOf(b, match.key)];
+      return (
+        value === expected ||
+        (otherIsCatchAll &&
+          isOther(value) &&
+          isOther(expected) &&
+          isPluralSelector(match.key, declarations))
+      );
+    });
+  return (
+    variants.find((variant) => same(variant.matches, matches, false)) ??
+    variants.find(
+      (variant) =>
+        same(variant.matches, matches, true) &&
+        !sourceVariants.some((source) =>
+          same(source.matches, variant.matches, false),
         ),
-      ),
+    )
   );
 }
 

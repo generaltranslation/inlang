@@ -595,6 +595,75 @@ test("`other` and the catch-all are the same form", async () => {
   ]);
 });
 
+test("a source with both `other` and the catch-all keeps both", async () => {
+  // a select's `other` is a value like any other
+  const gender = [input("gender")];
+  const genderForms = {
+    "gender=female": "She",
+    "gender=other": "They (other)",
+    "gender=*": "They",
+  };
+  const newSelect = await translate(
+    formsBundle(gender, ["gender"], { en: genderForms }),
+    ["de"],
+  );
+  expect(formsOf(newSelect.result, "de")).toEqual({
+    "gender=female": "[de] She",
+    "gender=other": "[de] They (other)",
+    "gender=*": "[de] They",
+  });
+  const partialSelect = await translate(
+    formsBundle(gender, ["gender"], {
+      en: genderForms,
+      de: { "gender=female": "Sie", "gender=other": "Andere", "gender=*": "" },
+    }),
+    ["de"],
+  );
+  expect(partialSelect.calls.map((call) => call.text)).toEqual(["They"]);
+  expect(formsOf(partialSelect.result, "de")).toEqual({
+    "gender=female": "Sie",
+    "gender=other": "Andere",
+    "gender=*": "[de] They",
+  });
+  const selectOther = await translate(
+    formsBundle(gender, ["gender"], {
+      en: { "gender=female": "She", "gender=*": "They" },
+      de: { "gender=female": "Sie", "gender=other": "Andere" },
+    }),
+    ["de"],
+  );
+  expect(selectOther.calls.map((call) => call.text)).toEqual(["They"]);
+
+  // on a plural, `other` stands in for the catch-all only when the source lacks one
+  const pluralForms = {
+    "countPlural=one": "One item",
+    "countPlural=other": "Items",
+    "countPlural=*": "Some items",
+  };
+  const newPlural = await translate(
+    formsBundle(countPlural, ["countPlural"], { en: pluralForms }),
+    ["ja"],
+  );
+  expect(formsOf(newPlural.result, "ja")).toEqual({
+    "countPlural=one": "[ja] One item",
+    "countPlural=other": "[ja] Items",
+    "countPlural=*": "[ja] Some items",
+  });
+  const partialPlural = await translate(
+    formsBundle(countPlural, ["countPlural"], {
+      en: pluralForms,
+      de: { "countPlural=one": "Ein Ding", "countPlural=other": "Dinge" },
+    }),
+    ["de"],
+  );
+  expect(partialPlural.calls.map((call) => call.text)).toEqual(["Some items"]);
+  expect(Object.entries(formsOf(partialPlural.result, "de")!)).toEqual([
+    ["countPlural=one", "Ein Ding"],
+    ["countPlural=other", "Dinge"],
+    ["countPlural=*", "[de] Some items"],
+  ]);
+});
+
 test("an ICU exact number next to a plural: the plural decides", async () => {
   // `{count, plural, =0 {…} one {…} other {…}}` as @inlang/plugin-icu1 imports it
   const bundle = formsBundle(
@@ -692,6 +761,34 @@ test("unknown plural rules skip nothing and are reported", async () => {
   expect(runtimeType.result.unknownPluralRules).toEqual(["ru"]);
   expect(runtimeType.calls).toHaveLength(2);
 
+  // a type a select chooses, next to an option only known at runtime
+  const runtimeOption = await translate(
+    formsBundle(
+      [
+        input("pluralType"),
+        input("count"),
+        input("digits"),
+        plural("countPlural", "count", {
+          type: "$pluralType",
+          minimumFractionDigits: "$digits",
+        }),
+      ],
+      ["pluralType", "countPlural"],
+      {
+        en: {
+          "pluralType=ordinal,countPlural=one": "1st",
+          "pluralType=ordinal,countPlural=*": "nth",
+          "pluralType=*,countPlural=one": "One item",
+          "pluralType=*,countPlural=*": "Items",
+        },
+      },
+    ),
+    ["ru"],
+  );
+  expect(runtimeOption.result.skippedPlurals).toEqual([]);
+  expect(runtimeOption.result.unknownPluralRules).toEqual(["ru"]);
+  expect(runtimeOption.calls).toHaveLength(4);
+
   // nothing copied, nothing to report
   const translated = await translate(
     formsBundle(countPlural, ["countPlural"], {
@@ -761,6 +858,8 @@ test.each<{
   forms: Record<string, string>;
   translated: string[];
   skipped: string[];
+  /** locales translated without known plural rules */
+  unknown?: string[];
 }>([
   {
     name: "one and * into de, fr and ru",
@@ -865,6 +964,7 @@ test.each<{
     forms: { "placePlural=one": "{place}st", "placePlural=*": "{place}th" },
     translated: ["en", "ja"],
     skipped: [],
+    unknown: ["en", "ja"],
   },
 ])(
   "paraglide-js #898: $name",
@@ -876,6 +976,7 @@ test.each<{
     forms,
     translated,
     skipped,
+    unknown = [],
   }) => {
     const { calls, result } = await translate(
       formsBundle(declarations, selectors, { [baseLocale]: forms }),
@@ -886,6 +987,7 @@ test.each<{
     expect([...new Set(calls.map((call) => call.targetLocale))]).toEqual(
       translated,
     );
+    expect(result.unknownPluralRules).toEqual(unknown);
     for (const locale of skipped) {
       expect(formsOf(result, locale)).toBeUndefined();
     }
