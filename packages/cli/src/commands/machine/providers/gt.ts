@@ -45,15 +45,19 @@ export function createGtTranslateProvider(args: {
           }),
         });
       } catch (error) {
+        // The message can quote the Authorization header (for example when
+        // the key contains a newline), so only the network error code is shown.
+        const code = (error as { cause?: { code?: unknown } })?.cause?.code;
         return {
           ok: false,
           unavailable: true,
-          error: `General Translation could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+          error: `General Translation could not be reached${typeof code === "string" ? ` (${code})` : ""}.`,
         };
       }
 
       if (response.status === 401) {
-        // The body is plain text that only says "Unauthorized!".
+        // Unlike the spec's JSON error, the body is plain text with no reason
+        // worth showing.
         return {
           ok: false,
           code: "unauthorized",
@@ -64,7 +68,10 @@ export function createGtTranslateProvider(args: {
 
       if (response.status === 402) {
         // The body is either JSON with the reason or an HTML page.
-        const reason = await readJsonError(response);
+        const reason = await response.json().then(
+          (json) => (typeof json?.error === "string" ? json.error : undefined),
+          () => undefined,
+        );
         return {
           ok: false,
           code: "payment-required",
@@ -88,7 +95,7 @@ export function createGtTranslateProvider(args: {
       }
 
       const json = await response.json();
-      const translatedTexts: Record<string, string> = {};
+      const translations: [string, string][] = [];
       const failures: string[] = [];
       for (const key of Object.keys(texts)) {
         const result = json?.[key];
@@ -96,7 +103,7 @@ export function createGtTranslateProvider(args: {
           result?.success === true &&
           typeof result.translation === "string"
         ) {
-          translatedTexts[key] = result.translation;
+          translations.push([key, result.translation]);
         } else {
           failures.push(result?.error ?? "no translation was returned");
         }
@@ -109,16 +116,8 @@ export function createGtTranslateProvider(args: {
         };
       }
 
-      return { ok: true, translatedTexts };
+      // fromEntries defines own properties, so a "__proto__" key is kept.
+      return { ok: true, translatedTexts: Object.fromEntries(translations) };
     },
   };
-}
-
-async function readJsonError(response: Response): Promise<string | undefined> {
-  try {
-    const json = await response.json();
-    return typeof json?.error === "string" ? json.error : undefined;
-  } catch {
-    return undefined;
-  }
 }

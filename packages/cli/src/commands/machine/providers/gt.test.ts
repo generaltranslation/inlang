@@ -66,6 +66,9 @@ describe("createGtTranslateProvider", () => {
         },
       }),
     });
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty(
+      "gt-project-id",
+    );
   });
 
   test("sends the project id when given", async () => {
@@ -91,7 +94,7 @@ describe("createGtTranslateProvider", () => {
     });
   });
 
-  test.each([200, 201])(
+  test.each([200, 201, 202])(
     "maps translations back to their keys on %i",
     async (status) => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -119,7 +122,12 @@ describe("createGtTranslateProvider", () => {
       jsonResponse(
         {
           greeting: translated("Hallo"),
-          save: { success: false, error: "Translation timed out", code: 500 },
+          save: {
+            success: false,
+            translation: "Speichern",
+            error: "Translation timed out",
+            code: 500,
+          },
         },
         201,
       ),
@@ -153,6 +161,53 @@ describe("createGtTranslateProvider", () => {
       error:
         "1 of 2 translations from en to de failed: no translation was returned",
     });
+  });
+
+  test("names how many texts failed and the first reason", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        {
+          greeting: translated("Hallo"),
+          save: { success: false, error: "Translation timed out", code: 500 },
+          title: { success: true, dataFormat: "STRING", locale: "de" },
+        },
+        201,
+      ),
+    );
+
+    const result = await provider.translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: {
+        greeting: { text: "Hello" },
+        save: { text: "Save" },
+        cancel: { text: "Cancel" },
+        title: { text: "Title" },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "3 of 4 translations from en to de failed: Translation timed out",
+    });
+  });
+
+  test("keeps a text whose key is __proto__", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response('{"__proto__":{"success":true,"translation":"Hallo"}}', {
+        status: 201,
+      }),
+    );
+
+    const result = await provider.translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: Object.fromEntries([["__proto__", { text: "Hello" }]]),
+    });
+
+    expect(result.ok && Object.keys(result.translatedTexts)).toEqual([
+      "__proto__",
+    ]);
   });
 
   test("reports a rejected API key without including it", async () => {
@@ -224,6 +279,7 @@ describe("createGtTranslateProvider", () => {
   test.each([
     [429, "Too Many Requests"],
     [500, "Internal Server Error"],
+    [503, "Service Unavailable"],
   ])("reports %i as unavailable", async (status, statusText) => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("", { status, statusText }),
@@ -244,7 +300,11 @@ describe("createGtTranslateProvider", () => {
 
   test("reports a network error as unavailable", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
-      new TypeError("fetch failed"),
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error("getaddrinfo ENOTFOUND"), {
+          code: "ENOTFOUND",
+        }),
+      }),
     );
 
     const result = await provider.translateBatch({
@@ -256,7 +316,27 @@ describe("createGtTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       unavailable: true,
-      error: "General Translation could not be reached: fetch failed",
+      error: "General Translation could not be reached (ENOTFOUND).",
+    });
+  });
+
+  test("does not show a fetch error that quotes the API key", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new TypeError(
+        'Headers.append: "Bearer gtx-dev-test-key\nGT_PROJECT_ID=prj_x" is an invalid header value.',
+      ),
+    );
+
+    const result = await provider.translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: { greeting: { text: "Hello" } },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      unavailable: true,
+      error: "General Translation could not be reached.",
     });
   });
 
