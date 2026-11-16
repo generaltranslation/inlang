@@ -772,8 +772,8 @@ test("a translation that drops a placeholder is reverted: an added variant is re
   const result = await translateEditing(bundle, ["de"], dropPlaceholders);
 
   expect(result.reverted).toEqual([
-    { locale: "de", placeholders: ["{name}", "{count}"] },
     { locale: "de", placeholders: ["{name}"] },
+    { locale: "de", placeholders: ["{name}", "{count}"] },
   ]);
   expect(result.data!.messages[1]).toEqual(de);
   expect(result.replacedVariantIds).toBeUndefined();
@@ -819,24 +819,44 @@ test("a translation that adds a variable is reverted", async () => {
   expect(formsOf(result, "de")).toBeUndefined();
 });
 
+const itemCount = {
+  "countPlural=one": "{count} item",
+  "countPlural=*": "{count} items",
+};
+
 test("a form for one number may drop its number: German `one` is 1, French `one` is 0 and 1", async () => {
   const bundle = withPlaceholders(
-    formsBundle(countPlural, ["countPlural"], {
-      en: {
-        "countPlural=one": "{count} item",
-        "countPlural=*": "{count} items",
-      },
-    }),
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
   );
-  const result = await translateEditing(bundle, ["de", "fr"], dropPlaceholders);
+  const result = await translateEditing(bundle, ["de", "fr"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+
+  // French `*` is kept out with French `one`, see the next test
+  expect(result.reverted).toEqual([
+    { locale: "fr", placeholders: ["{count}"] },
+    { locale: "fr", placeholders: [] },
+  ]);
+  expect(formsOf(result, "de")).toEqual({
+    "countPlural=one": "[de]  item",
+    "countPlural=*": "[de] {count} items",
+  });
+  expect(formsOf(result, "fr")).toBeUndefined();
+});
+
+test("a new message is created whole or not at all: without its catch-all it would show the bundle id", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" items") ? dropPlaceholders(text) : text,
+  );
 
   expect(result.reverted).toEqual([
+    { locale: "de", placeholders: [] },
     { locale: "de", placeholders: ["{count}"] },
-    { locale: "fr", placeholders: ["{count}"] },
-    { locale: "fr", placeholders: ["{count}"] },
   ]);
-  expect(formsOf(result, "de")).toEqual({ "countPlural=one": "[de]  item" });
-  expect(formsOf(result, "fr")).toBeUndefined();
+  expect(formsOf(result, "de")).toBeUndefined();
 });
 
 test("a placeholder the source form lacks too doesn't revert: English `one` without `{count}` into `one` for 0 and 1", async () => {
@@ -861,6 +881,25 @@ test("a placeholder the source form lacks too doesn't revert: English `one` with
       "countPlural=*": `[${locale}] {count} items`,
     });
   }
+});
+
+test("a placeholder dropped from a form whose source lacks another one is reverted", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=one": "{name} has one item",
+        "countPlural=*": "{name} has {count} items",
+      },
+      fr: { "countPlural=*": "{name} a {count} articles" },
+    }),
+  );
+  // French `one` (0 and 1) lacks `{count}` with the source's text too
+  const result = await translateEditing(bundle, ["fr"], dropPlaceholders);
+
+  expect(result.reverted).toEqual([{ locale: "fr", placeholders: ["{name}"] }]);
+  expect(formsOf(result, "fr")).toEqual({
+    "countPlural=*": "{name} a {count} articles",
+  });
 });
 
 test("a variable missing from a hand-written translation blocks nothing and isn't reported", async () => {

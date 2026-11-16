@@ -872,27 +872,32 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
 
 test("translations that drop a placeholder are reported by locale, the others are written", async () => {
   const project = await projectWithTextBundles(["en", "de", "fr"], 0);
-  for (const [id, text] of [
-    ["cart", "Cart of "],
-    ["items", "Items of "],
-  ] as const) {
-    const bundle = textBundle(id, text);
-    bundle.messages[0]!.variants[0]!.pattern!.push({
-      type: "expression",
-      arg: { type: "variable-reference", name: "name" },
-    });
-    await insertBundleNested(project.db, bundle);
+  const name = {
+    type: "expression" as const,
+    arg: { type: "variable-reference" as const, name: "name" },
+  };
+  // two translations into each locale
+  const cart = pluralBundle("cart");
+  cart.declarations!.push({ type: "input-variable", name: "name" });
+  const items = textBundle("items", "Items of ");
+  for (const variant of [
+    ...cart.messages[0]!.variants,
+    ...items.messages[0]!.variants,
+  ]) {
+    variant.pattern!.push(name);
   }
+  await insertBundleNested(project.db, cart);
+  await insertBundleNested(project.db, items);
   await insertBundleNested(project.db, textBundle("title", "Title"));
   const warn = vi.spyOn(log, "warn");
   const success = vi.spyOn(log, "success");
-  // drops the placeholder in every German text and in French "Cart of"
+  // drops the placeholder in every German text and in French "Items of"
   const { provider } = fakeBatchProvider(async (args) => ({
     ok: true,
     translatedTexts: Object.fromEntries(
       Object.entries(args.texts).map(([key, { text }]) => [
         key,
-        args.targetLocale === "de" || text.startsWith("Cart")
+        args.targetLocale === "de" || text.startsWith("Items of")
           ? text.replace(/<span class="notranslate">.*?<\/span>/g, "")
           : `${text} (${args.targetLocale})`,
       ]),
@@ -900,15 +905,15 @@ test("translations that drop a placeholder are reported by locale, the others ar
   }));
   try {
     const { translated } = await translateCommandAction({ project, provider });
-    expect(translated).toBe(3);
+    expect(translated).toBe(4);
     expect(warn.mock.calls).toEqual([
       [
-        "Reverted 2 translations in de: they dropped or changed a placeholder ({name}). Translate them by hand, or run again.\n" +
+        "Reverted 3 translations in de: they dropped or changed a placeholder ({name}). Translate them by hand, or run again.\n" +
           "  cart, items",
       ],
       [
         "Reverted 1 translation in fr: it dropped or changed a placeholder ({name}). Translate it by hand, or run again.\n" +
-          "  cart",
+          "  items",
       ],
     ]);
     expect(success.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -923,8 +928,8 @@ test("translations that drop a placeholder are reported by locale, the others ar
         ]),
       ),
     ).toEqual({
-      cart: ["en"],
-      items: ["en", "fr"],
+      cart: ["en", "fr"],
+      items: ["en"],
       title: ["de", "en", "fr"],
     });
   } finally {
