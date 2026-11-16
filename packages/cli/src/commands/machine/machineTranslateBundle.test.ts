@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import type { BundleNested, Declaration, NewBundleNested } from "@inlang/sdk";
+import type {
+  BundleNested,
+  Declaration,
+  NewBundleNested,
+  Pattern,
+} from "@inlang/sdk";
 import { planBundleTranslation } from "./machineTranslateBundle.js";
 import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
 
@@ -256,7 +261,7 @@ const countPlural = [input("count"), plural("countPlural", "count")];
 
 /**
  * A bundle with a message per locale. Forms are keyed by their matches,
- * `"countPlural=one,gender=*"`.
+ * `"countPlural=one,gender=*"`, or `""` for a message without selectors.
  */
 function formsBundle(
   declarations: Declaration[],
@@ -277,7 +282,7 @@ function formsBundle(
       variants: Object.entries(forms).map(([key, text], index) => ({
         id: `01900000-0000-7000-8000-${locale.padStart(6, "0")}${String(index).padStart(6, "0")}`,
         messageId: locale,
-        matches: key.split(",").map((pair) => {
+        matches: (key === "" ? [] : key.split(",")).map((pair) => {
           const [key, value] = pair.split("=") as [string, string];
           return value === "*"
             ? { type: "catchall-match", key }
@@ -329,7 +334,7 @@ function formsOf(result: { data?: NewBundleNested }, locale: string) {
               `${match.key}=${match.type === "literal-match" ? match.value : "*"}`,
           )
           .join(","),
-        (variant.pattern![0] as { value: string } | undefined)?.value ?? "",
+        textOf(variant.pattern!),
       ]),
     )
   );
@@ -682,4 +687,217 @@ test("forms the source lacks in its own locale too don't skip a locale", async (
   expect(calls).toEqual([
     { text: "{count} items", targetLocale: "de", context: undefined },
   ]);
+});
+
+/** A pattern from text whose `{name}` are variables and `<b>`, `</b>` markup. */
+function patternOf(text: string): Pattern {
+  return text
+    .split(/(\{\w+\}|<\/?\w+>)/)
+    .filter(Boolean)
+    .map((part) =>
+      part.startsWith("{")
+        ? {
+            type: "expression",
+            arg: { type: "variable-reference", name: part.slice(1, -1) },
+          }
+        : part.startsWith("</")
+          ? { type: "markup-end", name: part.slice(2, -1) }
+          : part.startsWith("<")
+            ? { type: "markup-start", name: part.slice(1, -1) }
+            : { type: "text", value: part },
+    );
+}
+
+/** The text `patternOf` reads a pattern from. */
+function textOf(pattern: Pattern): string {
+  return pattern
+    .map((part) =>
+      part.type === "text"
+        ? part.value
+        : part.type === "expression"
+          ? `{${(part.arg as { name: string }).name}}`
+          : part.type === "markup-end"
+            ? `</${part.name}>`
+            : `<${part.name}>`,
+    )
+    .join("");
+}
+
+/** Reads the `{name}` in the bundle's texts as variables, `<b>` as markup. */
+function withPlaceholders(bundle: BundleNested): BundleNested {
+  for (const message of bundle.messages) {
+    for (const variant of message.variants) {
+      variant.pattern = patternOf(textOf(variant.pattern));
+    }
+  }
+  return bundle;
+}
+
+/** Translates from English to `[locale] text`, then applies `edit`. */
+function translateEditing(
+  bundle: BundleNested,
+  targetLocales: string[],
+  edit: (text: string, targetLocale: string) => string,
+) {
+  return machineTranslateBundle({
+    bundle,
+    sourceLocale: "en",
+    targetLocales,
+    provider: {
+      translateText: async ({ text, targetLocale }) => ({
+        ok: true,
+        translatedText: edit(`[${targetLocale}] ${text}`, targetLocale),
+      }),
+    },
+  });
+}
+
+/** Removes the placeholders the provider gets as `notranslate` spans. */
+const dropPlaceholders = (text: string) =>
+  text.replace(/<span class="notranslate">.*?<\/span>/g, "");
+
+const nameAndCount = [input("name"), ...countPlural];
+
+test("a translation that drops a placeholder is reverted: an added variant is removed, a filled one is empty again", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=one": "{name} has one item",
+        "countPlural=*": "{name} has {count} items",
+      },
+      de: { "countPlural=*": "" },
+    }),
+  );
+  const de = structuredClone(bundle.messages[1]!);
+  const result = await translateEditing(bundle, ["de"], dropPlaceholders);
+
+  expect(result.reverted).toEqual([
+    { locale: "de", placeholders: ["{name}", "{count}"] },
+    { locale: "de", placeholders: ["{name}"] },
+  ]);
+  expect(result.data!.messages[1]).toEqual(de);
+  expect(result.replacedVariantIds).toBeUndefined();
+});
+
+test("a new message whose only translation is reverted isn't created, other locales are written", async () => {
+  const bundle = withPlaceholders(
+    formsBundle([input("name")], [], { en: { "": "Hello {name}" } }),
+  );
+  const result = await translateEditing(bundle, ["de", "fr"], (text, locale) =>
+    locale === "de" ? dropPlaceholders(text) : text,
+  );
+
+  expect(result.reverted).toEqual([{ locale: "de", placeholders: ["{name}"] }]);
+  expect(formsOf(result, "de")).toBeUndefined();
+  expect(formsOf(result, "fr")).toEqual({ "": "[fr] Hello {name}" });
+});
+
+test("a translation that changes markup is reverted", async () => {
+  const bundle = withPlaceholders(
+    formsBundle([], [], { en: { "": "Read the <link>terms</link>" } }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.replaceAll('"name":"link"', '"name":"a"'),
+  );
+
+  expect(result.reverted).toEqual([{ locale: "de", placeholders: ["<link>"] }]);
+  expect(formsOf(result, "de")).toBeUndefined();
+});
+
+test("a translation that adds a variable is reverted", async () => {
+  const bundle = withPlaceholders(
+    formsBundle([input("name")], [], { en: { "": "Hello {name}" } }),
+  );
+  const result = await translateEditing(
+    bundle,
+    ["de"],
+    (text) =>
+      `${text}<span class="notranslate">{"type":"expression","arg":{"type":"variable-reference","name":"user"}}</span>`,
+  );
+
+  expect(result.reverted).toEqual([{ locale: "de", placeholders: ["{user}"] }]);
+  expect(formsOf(result, "de")).toBeUndefined();
+});
+
+test("a form for one number may drop its number: German `one` is 1, French `one` is 0 and 1", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], {
+      en: {
+        "countPlural=one": "{count} item",
+        "countPlural=*": "{count} items",
+      },
+    }),
+  );
+  const result = await translateEditing(bundle, ["de", "fr"], dropPlaceholders);
+
+  expect(result.reverted).toEqual([
+    { locale: "de", placeholders: ["{count}"] },
+    { locale: "fr", placeholders: ["{count}"] },
+    { locale: "fr", placeholders: ["{count}"] },
+  ]);
+  expect(formsOf(result, "de")).toEqual({ "countPlural=one": "[de]  item" });
+  expect(formsOf(result, "fr")).toBeUndefined();
+});
+
+test("a placeholder the source form lacks too doesn't revert: English `one` without `{count}` into `one` for 0 and 1", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], {
+      en: { "countPlural=one": "One item", "countPlural=*": "{count} items" },
+      // French `one` is filled, Portuguese `one` added, Hindi's message new
+      fr: { "countPlural=one": "" },
+      pt: { "countPlural=*": "" },
+    }),
+  );
+  const result = await translateEditing(
+    bundle,
+    ["fr", "pt", "hi"],
+    (text) => text,
+  );
+
+  expect(result.reverted).toEqual([]);
+  for (const locale of ["fr", "pt", "hi"]) {
+    expect(formsOf(result, locale)).toEqual({
+      "countPlural=one": `[${locale}] One item`,
+      "countPlural=*": `[${locale}] {count} items`,
+    });
+  }
+});
+
+test("a variable missing from a hand-written translation blocks nothing and isn't reported", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=one": "{name} has one item",
+        "countPlural=*": "{name} has {count} items",
+      },
+      de: { "countPlural=*": "Dinge" },
+    }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) => text);
+
+  expect(result.reverted).toEqual([]);
+  expect(formsOf(result, "de")).toEqual({
+    "countPlural=one": "[de] {name} has one item",
+    "countPlural=*": "Dinge",
+  });
+});
+
+test("a message whose added translations are all reverted keeps its order and ids", async () => {
+  const bundle = withPlaceholders(
+    formsBundle([input("gender"), input("name")], ["gender"], {
+      en: {
+        "gender=female": "{name} is here",
+        "gender=male": "{name} is here",
+        "gender=*": "{name} is here",
+      },
+      // not in the order of the source
+      de: { "gender=*": "{name} ist da", "gender=female": "{name} ist da" },
+    }),
+  );
+  const de = structuredClone(bundle.messages[1]!);
+  const result = await translateEditing(bundle, ["de"], dropPlaceholders);
+
+  expect(result.reverted).toEqual([{ locale: "de", placeholders: ["{name}"] }]);
+  expect(result.data!.messages[1]).toEqual(de);
+  expect(result.replacedVariantIds).toBeUndefined();
 });

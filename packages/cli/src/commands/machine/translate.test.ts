@@ -869,3 +869,65 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
     await project.close();
   }
 });
+
+test("translations that drop a placeholder are reported by locale, the others are written", async () => {
+  const project = await projectWithTextBundles(["en", "de", "fr"], 0);
+  for (const [id, text] of [
+    ["cart", "Cart of "],
+    ["items", "Items of "],
+  ] as const) {
+    const bundle = textBundle(id, text);
+    bundle.messages[0]!.variants[0]!.pattern!.push({
+      type: "expression",
+      arg: { type: "variable-reference", name: "name" },
+    });
+    await insertBundleNested(project.db, bundle);
+  }
+  await insertBundleNested(project.db, textBundle("title", "Title"));
+  const warn = vi.spyOn(log, "warn");
+  const success = vi.spyOn(log, "success");
+  // drops the placeholder in every German text and in French "Cart of"
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: true,
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts).map(([key, { text }]) => [
+        key,
+        args.targetLocale === "de" || text.startsWith("Cart")
+          ? text.replace(/<span class="notranslate">.*?<\/span>/g, "")
+          : `${text} (${args.targetLocale})`,
+      ]),
+    ),
+  }));
+  try {
+    const { translated } = await translateCommandAction({ project, provider });
+    expect(translated).toBe(3);
+    expect(warn.mock.calls).toEqual([
+      [
+        "Reverted 2 translations in de: they dropped or changed a placeholder ({name}). Translate them by hand, or run again.\n" +
+          "  cart, items",
+      ],
+      [
+        "Reverted 1 translation in fr: it dropped or changed a placeholder ({name}). Translate it by hand, or run again.\n" +
+          "  cart",
+      ],
+    ]);
+    expect(success.mock.invocationCallOrder[0]).toBeGreaterThan(
+      Math.max(...warn.mock.invocationCallOrder),
+    );
+    const bundles = await selectBundleNested(project.db).execute();
+    expect(
+      Object.fromEntries(
+        bundles.map((bundle) => [
+          bundle.id,
+          bundle.messages.map((message) => message.locale).sort(),
+        ]),
+      ),
+    ).toEqual({
+      cart: ["en"],
+      items: ["en", "fr"],
+      title: ["de", "en", "fr"],
+    });
+  } finally {
+    await project.close();
+  }
+});

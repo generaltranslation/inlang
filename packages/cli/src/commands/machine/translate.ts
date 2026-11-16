@@ -79,7 +79,8 @@ export async function translateAndSave(args: {
  * added.
  *
  * Writes nothing unless every translation succeeded, so a failed run leaves
- * the project as it was.
+ * the project as it was. A translation that dropped or changed a placeholder
+ * isn't added (see `planBundleTranslation`) and is reported.
  */
 export async function translateCommandAction(args: {
   project: InlangProject;
@@ -173,6 +174,11 @@ export async function translateCommandAction(args: {
 
     if (!result.ok) throw new MachineTranslateError(result.error);
 
+    /** reverted translations by locale */
+    const reverted = new Map<
+      string,
+      Array<{ bundleId: string; placeholders: string[] }>
+    >();
     for (const plan of plans) {
       const bundle = plan.apply(result.translations);
       await upsertBundleNested(args.project.db, bundle.data);
@@ -185,8 +191,32 @@ export async function translateCommandAction(args: {
           .where("id", "in", bundle.replacedVariantIds)
           .execute();
       }
+      for (const { locale, placeholders } of bundle.reverted) {
+        reverted.set(locale, [
+          ...(reverted.get(locale) ?? []),
+          { bundleId: bundle.data.id!, placeholders },
+        ]);
+      }
     }
-
+    for (const [locale, translations] of reverted) {
+      const count = translations.length;
+      const placeholders = new Set(
+        translations.flatMap((translation) => translation.placeholders),
+      );
+      const bundleIds = new Set(
+        translations.map((translation) => translation.bundleId),
+      );
+      const [noun, pronoun, object] =
+        count === 1
+          ? ["translation", "it", "it"]
+          : ["translations", "they", "them"];
+      log.warn(
+        [
+          `Reverted ${count} ${noun} in ${locale}: ${pronoun} dropped or changed a placeholder (${[...placeholders].join(", ")}). Translate ${object} by hand, or run again.`,
+          `  ${[...bundleIds].join(", ")}`,
+        ].join("\n"),
+      );
+    }
     if (skipped.size > 0) {
       log.warn(
         [
@@ -204,7 +234,10 @@ export async function translateCommandAction(args: {
       );
     }
     log.success("Machine translate complete.");
-    return { translated: missing.length, bundles: bundles.length };
+    return {
+      translated: missing.length - [...reverted.values()].flat().length,
+      bundles: bundles.length,
+    };
   } catch (error) {
     bar?.stop();
     throw error;
