@@ -103,11 +103,11 @@ function fakePrompt(...answers: unknown[]) {
   return { prompts, prompt };
 }
 
-/** Everything the CLI prints, joined. */
+/** Everything the CLI prints, joined: every consola log type. */
 function captureLog(): () => string {
   const lines: unknown[][] = [];
-  for (const type of ["log", "info", "warn", "error", "success"] as const) {
-    vi.spyOn(log, type).mockImplementation((...args: unknown[]) => {
+  for (const type of Object.keys(log.options.types)) {
+    vi.spyOn(log, type as "log").mockImplementation((...args: unknown[]) => {
       lines.push(args);
     });
   }
@@ -151,14 +151,32 @@ describe("readGtCredentials", () => {
     ).toEqual({ apiKey: "env-key", projectId: "prj_env" });
   });
 
-  test("handles quotes, comments and export", async () => {
+  test("never pairs the environment's key with a file's project ID", async () => {
+    const dir = tree({ ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" });
+    expect(
+      await readGtCredentials({ env: { GT_API_KEY: "env-key" }, dir }),
+    ).toEqual({ apiKey: "env-key", projectId: undefined });
+  });
+
+  test("reads .env, which .env.local overrides, as gt does", async () => {
+    const dir = tree({
+      ".env": "VITE_GT_PROJECT_ID=prj_env_file\nVITE_GT_DEV_API_KEY=old\n",
+      ".env.local": "VITE_GT_DEV_API_KEY=new\n",
+    });
+    expect(await readGtCredentials({ env: {}, dir })).toEqual({
+      apiKey: "new",
+      projectId: "prj_env_file",
+    });
+  });
+
+  test("handles quotes, comments, export and CRLF", async () => {
     const dir = tree({
       ".env.local": [
         "# VITE_GT_DEV_API_KEY=commented-out",
         `export VITE_GT_DEV_API_KEY="key # not a comment" # a comment`,
         "VITE_GT_PROJECT_ID='prj_1'",
         "OTHER=value # VITE_GT_PROJECT_ID=prj_2",
-      ].join("\n"),
+      ].join("\r\n"),
     });
     expect(await readGtCredentials({ env: {}, dir })).toEqual({
       apiKey: "key # not a comment",
@@ -175,10 +193,16 @@ describe("readGtCredentials", () => {
     ).toEqual({ apiKey: "key", projectId: undefined });
   });
 
-  test("returns undefined without a key or .env.local", async () => {
+  test("returns undefined without a key or env files", async () => {
     expect(await readGtCredentials({ env: {}, dir: tree() })).toBeUndefined();
     const dir = tree({ ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" });
     expect(await readGtCredentials({ env: {}, dir })).toBeUndefined();
+  });
+
+  test("rethrows a read error other than a missing file", async () => {
+    const dir = tree();
+    fs.mkdirSync(nodePath.join(dir, ".env.local"));
+    await expect(readGtCredentials({ env: {}, dir })).rejects.toThrow("EISDIR");
   });
 });
 
@@ -228,7 +252,7 @@ describe("signInToGt", () => {
 
   test("falls back to Paraglide's pattern and the directory's name", async () => {
     captureLog();
-    const dir = tree();
+    const dir = tree({ "package.json": JSON.stringify({ name: "" }) });
     const gt = fakeGt(signedIn);
     await signInToGt({
       dir,
@@ -273,6 +297,25 @@ describe("signInToGt", () => {
     expect(output()).not.toContain("Visit:");
     expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
   });
+
+  test.each([
+    ["gt.config.json", { "gt.config.json": '{"projectId":"prj_1"}' }],
+    [".env.local", { ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" }],
+  ])(
+    "uses the project ID in %s instead of creating a project",
+    async (_, files) => {
+      captureLog();
+      const gt = fakeGt(signedIn);
+      await signInToGt({
+        dir: tree(files),
+        settings,
+        run: gt.run,
+        prompt: fakePrompt(true).prompt,
+      });
+      expect(gt.calls[0]).not.toContain("--create-project");
+      expect(gt.calls[0]).not.toContain("--project-name");
+    },
+  );
 
   test("keeps a gt.config.json that existed before", async () => {
     captureLog();
@@ -393,7 +436,9 @@ describe("signInToGt", () => {
         run: gt.run,
         prompt: fakePrompt(true).prompt,
       }),
-    ).rejects.toThrow(".env.local has no General Translation key");
+    ).rejects.toThrow(
+      "gt init finished without saving a General Translation key to .env.local.",
+    );
   });
 
   test("shows the notice, then doesn't run gt when the user declines", async () => {
@@ -440,16 +485,19 @@ describe.skipIf(process.platform === "win32")("signInToGt's runner", () => {
       // Waits until the URL was printed, as gt waits for the browser sign-in.
       npx: `#!${process.execPath}
 const fs = require("node:fs");
+// stdin is closed, so gt can't wait on a prompt.
+const stdin = fs.readFileSync(0, "utf8");
+console.log("npm warn exec The following package was not found and will be installed: gt@2.28.3");
 console.log(JSON.stringify(${JSON.stringify(authorizationRequired)}));
 const deadline = Date.now() + 5000;
 const timer = setInterval(() => {
-  const seen = fs.existsSync("url-seen");
+  const seen = fs.existsSync("url-seen") && stdin === "";
   if (!seen && Date.now() < deadline) return;
   clearInterval(timer);
   if (seen) fs.writeFileSync(".env.local", "GT_DEV_API_KEY=key\\n");
   console.log(JSON.stringify(seen
     ? { type: "result", outcome: "success" }
-    : { type: "result", outcome: "failed", error: "The URL wasn't printed while gt ran." }));
+    : { type: "result", outcome: "failed", error: "The URL wasn't printed while gt ran, or stdin was open." }));
 }, 10);
 `,
     });

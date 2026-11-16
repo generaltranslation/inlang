@@ -37,9 +37,10 @@ type InitResult = {
 };
 
 /**
- * General Translation credentials from `env`, else from `dir/.env.local`.
- * Key and project ID come from the same source, so a key is never paired with
- * another project's ID.
+ * General Translation credentials from `env`, else from `dir`'s `.env` and
+ * `.env.local`, the files gt itself loads (`.env.local` overrides `.env`).
+ * Key and project ID come from the same source, so a key from `env` is never
+ * paired with a project ID from a file.
  *
  * `gt init` names the variables after the framework: `GT_API_KEY` for
  * Next.js, `<prefix>GT_DEV_API_KEY` (e.g. `VITE_`) otherwise.
@@ -48,34 +49,43 @@ export async function readGtCredentials(args: {
   env: Record<string, string | undefined>;
   dir: string;
 }): Promise<GtCredentials | undefined> {
-  const fromEnv = findCredentials(args.env);
-  if (fromEnv) return fromEnv;
-  const content = await fs
-    .readFile(nodePath.join(args.dir, ".env.local"), "utf8")
-    .catch((error) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-  return content === undefined
-    ? undefined
-    : findCredentials(parseEnvFile(content));
+  return (
+    findCredentials(args.env) ?? findCredentials(await readEnvFiles(args.dir))
+  );
+}
+
+const API_KEY = /^GT_API_KEY$|(^|_)GT_DEV_API_KEY$/;
+const PROJECT_ID = /(^|_)GT_PROJECT_ID$/;
+
+function find(
+  variables: Record<string, string | undefined>,
+  name: RegExp,
+): string | undefined {
+  return Object.entries(variables).find(
+    ([key, value]) => name.test(key) && value,
+  )?.[1];
 }
 
 function findCredentials(
   variables: Record<string, string | undefined>,
 ): GtCredentials | undefined {
-  const value = (matches: (name: string) => boolean) =>
-    Object.entries(variables).find(
-      ([name, value]) => matches(name) && value,
-    )?.[1];
-  const apiKey = value(
-    (name) => name === "GT_API_KEY" || /(^|_)GT_DEV_API_KEY$/.test(name),
-  );
+  const apiKey = find(variables, API_KEY);
   if (!apiKey) return undefined;
-  return {
-    apiKey,
-    projectId: value((name) => /(^|_)GT_PROJECT_ID$/.test(name)),
-  };
+  return { apiKey, projectId: find(variables, PROJECT_ID) };
+}
+
+async function readEnvFiles(dir: string): Promise<Record<string, string>> {
+  const variables: Record<string, string> = {};
+  for (const file of [".env", ".env.local"]) {
+    const content = await fs
+      .readFile(nodePath.join(dir, file), "utf8")
+      .catch((error) => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+      });
+    Object.assign(variables, parseEnvFile(content));
+  }
+  return variables;
 }
 
 function parseEnvFile(content: string): Record<string, string> {
@@ -92,9 +102,9 @@ function parseEnvFile(content: string): Record<string, string> {
 
 /**
  * Signs the user in to General Translation with `gt init --json`, which
- * creates a project and saves a development key to `dir/.env.local`. Asks
- * first, so call it only in an interactive terminal. Resolves `undefined`
- * if the user declines.
+ * creates a project (unless gt.config.json or the environment names one) and
+ * saves a development key for it to `dir/.env.local`. Asks first, so call it
+ * only in an interactive terminal. Resolves `undefined` if the user declines.
  *
  * gt itself adds `.env.local` to `.gitignore` (and refuses a tracked one),
  * and adds `gt` to the devDependencies of a `package.json` without it.
@@ -125,6 +135,15 @@ export async function signInToGt(args: {
   });
   if (!confirmed) return undefined;
 
+  const configPath = nodePath.join(dir, "gt.config.json");
+  const config = await fs.readFile(configPath, "utf8").catch(() => undefined);
+  // gt refuses --create-project when it already has a project ID, from
+  // gt.config.json or the environment, and then makes a key for that project.
+  const configProjectId = parseJson(config ?? "")?.projectId;
+  const hasProject =
+    (typeof configProjectId === "string" && configProjectId !== "") ||
+    find({ ...(await readEnvFiles(dir)), ...process.env }, PROJECT_ID) !==
+      undefined;
   const initArgs = [
     "--yes",
     GT_CLI,
@@ -139,9 +158,9 @@ export async function signInToGt(args: {
     // gt requires a file pattern even though its file workflow isn't used.
     "--file-patterns",
     `json=${messageFilePattern(settings)}`,
-    "--create-project",
-    "--project-name",
-    await projectName(dir),
+    ...(hasProject
+      ? []
+      : ["--create-project", "--project-name", await projectName(dir)]),
   ];
   const init = async (extraArgs: string[]) => {
     let result: InitResult | undefined;
@@ -161,11 +180,6 @@ export async function signInToGt(args: {
     return { result, stderr };
   };
 
-  const configPath = nodePath.join(dir, "gt.config.json");
-  const hadConfig = await fs.access(configPath).then(
-    () => true,
-    () => false,
-  );
   try {
     let { result, stderr } = await init([]);
     const orgs = result?.missingOptions?.includes("--org-id")
@@ -196,14 +210,14 @@ export async function signInToGt(args: {
   } finally {
     // GT's file workflow isn't used; a leftover config would invite a second
     // translation path (`gt translate`).
-    if (!hadConfig) await fs.rm(configPath, { force: true });
+    if (config === undefined) await fs.rm(configPath, { force: true });
   }
 
-  // Only the file: a stale key in the environment must not shadow the new one.
+  // Only the files: a stale key in the environment must not shadow the new one.
   const credentials = await readGtCredentials({ env: {}, dir });
   if (!credentials) {
     throw new Error(
-      "General Translation sign-in succeeded, but .env.local has no General Translation key.",
+      "gt init finished without saving a General Translation key to .env.local.",
     );
   }
   return credentials;
@@ -251,16 +265,17 @@ function parseJson(text: string): any {
 
 const runProcess: RunProcess = (command, args, { cwd, onStdoutLine }) =>
   new Promise((resolve, reject) => {
-    // npx is npx.cmd on Windows, which Node starts only through a shell; the
-    // shell then needs each argument quoted (a directory name can have spaces).
+    // npx is npx.cmd on Windows, which Node starts only through a shell. The
+    // shell gets one command line with each argument quoted (a directory name
+    // can have spaces); args next to a shell are deprecated (DEP0190).
     const windows = process.platform === "win32";
-    // stdin is closed so gt can never wait on a prompt; with --json it
-    // reports missing input as a result event instead.
     const child = spawn(
-      command,
-      windows ? args.map((arg) => `"${arg}"`) : args,
+      windows ? [command, ...args.map((arg) => `"${arg}"`)].join(" ") : command,
+      windows ? [] : args,
       {
         cwd,
+        // stdin is closed so gt can never wait on a prompt; with --json it
+        // reports missing input as a result event instead.
         stdio: ["ignore", "pipe", "pipe"],
         shell: windows,
       },
