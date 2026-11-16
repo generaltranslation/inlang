@@ -762,7 +762,8 @@ export function missingVariants(
  * The reference variant a form of a translation (one of its
  * {@link requiredVariants}) is translated from.
  *
- * - Exact numbers (ICU `=0`) must match.
+ * - Exact numbers (ICU `=0`) must match. They are matched by selector name,
+ *   which holds within a bundle because its messages share declarations.
  * - A plural category the reference has no variant for is translated from
  *   its explicit `other`, or else its catch-all: Russian `few` from English
  *   `*`. The runtime selects `other` for every number of no other category,
@@ -811,12 +812,12 @@ export function sourceVariantFor<V extends WithMatches>(
 	for (const group of groups) {
 		const key = group.keyOf(form);
 		const keys = !group.isPlural
-			? shown.some((variant) => group.keyOf(variant) === key)
+			? key !== "*" && shown.some((variant) => group.keyOf(variant) === key)
 				? [key, "*"]
 				: [key]
 			: isNumericKey(key)
 				? [key]
-				: key === "*" || key === "other"
+				: key === "*"
 					? ["other", "*"]
 					: [key, "other", "*"];
 		candidates = candidates.flatMap((candidate) =>
