@@ -17,7 +17,7 @@ export const DEMOSJARCO_ZDR_ENV = "DEMOSJARCO_TRANSLATE_ZDR";
 export type MachineTranslateProviderName =
   "google" | "deepl" | "openai" | "demosjarco";
 
-const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+export const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";
 

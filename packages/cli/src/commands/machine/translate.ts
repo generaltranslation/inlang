@@ -12,10 +12,15 @@ import { projectOption } from "../../utilities/globalFlags.js";
 import progessBar from "cli-progress";
 import fs from "node:fs/promises";
 import {
-  machineTranslateBundle,
-  type MachineTranslateResult,
+  planBundleTranslation,
+  translateMissing,
+  type BundleTranslationPlan,
 } from "./machineTranslateBundle.js";
-import { resolveMachineTranslateProvider } from "./providers/resolveProvider.js";
+import {
+  BYOK_URL,
+  resolveMachineTranslateProvider,
+} from "./providers/resolveProvider.js";
+import type { AnyMachineTranslateProvider } from "./providers/types.js";
 
 export const translate = new Command()
   .command("translate")
@@ -34,7 +39,8 @@ export const translate = new Command()
       const project = await getInlangProject({ projectPath: args.project });
       await translateAndSave({ project, path: args.project });
     } catch (error) {
-      logError(error);
+      if (error instanceof MachineTranslateError) log.error(error.message);
+      else logError(error);
       exitCode = 1;
     } finally {
       process.exit(exitCode);
@@ -42,19 +48,18 @@ export const translate = new Command()
   });
 
 /**
- * Thrown when the translation provider was unavailable for some translations.
- * Every translation that did succeed has already been written to the project.
+ * Thrown when a translation failed, before anything was written. The message
+ * is for the user as is.
  */
-export class PartialMachineTranslateError extends Error {
-  override name = "PartialMachineTranslateError";
-  constructor(
-    message: string,
-    /** Translations that succeeded. */
-    readonly translated: number,
-  ) {
-    super(message);
-  }
+export class MachineTranslateError extends Error {
+  override name = "MachineTranslateError";
 }
+
+const PAYMENT_REQUIRED_ERROR = [
+  "Your General Translation account has no credit left, so no files were changed.",
+  "Add a card to get $10 of free translation credit: https://dash.generaltranslation.com",
+  `Or bring your own key: ${BYOK_URL}`,
+].join("\n");
 
 /**
  * Translates and writes the translation files, but only if something was
@@ -65,49 +70,40 @@ export class PartialMachineTranslateError extends Error {
 export async function translateAndSave(args: {
   project: InlangProject;
   path: string;
+  provider?: AnyMachineTranslateProvider;
 }) {
-  let translated: number;
-  let bundles = 0;
-  let partialError: PartialMachineTranslateError | undefined;
-  try {
-    ({ translated, bundles } = await translateCommandAction({
-      project: args.project,
-    }));
-  } catch (error) {
-    if (!(error instanceof PartialMachineTranslateError)) {
-      throw error;
-    }
-    partialError = error;
-    translated = error.translated;
-  }
-  // Keep every translation that succeeded, even if some didn't.
+  const { translated, bundles } = await translateCommandAction(args);
   if (translated > 0) {
     await saveProjectToDirectory({
       fs,
       path: args.path,
       project: args.project,
     });
-  } else if (!partialError && bundles > 0) {
+  } else if (bundles > 0) {
     log.info("No translations were added, so no files were changed.");
-  }
-  if (partialError) {
-    throw partialError;
   }
 }
 
-/** Translates missing translations into the project. Returns how many were added. */
+/**
+ * Translates missing translations into the project. Returns how many were
+ * added.
+ *
+ * Writes nothing unless every translation succeeded, so a failed run leaves
+ * the project as it was.
+ */
 export async function translateCommandAction(args: {
   project: InlangProject;
+  provider?: AnyMachineTranslateProvider;
 }): Promise<{ translated: number; bundles: number }> {
   const options = translate.opts();
-  const provider = resolveMachineTranslateProvider();
+  const provider = args.provider ?? resolveMachineTranslateProvider();
 
   const bar = options.nobar
     ? undefined
     : new progessBar.SingleBar(
         {
           clearOnComplete: true,
-          format: `🤖 Machine translating bundles | {bar} | {percentage}% | {value}/{total} Bundles`,
+          format: `🤖 Machine translating | {bar} | {percentage}% | {value}/{total} Translations`,
         },
         progessBar.Presets.shades_grey,
       );
@@ -140,76 +136,58 @@ export async function translateCommandAction(args: {
       );
     }
 
-    bar?.start(bundles.length, 0);
-
-    const promises: Promise<MachineTranslateResult>[] = [];
+    const plans: BundleTranslationPlan[] = [];
     const errors: string[] = [];
-
     for (const bundle of bundles) {
-      const translationPromise = machineTranslateBundle({
+      const plan = planBundleTranslation({
         bundle,
         sourceLocale: settings.baseLocale,
-        targetLocales: targetLocales,
-        provider,
+        targetLocales,
       });
-
-      const trackedPromise = (
-        translationPromise as Promise<MachineTranslateResult>
-      ).then((result) => {
-        bar?.increment();
-        return result;
-      });
-
-      promises.push(trackedPromise);
-    }
-
-    const updatedBundles = await Promise.all(promises);
-
-    let unavailableError: string | undefined;
-    let unavailableCount = 0;
-    let translated = 0;
-    for (const bundle of updatedBundles) {
-      if (bundle.unavailable) {
-        // Reported once below rather than once per affected bundle.
-        unavailableError = bundle.error;
-        unavailableCount += bundle.unavailableCount ?? 1;
-      } else if (bundle.error) {
-        errors.push(bundle.error);
-        continue;
-      }
+      if ("error" in plan) errors.push(plan.error);
       // Unchanged bundles aren't written back.
-      if (bundle.data && (bundle.translated ?? 0) > 0) {
-        await upsertBundleNested(args.project.db, bundle.data);
-        // variants that got a new id to keep the order of the source
-        // message; deleted after the write, so that nothing is lost if it
-        // fails
-        if (bundle.replacedVariantIds?.length) {
-          await args.project.db
-            .deleteFrom("inlang_variant")
-            .where("id", "in", bundle.replacedVariantIds)
-            .execute();
-        }
-        translated += bundle.translated!;
+      else if (plan.missing.length > 0) plans.push(plan);
+    }
+    const missing = plans.flatMap((plan) => plan.missing);
+
+    bar?.start(missing.length, 0);
+    const result = await translateMissing({
+      provider,
+      sourceLocale: settings.baseLocale,
+      missing,
+      onProgress: (translated) => bar?.increment(translated),
+    });
+    bar?.stop();
+
+    if (!result.ok) {
+      throw new MachineTranslateError(
+        result.code === "payment-required"
+          ? PAYMENT_REQUIRED_ERROR
+          : result.error,
+      );
+    }
+
+    for (const plan of plans) {
+      const bundle = plan.apply(result.translations);
+      await upsertBundleNested(args.project.db, bundle.data);
+      // variants that got a new id to keep the order of the source
+      // message; deleted after the write, so that nothing is lost if it
+      // fails
+      if (bundle.replacedVariantIds?.length) {
+        await args.project.db
+          .deleteFrom("inlang_variant")
+          .where("id", "in", bundle.replacedVariantIds)
+          .execute();
       }
     }
-    bar?.stop();
 
     if (errors.length > 0) {
       log.warn("Some bundles could not be translated.");
       log.warn(errors.join("\n"));
     }
 
-    // The provider itself was unavailable for some translations: keep the ones
-    // that succeeded, but still fail the command with a single summary error.
-    if (unavailableError) {
-      throw new PartialMachineTranslateError(
-        `${unavailableCount} ${unavailableCount === 1 ? "translation" : "translations"} could not be completed.\n${unavailableError}`,
-        translated,
-      );
-    }
-
     log.success("Machine translate complete.");
-    return { translated, bundles: bundles.length };
+    return { translated: missing.length, bundles: bundles.length };
   } catch (error) {
     bar?.stop();
     throw error;

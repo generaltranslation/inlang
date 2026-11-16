@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { BundleNested } from "@inlang/sdk";
 import { machineTranslateBundle } from "./machineTranslateBundle.js";
+import type { TranslateBatchArgs } from "./providers/types.js";
 
 test("translated variants get ids in the order of the source variants", async () => {
   const values = Array.from({ length: 20 }, (_, index) => `v${index}`);
@@ -181,4 +182,44 @@ test("a variant the source doesn't have stays after the one it followed", async 
   // `few` keeps its id, the ones after it get new ones
   expect(de.variants[0]!.id).toBe(v7Ids["de-few"]);
   expect(result.replacedVariantIds).toEqual([v7Ids["de-*"]]);
+});
+
+test("a batch provider gets every missing variant of a locale in one request, keyed by source variant id", async () => {
+  const bundle = pluralBundle([["*", ""]]);
+  const calls: TranslateBatchArgs[] = [];
+  const result = await machineTranslateBundle({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+    provider: {
+      translateBatch: async (args) => {
+        calls.push(args);
+        return {
+          ok: true,
+          translatedTexts: {
+            [v7Ids["en-*"]!]: "Viele Dinge",
+            [v7Ids["en-one"]!]: "Ein Ding",
+          },
+        };
+      },
+    },
+  });
+
+  expect(calls).toEqual([
+    {
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: {
+        [v7Ids["en-one"]!]: { text: "One item" },
+        [v7Ids["en-*"]!]: { text: "Many items" },
+      },
+    },
+  ]);
+  const de = result.data!.messages.find((m) => m.locale === "de")!;
+  expect(valuesOf(de)).toEqual(["one", "*"]);
+  // the empty catch-all is filled in
+  expect(de.variants.map((variant) => variant.pattern)).toEqual([
+    [{ type: "text", value: "Ein Ding" }],
+    [{ type: "text", value: "Viele Dinge" }],
+  ]);
 });

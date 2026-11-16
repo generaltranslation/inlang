@@ -12,27 +12,55 @@ import {
   findMatchingVariant,
   serializePattern,
 } from "./patternSerialization.js";
-import type { MachineTranslateProvider } from "./providers/types.js";
+import type {
+  AnyMachineTranslateProvider,
+  TranslateFailure,
+} from "./providers/types.js";
+
+/**
+ * Texts per batch request. The batch API documents no limit but rejects
+ * bodies that are too large; 50 messages stay far below that, while a project
+ * with hundreds of messages still needs only a few requests per locale.
+ */
+const MAX_TEXTS_PER_REQUEST = 50;
+
+/**
+ * Requests in flight at once, for every provider. Sending every request at
+ * once runs into the providers' rate limits on large projects.
+ */
+const MAX_CONCURRENT_REQUESTS = 4;
 
 type MachineTranslateArgs = {
   bundle: BundleNested;
   sourceLocale: string;
   targetLocales: string[];
-  provider: MachineTranslateProvider;
+};
+
+/** A translation that a bundle is missing. */
+export type MissingTranslation = {
+  sourceVariant: VariantRow;
+  targetLocale: string;
+  /** The source pattern, serialized for the provider. */
+  text: string;
+  /** The bundle description, if any. */
+  context?: string;
+};
+
+/**
+ * The translations a bundle is missing, and how to add them to it once they
+ * are translated.
+ */
+export type BundleTranslationPlan = {
+  missing: MissingTranslation[];
+  /** Adds a translation for each of `missing` to a copy of the bundle. */
+  apply: (
+    translations: Map<MissingTranslation, string>,
+  ) => MachineTranslateResult & { data: NewBundleNested };
 };
 
 export type MachineTranslateResult = {
   data?: NewBundleNested;
   error?: string;
-  /** Set when `error` means the translation provider itself is unavailable. */
-  unavailable?: boolean;
-  /**
-   * Number of translations skipped because the provider was unavailable. The
-   * rest of the bundle is still translated and returned in `data`.
-   */
-  unavailableCount?: number;
-  /** Number of translations added to `data`. `0` means `data` equals the input. */
-  translated?: number;
   /**
    * Ids of variants of `bundle` that `data` has with a new id, to take the
    * order of the source message (see `orderLikeSource`). Delete them after
@@ -60,37 +88,97 @@ export type MachineTranslateResult = {
  *   }
  */
 export async function machineTranslateBundle(
-  args: MachineTranslateArgs,
+  args: MachineTranslateArgs & { provider: AnyMachineTranslateProvider },
 ): Promise<MachineTranslateResult> {
   try {
-    const copy = structuredClone(args.bundle);
-    let unavailableError: string | undefined;
-    let unavailableCount = 0;
-    let translated = 0;
-    /** variants added to messages that existed, by message */
-    const addedVariants = new Map<
-      BundleNested["messages"][number],
-      Set<VariantRow>
-    >();
-
-    const sourceMessage = copy.messages.find(
-      (message) => message.locale === args.sourceLocale,
-    );
-
-    if (!sourceMessage) {
-      return {
-        error: `Source locale not found in the bundle: ${args.bundle.id}`,
-      };
+    const plan = planBundleTranslation(args);
+    if ("error" in plan) {
+      return plan;
     }
+    const result = await translateMissing({
+      provider: args.provider,
+      sourceLocale: args.sourceLocale,
+      missing: plan.missing,
+    });
+    if (!result.ok) {
+      return { error: result.error };
+    }
+    return plan.apply(result.translations);
+  } catch (error) {
+    return { error: error?.toString() ?? "unknown error" };
+  }
+}
 
-    for (const sourceVariant of sourceMessage.variants) {
-      const sourcePattern = serializePattern(sourceVariant.pattern, {});
+/**
+ * Finds the translations the bundle is missing in the target locales: no
+ * variant for a source variant, or an empty one.
+ */
+export function planBundleTranslation(
+  args: MachineTranslateArgs,
+): BundleTranslationPlan | { error: string } {
+  const sourceMessage = args.bundle.messages.find(
+    (message) => message.locale === args.sourceLocale,
+  );
 
-      for (const targetLocale of args.targetLocales) {
-        if (targetLocale === args.sourceLocale) {
-          continue;
-        }
+  if (!sourceMessage) {
+    return {
+      error: `Source locale not found in the bundle: ${args.bundle.id}`,
+    };
+  }
 
+  const missing: MissingTranslation[] = [];
+  for (const sourceVariant of sourceMessage.variants) {
+    const text = serializePattern(sourceVariant.pattern, {});
+
+    for (const targetLocale of args.targetLocales) {
+      if (targetLocale === args.sourceLocale) {
+        continue;
+      }
+
+      const targetMessage = args.bundle.messages.find(
+        (message) => message.locale === targetLocale,
+      );
+      const existingVariant =
+        targetMessage &&
+        findMatchingVariant(targetMessage.variants, sourceVariant.matches);
+
+      if (
+        existingVariant &&
+        !(
+          existingVariant.pattern.length === 0 ||
+          (existingVariant.pattern.length === 1 &&
+            existingVariant.pattern[0]?.type === "text" &&
+            (existingVariant.pattern[0] as Text).value === "")
+        )
+      ) {
+        continue;
+      }
+
+      missing.push({
+        sourceVariant,
+        targetLocale,
+        text,
+        context: args.bundle.description || undefined,
+      });
+    }
+  }
+
+  return {
+    missing,
+    apply: (translations) => {
+      const copy = structuredClone(args.bundle);
+      const sourceMessage = copy.messages.find(
+        (message) => message.locale === args.sourceLocale,
+      )!;
+      /** variants added to messages that existed, by message */
+      const addedVariants = new Map<
+        BundleNested["messages"][number],
+        Set<VariantRow>
+      >();
+
+      for (const translation of missing) {
+        const pattern = deserializePattern(translations.get(translation)!);
+        const { sourceVariant, targetLocale } = translation;
         const targetMessage = copy.messages.find(
           (message) => message.locale === targetLocale,
         );
@@ -101,57 +189,8 @@ export async function machineTranslateBundle(
             sourceVariant.matches,
           );
 
-          if (
-            existingVariant &&
-            !(
-              existingVariant.pattern.length === 0 ||
-              (existingVariant.pattern.length === 1 &&
-                existingVariant.pattern[0]?.type === "text" &&
-                (existingVariant.pattern[0] as Text).value === "")
-            )
-          ) {
-            continue;
-          }
-        }
-
-        const translation = await args.provider.translateText({
-          text: sourcePattern,
-          sourceLocale: args.sourceLocale,
-          targetLocale,
-          ...(copy.description ? { context: copy.description } : {}),
-        });
-
-        if (!translation.ok && translation.unavailable) {
-          // Skip only this translation so one throttled or failed request
-          // doesn't discard every other translation in the run.
-          unavailableError = translation.error;
-          unavailableCount++;
-          continue;
-        }
-
-        if (!translation.ok) {
-          return {
-            error: translation.error,
-            unavailable: translation.unavailable,
-          };
-        }
-
-        const pattern = deserializePattern(translation.translatedText);
-        translated++;
-
-        if (targetMessage) {
-          const existingVariant = findMatchingVariant(
-            targetMessage.variants,
-            sourceVariant.matches,
-          );
-
-          if (
-            existingVariant &&
-            (existingVariant.pattern.length === 0 ||
-              (existingVariant.pattern.length === 1 &&
-                existingVariant.pattern[0]?.type === "text" &&
-                (existingVariant.pattern[0] as Text).value === ""))
-          ) {
+          // only an empty variant is missing a translation
+          if (existingVariant) {
             existingVariant.pattern = pattern;
           } else {
             const variant = {
@@ -182,32 +221,111 @@ export async function machineTranslateBundle(
           });
         }
       }
-    }
 
-    const replacedVariantIds: string[] = [];
-    for (const [message, added] of addedVariants) {
-      replacedVariantIds.push(
-        ...orderLikeSource(message, sourceMessage.variants, added),
-      );
-    }
-    const replaced =
-      replacedVariantIds.length > 0 ? { replacedVariantIds } : {};
+      const replacedVariantIds: string[] = [];
+      for (const [message, added] of addedVariants) {
+        replacedVariantIds.push(
+          ...orderLikeSource(message, sourceMessage.variants, added),
+        );
+      }
+      return replacedVariantIds.length > 0
+        ? { data: copy, replacedVariantIds }
+        : { data: copy };
+    },
+  };
+}
 
-    if (unavailableError) {
-      return {
-        data: copy,
-        error: unavailableError,
-        unavailable: true,
-        unavailableCount,
-        translated,
-        ...replaced,
-      };
-    }
+/**
+ * Translates the missing translations with at most `MAX_CONCURRENT_REQUESTS`
+ * requests in flight. A batch provider gets the texts of each target locale in
+ * requests of at most `MAX_TEXTS_PER_REQUEST`, keyed by source variant id.
+ *
+ * Stops starting requests at the first failure and returns it once the
+ * requests in flight have settled.
+ */
+export async function translateMissing(args: {
+  provider: AnyMachineTranslateProvider;
+  sourceLocale: string;
+  missing: MissingTranslation[];
+  /** Called with the number of texts each successful request translated. */
+  onProgress?: (translated: number) => void;
+}): Promise<
+  { ok: true; translations: Map<MissingTranslation, string> } | TranslateFailure
+> {
+  const { provider, sourceLocale } = args;
+  const translations = new Map<MissingTranslation, string>();
+  /** Each sends one request and records what it translated. */
+  const requests: Array<() => Promise<{ ok: true } | TranslateFailure>> = [];
 
-    return { data: copy, translated, ...replaced };
-  } catch (error) {
-    return { error: error?.toString() ?? "unknown error" };
+  if ("translateBatch" in provider) {
+    const byLocale = new Map<string, MissingTranslation[]>();
+    for (const translation of args.missing) {
+      const missing = byLocale.get(translation.targetLocale) ?? [];
+      missing.push(translation);
+      byLocale.set(translation.targetLocale, missing);
+    }
+    for (const [targetLocale, missing] of byLocale) {
+      for (
+        let start = 0;
+        start < missing.length;
+        start += MAX_TEXTS_PER_REQUEST
+      ) {
+        const chunk = missing.slice(start, start + MAX_TEXTS_PER_REQUEST);
+        requests.push(async () => {
+          const result = await provider.translateBatch({
+            sourceLocale,
+            targetLocale,
+            texts: Object.fromEntries(
+              chunk.map(({ sourceVariant, text, context }) => [
+                sourceVariant.id,
+                { text, context },
+              ]),
+            ),
+          });
+          if (result.ok) {
+            for (const translation of chunk) {
+              translations.set(
+                translation,
+                result.translatedTexts[translation.sourceVariant.id]!,
+              );
+            }
+            args.onProgress?.(chunk.length);
+          }
+          return result;
+        });
+      }
+    }
+  } else {
+    for (const translation of args.missing) {
+      const { text, targetLocale, context } = translation;
+      requests.push(async () => {
+        const result = await provider.translateText({
+          text,
+          sourceLocale,
+          targetLocale,
+          ...(context ? { context } : {}),
+        });
+        if (result.ok) {
+          translations.set(translation, result.translatedText);
+          args.onProgress?.(1);
+        }
+        return result;
+      });
+    }
   }
+
+  let failure: TranslateFailure | undefined;
+  let next = 0;
+  const worker = async () => {
+    while (!failure && next < requests.length) {
+      const result = await requests[next++]!();
+      if (!result.ok) failure ??= result;
+    }
+  };
+  await Promise.all(
+    Array.from({ length: MAX_CONCURRENT_REQUESTS }, () => worker()),
+  );
+  return failure ?? { ok: true, translations };
 }
 
 const UUID_V7 =
