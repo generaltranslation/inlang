@@ -184,7 +184,7 @@ test("a variant the source doesn't have stays after the one it followed", async 
   expect(result.replacedVariantIds).toEqual([v7Ids["de-*"]]);
 });
 
-test("a batch provider gets every missing variant of a locale in one request, keyed by source variant id", async () => {
+test("a batch provider gets every missing variant of a locale in one request", async () => {
   const bundle = pluralBundle([["*", ""]]);
   const calls: TranslateBatchArgs[] = [];
   const result = await machineTranslateBundle({
@@ -196,10 +196,7 @@ test("a batch provider gets every missing variant of a locale in one request, ke
         calls.push(args);
         return {
           ok: true,
-          translatedTexts: {
-            [v7Ids["en-*"]!]: "Viele Dinge",
-            [v7Ids["en-one"]!]: "Ein Ding",
-          },
+          translatedTexts: { "1": "Viele Dinge", "0": "Ein Ding" },
         };
       },
     },
@@ -210,8 +207,8 @@ test("a batch provider gets every missing variant of a locale in one request, ke
       sourceLocale: "en",
       targetLocale: "de",
       texts: {
-        [v7Ids["en-one"]!]: { text: "One item" },
-        [v7Ids["en-*"]!]: { text: "Many items" },
+        "0": { text: "One item" },
+        "1": { text: "Many items" },
       },
     },
   ]);
@@ -222,4 +219,23 @@ test("a batch provider gets every missing variant of a locale in one request, ke
     [{ type: "text", value: "Ein Ding" }],
     [{ type: "text", value: "Viele Dinge" }],
   ]);
+});
+
+test("a target locale given twice is translated once", async () => {
+  const texts: string[] = [];
+  const result = await machineTranslateBundle({
+    bundle: pluralBundle([]),
+    sourceLocale: "en",
+    targetLocales: ["de", "de"],
+    provider: {
+      translateText: async ({ text }) => {
+        texts.push(text);
+        return { ok: true, translatedText: `${text} (de)` };
+      },
+    },
+  });
+
+  expect(texts).toEqual(["One item", "Many items"]);
+  const de = result.data!.messages.find((m) => m.locale === "de")!;
+  expect(valuesOf(de)).toEqual(["one", "*"]);
 });

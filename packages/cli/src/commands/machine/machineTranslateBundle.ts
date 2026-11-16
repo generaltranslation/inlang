@@ -56,12 +56,11 @@ export type BundleTranslationPlan = {
   /** Adds a translation for each of `missing` to a copy of the bundle. */
   apply: (
     translations: Map<MissingTranslation, VariantRow["pattern"]>,
-  ) => MachineTranslateResult & { data: NewBundleNested };
+  ) => TranslatedBundle;
 };
 
-export type MachineTranslateResult = {
-  data?: NewBundleNested;
-  error?: string;
+type TranslatedBundle = {
+  data: NewBundleNested;
   /**
    * Ids of variants of `bundle` that `data` has with a new id, to take the
    * order of the source message (see `orderLikeSource`). Delete them after
@@ -70,44 +69,24 @@ export type MachineTranslateResult = {
   replacedVariantIds?: string[];
 };
 
-/**
- * Machine translates the given bundle using the configured translation provider.
- *
- * The translation updates or creates variants only for missing translations in
- * the requested target locales. Existing non-empty variants are preserved.
- *
- * @example
- *   const provider = resolveMachineTranslateProvider();
- *   const result = await machineTranslateBundle({
- *     bundle,
- *     sourceLocale: "en",
- *     targetLocales: ["de"],
- *     provider,
- *   });
- *   if (result.data) {
- *     await upsertBundleNested(project, result.data);
- *   }
- */
+export type MachineTranslateResult = Partial<TranslatedBundle> & {
+  error?: string;
+};
+
+/** Translates what one bundle is missing (see `planBundleTranslation`). */
 export async function machineTranslateBundle(
   args: MachineTranslateArgs & { provider: AnyMachineTranslateProvider },
 ): Promise<MachineTranslateResult> {
-  try {
-    const plan = planBundleTranslation(args);
-    if ("error" in plan) {
-      return plan;
-    }
-    const result = await translateMissing({
-      provider: args.provider,
-      sourceLocale: args.sourceLocale,
-      missing: plan.missing,
-    });
-    if (!result.ok) {
-      return { error: result.error };
-    }
-    return plan.apply(result.translations);
-  } catch (error) {
-    return { error: error?.toString() ?? "unknown error" };
+  const plan = planBundleTranslation(args);
+  if ("error" in plan) {
+    return plan;
   }
+  const result = await translateMissing({
+    provider: args.provider,
+    sourceLocale: args.sourceLocale,
+    missing: plan.missing,
+  });
+  return result.ok ? plan.apply(result.translations) : { error: result.error };
 }
 
 /**
@@ -131,7 +110,8 @@ export function planBundleTranslation(
   for (const sourceVariant of sourceMessage.variants) {
     const text = serializePattern(sourceVariant.pattern, {});
 
-    for (const targetLocale of args.targetLocales) {
+    // a locale given twice is translated once
+    for (const targetLocale of new Set(args.targetLocales)) {
       if (targetLocale === args.sourceLocale) {
         continue;
       }
@@ -239,8 +219,8 @@ export function planBundleTranslation(
 /**
  * Translates the missing translations with at most `MAX_CONCURRENT_REQUESTS`
  * requests in flight. A batch provider gets the texts of each target locale in
- * requests of at most `MAX_TEXTS_PER_REQUEST`, keyed by source variant id; a
- * single-text provider gets one request per text.
+ * requests of at most `MAX_TEXTS_PER_REQUEST`; a single-text provider gets
+ * one request per text.
  *
  * Stops starting requests at the first failure, returned or thrown, and
  * returns it once the requests in flight have settled.
@@ -289,19 +269,22 @@ export async function translateMissing(args: {
     for (let start = 0; start < missing.length; start += textsPerRequest) {
       const chunk = missing.slice(start, start + textsPerRequest);
       requests.push(async () => {
+        // keyed by position, not by source variant id, so that one source
+        // variant can have several translations into a locale (e.g. one per
+        // plural form of the target language), each with its own context
         const result = await translateBatch({
           sourceLocale,
           targetLocale,
           texts: Object.fromEntries(
-            chunk.map(({ sourceVariant, text, context }) => [
-              sourceVariant.id,
+            chunk.map(({ text, context }, index) => [
+              String(index),
               { text, context },
             ]),
           ),
         });
         if (!result.ok) return result;
-        for (const translation of chunk) {
-          const text = result.translatedTexts[translation.sourceVariant.id];
+        for (const [index, translation] of chunk.entries()) {
+          const text = result.translatedTexts[String(index)];
           if (text === undefined) {
             return {
               ok: false,

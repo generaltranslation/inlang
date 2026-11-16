@@ -28,6 +28,7 @@ import {
   newProject,
   selectBundleNested,
   upsertBundleNested,
+  type InlangProject,
   type NewBundleNested,
 } from "@inlang/sdk";
 
@@ -706,6 +707,10 @@ test("batch translations go to the variants their keys name", async () => {
     description: "A greeting",
   });
   await insertBundleNested(project.db, textBundle("bye", "Bye"));
+  await insertBundleNested(project.db, {
+    ...textBundle("empty", "Empty"),
+    description: "",
+  });
   // answers in the opposite order, by key
   const { provider, calls } = fakeBatchProvider(async (args) => ({
     ok: true,
@@ -717,9 +722,11 @@ test("batch translations go to the variants their keys name", async () => {
   }));
   try {
     await translateCommandAction({ project, provider });
+    // no context for a missing or an empty description
     expect(calls[0]?.texts).toEqual({
-      hello_en: { text: "Hello", context: "A greeting" },
-      bye_en: { text: "Bye" },
+      "0": { text: "Bye" },
+      "1": { text: "Empty" },
+      "2": { text: "Hello", context: "A greeting" },
     });
     const bundles = await selectBundleNested(project.db).execute();
     const deText = (id: string) =>
@@ -729,6 +736,7 @@ test("batch translations go to the variants their keys name", async () => {
         ?.pattern;
     expect(deText("hello")).toEqual([{ type: "text", value: "Hello (de)" }]);
     expect(deText("bye")).toEqual([{ type: "text", value: "Bye (de)" }]);
+    expect(deText("empty")).toEqual([{ type: "text", value: "Empty (de)" }]);
   } finally {
     await project.close();
   }
@@ -743,12 +751,12 @@ test.each(["single-text", "batch"] as const)(
       kind === "batch" ? 7 * 50 : 7,
     );
     /** Settles a request in flight, successfully or not. */
-    const pending: Array<(ok: boolean) => void> = [];
+    const pending: Array<(failure?: TranslateFailure) => void> = [];
     let inFlight = 0;
     let maxInFlight = 0;
     const request = <T>(success: T) => {
       const { promise, resolve } = deferred<T | TranslateFailure>();
-      pending.push((ok) => resolve(ok ? success : { ok: false, error: "x" }));
+      pending.push((failure) => resolve(failure ?? success));
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
       return promise.finally(() => inFlight--);
@@ -777,13 +785,22 @@ test.each(["single-text", "batch"] as const)(
       await settle();
       expect(pending).toHaveLength(4);
       // a finished request makes room for one more
-      pending[0]!(true);
+      pending[0]!();
       await vi.waitFor(() => expect(pending).toHaveLength(5));
-      pending[1]!(false);
+      pending[1]!({
+        ok: false,
+        error: "402 Payment Required",
+        code: "payment-required",
+      });
       await settle();
       expect(pending).toHaveLength(5);
-      for (const settleRequest of pending.slice(2)) settleRequest(true);
-      expect(await run).toBeInstanceOf(MachineTranslateError);
+      // a request in flight that fails after the first failure
+      pending[2]!({ ok: false, error: "Another failure." });
+      for (const settleRequest of pending.slice(3)) settleRequest();
+      // the first failure is reported
+      const error = await run;
+      expect(error).toBeInstanceOf(MachineTranslateError);
+      expect((error as Error).message).toMatch(/^Your General Translation/);
       expect(pending).toHaveLength(5);
       expect(maxInFlight).toBe(4);
       const bundles = await selectBundleNested(project.db).execute();
@@ -886,7 +903,7 @@ test.each([
       translatedTexts: Object.fromEntries(
         Object.entries(args.texts).flatMap(([key, { text }]) => {
           const translation =
-            key === "bundle0_en" ? translatedText() : `${text} (de)`;
+            text === "Text 0" ? translatedText() : `${text} (de)`;
           return translation === undefined ? [] : [[key, translation]];
         }),
       ),
@@ -939,8 +956,8 @@ test("bundles with nothing to translate aren't written", async () => {
   }
 });
 
-test("a bundle without a source message is reported and the others are translated", async () => {
-  const project = await projectWithTextBundles(["en", "de", "fr"], 1);
+/** Inserts a bundle that has a `de` message but no source message. */
+async function insertOrphanBundle(project: InlangProject) {
   await insertBundleNested(project.db, {
     id: "orphan",
     messages: [
@@ -958,6 +975,11 @@ test("a bundle without a source message is reported and the others are translate
       },
     ],
   });
+}
+
+test("a bundle without a source message is reported and the others are translated", async () => {
+  const project = await projectWithTextBundles(["en", "de", "fr"], 1);
+  await insertOrphanBundle(project);
   const warn = vi.spyOn(log, "warn");
   const { provider } = fakeBatchProvider();
   try {
@@ -971,6 +993,24 @@ test("a bundle without a source message is reported and the others are translate
         ?.messages.map((message) => message.locale)
         .sort(),
     ).toEqual(["de", "en", "fr"]);
+  } finally {
+    await project.close();
+  }
+});
+
+test("a bundle without a source message is reported when a translation fails", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 1);
+  await insertOrphanBundle(project);
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider(async () => ({
+    ok: false,
+    error: "The batch failed.",
+  }));
+  try {
+    await expect(
+      translateCommandAction({ project, provider }),
+    ).rejects.toThrowError(MachineTranslateError);
+    expect(warn).toHaveBeenCalledWith("Some bundles could not be translated.");
   } finally {
     await project.close();
   }

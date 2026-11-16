@@ -148,6 +148,10 @@ export async function translateCommandAction(args: {
       // Unchanged bundles aren't written back.
       else if (plan.missing.length > 0) plans.push(plan);
     }
+    if (errors.length > 0) {
+      log.warn("Some bundles could not be translated.");
+      log.warn(errors.join("\n"));
+    }
     const missing = plans.flatMap((plan) => plan.missing);
 
     bar?.start(missing.length, 0);
@@ -181,11 +185,6 @@ export async function translateCommandAction(args: {
           .where("id", "in", bundle.replacedVariantIds)
           .execute();
       }
-    }
-
-    if (errors.length > 0) {
-      log.warn("Some bundles could not be translated.");
-      log.warn(errors.join("\n"));
     }
 
     log.success("Machine translate complete.");
