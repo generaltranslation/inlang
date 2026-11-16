@@ -106,21 +106,25 @@ function parseEnvFile(content: string): Record<string, string> {
  * saves a development key for it to `dir/.env.local`. Asks first, so call it
  * only in an interactive terminal. Resolves `undefined` if the user declines.
  *
- * gt itself adds `.env.local` to `.gitignore` (and refuses a tracked one),
- * and adds `gt` to the devDependencies of a `package.json` without it.
+ * gt itself appends a `.gitignore` rule for an unignored `.env.local` and
+ * refuses a tracked one (gt's `packages/cli/src/utils/credentials.ts`).
  */
 export async function signInToGt(args: {
   dir: string;
   settings: ProjectSettings;
+  env: Record<string, string | undefined>;
   run?: RunProcess;
   prompt?: Prompt;
+  openUrl?: (url: string) => void;
 }): Promise<GtCredentials | undefined> {
   const {
     dir,
     settings,
+    env,
     run = runProcess,
     // consola's prompt reads `this`.
     prompt = (message, options) => log.prompt(message, options),
+    openUrl = openInBrowser,
   } = args;
   log.log(
     [
@@ -142,8 +146,7 @@ export async function signInToGt(args: {
   const configProjectId = parseJson(config ?? "")?.projectId;
   const hasProject =
     (typeof configProjectId === "string" && configProjectId !== "") ||
-    find({ ...(await readEnvFiles(dir)), ...process.env }, PROJECT_ID) !==
-      undefined;
+    find({ ...(await readEnvFiles(dir)), ...env }, PROJECT_ID) !== undefined;
   const initArgs = [
     "--yes",
     GT_CLI,
@@ -172,6 +175,8 @@ export async function signInToGt(args: {
           log.log(
             `Sign in to General Translation in your browser: ${event.verificationUriComplete}`,
           );
+          // `gt init --json` only prints the URL, it never opens a browser.
+          openUrl(event.verificationUriComplete);
         } else if (event?.type === "result") {
           result = event;
         }
@@ -286,3 +291,23 @@ const runProcess: RunProcess = (command, args, { cwd, onStdoutLine }) =>
     child.once("error", reject);
     child.once("close", () => resolve({ stderr }));
   });
+
+/** Best effort: the printed URL is the fallback, so failures are ignored. */
+function openInBrowser(url: string): void {
+  // On Windows, `start` takes its first quoted argument as the window title,
+  // and the quotes around the URL keep cmd from splitting it at a `&`.
+  const [command, args] =
+    process.platform === "darwin"
+      ? ["open", [url]]
+      : process.platform === "win32"
+        ? ["cmd", ["/c", "start", '""', `"${url}"`]]
+        : ["xdg-open", [url]];
+  spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    // Ignored outside Windows; there it keeps Node from escaping the quotes.
+    windowsVerbatimArguments: true,
+  })
+    .on("error", () => {})
+    .unref();
+}

@@ -206,12 +206,23 @@ describe("readGtCredentials", () => {
   });
 });
 
+/** `signInToGt` with no environment, a yes and no browser. */
+function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
+  return signInToGt({
+    settings,
+    env: {},
+    prompt: fakePrompt(true).prompt,
+    openUrl: () => {},
+    ...args,
+  });
+}
+
 describe("signInToGt", () => {
   test("runs gt init with the project's locales, pattern and name", async () => {
     captureLog();
     const dir = tree({ "package.json": JSON.stringify({ name: "my-app" }) });
     const gt = fakeGt(signedIn);
-    await signInToGt({
+    await signIn({
       dir,
       settings: {
         baseLocale: "en",
@@ -225,7 +236,6 @@ describe("signInToGt", () => {
         },
       } as ProjectSettings,
       run: gt.run,
-      prompt: fakePrompt(true).prompt,
     });
     expect(gt.calls).toEqual([
       [
@@ -254,11 +264,10 @@ describe("signInToGt", () => {
     captureLog();
     const dir = tree({ "package.json": JSON.stringify({ name: "" }) });
     const gt = fakeGt(signedIn);
-    await signInToGt({
+    await signIn({
       dir,
       settings: { baseLocale: "en", locales: ["en", "de"] } as ProjectSettings,
       run: gt.run,
-      prompt: fakePrompt(true).prompt,
     });
     const argv = gt.calls[0]!;
     expect(argv[argv.indexOf("--file-patterns") + 1]).toBe(
@@ -269,18 +278,19 @@ describe("signInToGt", () => {
     );
   });
 
-  test("signs in, prints the sign-in URL and returns the saved key", async () => {
+  test("signs in, opens and prints the sign-in URL and returns the saved key", async () => {
     const output = captureLog();
-    vi.stubEnv("GT_API_KEY", "stale-key");
     const dir = tree();
     const gt = fakeGt(signedIn);
     const { prompts, prompt } = fakePrompt(true);
+    const openUrl = vi.fn();
 
-    const credentials = await signInToGt({
+    const credentials = await signIn({
       dir,
-      settings,
+      env: { GT_API_KEY: "stale-key" },
       run: gt.run,
       prompt,
+      openUrl,
     });
 
     expect(credentials).toEqual({ apiKey: API_KEY, projectId: "prj_1" });
@@ -289,6 +299,9 @@ describe("signInToGt", () => {
     expect(argv[argv.indexOf("--file-patterns") + 1]).toBe(
       "json=./src/i18n/[locale].json",
     );
+    expect(openUrl.mock.calls).toEqual([
+      [authorizationRequired.verificationUriComplete],
+    ]);
     expect(output()).toContain(
       `Sign in to General Translation in your browser: ${authorizationRequired.verificationUriComplete}`,
     );
@@ -299,19 +312,15 @@ describe("signInToGt", () => {
   });
 
   test.each([
-    ["gt.config.json", { "gt.config.json": '{"projectId":"prj_1"}' }],
-    [".env.local", { ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" }],
+    ["gt.config.json", { "gt.config.json": '{"projectId":"prj_1"}' }, {}],
+    [".env.local", { ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" }, {}],
+    ["the environment", {}, { VITE_GT_PROJECT_ID: "prj_1" }],
   ])(
     "uses the project ID in %s instead of creating a project",
-    async (_, files) => {
+    async (_, files, env) => {
       captureLog();
       const gt = fakeGt(signedIn);
-      await signInToGt({
-        dir: tree(files),
-        settings,
-        run: gt.run,
-        prompt: fakePrompt(true).prompt,
-      });
+      await signIn({ dir: tree(files), env, run: gt.run });
       expect(gt.calls[0]).not.toContain("--create-project");
       expect(gt.calls[0]).not.toContain("--project-name");
     },
@@ -320,12 +329,7 @@ describe("signInToGt", () => {
   test("keeps a gt.config.json that existed before", async () => {
     captureLog();
     const dir = tree({ "gt.config.json": '{"own":true}' });
-    await signInToGt({
-      dir,
-      settings,
-      run: fakeGt(signedIn).run,
-      prompt: fakePrompt(true).prompt,
-    });
+    await signIn({ dir, run: fakeGt(signedIn).run });
     expect(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")).toBe(
       "{}",
     );
@@ -343,12 +347,7 @@ describe("signInToGt", () => {
     );
     const { prompts, prompt } = fakePrompt(true, "org_def456");
 
-    const credentials = await signInToGt({
-      dir,
-      settings,
-      run: gt.run,
-      prompt,
-    });
+    const credentials = await signIn({ dir, run: gt.run, prompt });
 
     expect(credentials).toEqual({ apiKey: API_KEY, projectId: "prj_1" });
     expect(prompts[1]![1]).toMatchObject({
@@ -371,9 +370,8 @@ describe("signInToGt", () => {
       files: { "gt.config.json": "{}" },
     });
     expect(
-      await signInToGt({
+      await signIn({
         dir,
-        settings,
         run: gt.run,
         prompt: fakePrompt(true, undefined).prompt,
       }),
@@ -399,12 +397,9 @@ describe("signInToGt", () => {
       files: { "gt.config.json": "{}" },
       stderr: gtLog.join("\n") + "\n",
     });
-    const error: Error = await signInToGt({
-      dir,
-      settings,
-      run: gt.run,
-      prompt: fakePrompt(true).prompt,
-    }).catch((error) => error);
+    const error: Error = await signIn({ dir, run: gt.run }).catch(
+      (error) => error,
+    );
     expect(error.message).toContain("gt Error: Project quota reached.");
     expect(error.message).toContain("gt log line 6\n");
     expect(error.message).toContain("gt log line 25");
@@ -416,27 +411,15 @@ describe("signInToGt", () => {
   test("throws when gt exits without a result", async () => {
     captureLog();
     const gt = fakeGt({ events: [], stderr: "npm error 404 Not Found\n" });
-    await expect(
-      signInToGt({
-        dir: tree(),
-        settings,
-        run: gt.run,
-        prompt: fakePrompt(true).prompt,
-      }),
-    ).rejects.toThrow("npm error 404 Not Found");
+    await expect(signIn({ dir: tree(), run: gt.run })).rejects.toThrow(
+      "npm error 404 Not Found",
+    );
   });
 
   test("throws when gt succeeds without saving a key", async () => {
     captureLog();
     const gt = fakeGt({ events: [success] });
-    await expect(
-      signInToGt({
-        dir: tree(),
-        settings,
-        run: gt.run,
-        prompt: fakePrompt(true).prompt,
-      }),
-    ).rejects.toThrow(
+    await expect(signIn({ dir: tree(), run: gt.run })).rejects.toThrow(
       "gt init finished without saving a General Translation key to .env.local.",
     );
   });
@@ -446,9 +429,8 @@ describe("signInToGt", () => {
     const gt = fakeGt();
     let shownBeforePrompt = "";
     expect(
-      await signInToGt({
+      await signIn({
         dir: tree(),
-        settings,
         run: gt.run,
         prompt: async () => {
           shownBeforePrompt = output();
@@ -457,6 +439,21 @@ describe("signInToGt", () => {
       }),
     ).toBeUndefined();
     expect(shownBeforePrompt).toContain(NOTICE);
+    expect(gt.calls).toEqual([]);
+  });
+
+  test("asks to confirm, declining on Ctrl+C or Esc", async () => {
+    captureLog();
+    const gt = fakeGt();
+    const { prompts, prompt } = fakePrompt(undefined);
+    expect(await signIn({ dir: tree(), run: gt.run, prompt })).toBeUndefined();
+    // consola otherwise resolves a cancelled confirm with `initial`, a yes.
+    expect(prompts).toEqual([
+      [
+        "Sign in to General Translation?",
+        { type: "confirm", initial: true, cancel: "undefined" },
+      ],
+    ]);
     expect(gt.calls).toEqual([]);
   });
 
@@ -469,7 +466,9 @@ describe("signInToGt", () => {
         "prompt",
       )
       .mockResolvedValue(false);
-    expect(await signInToGt({ dir: tree(), settings })).toBeUndefined();
+    expect(
+      await signInToGt({ dir: tree(), settings, env: {} }),
+    ).toBeUndefined();
     expect(prompt).toHaveBeenCalledWith(
       "Sign in to General Translation?",
       expect.objectContaining({ type: "confirm" }),
@@ -477,8 +476,9 @@ describe("signInToGt", () => {
   });
 });
 
-// The default runner, against a fake `npx` on PATH. Windows needs npx.cmd.
-describe.skipIf(process.platform === "win32")("signInToGt's runner", () => {
+// The default runner and opener, against fakes on PATH. Windows needs .cmd
+// files.
+describe.skipIf(process.platform === "win32")("signInToGt's defaults", () => {
   test("prints the sign-in URL while gt is still running", async () => {
     const dir = tree();
     const bin = tree({
@@ -509,7 +509,13 @@ const timer = setInterval(() => {
       }
     });
     expect(
-      await signInToGt({ dir, settings, prompt: fakePrompt(true).prompt }),
+      await signInToGt({
+        dir,
+        settings,
+        env: {},
+        prompt: fakePrompt(true).prompt,
+        openUrl: () => {},
+      }),
     ).toEqual({ apiKey: "key", projectId: undefined });
   });
 
@@ -517,7 +523,51 @@ const timer = setInterval(() => {
     captureLog();
     vi.stubEnv("PATH", tree());
     await expect(
-      signInToGt({ dir: tree(), settings, prompt: fakePrompt(true).prompt }),
+      signInToGt({
+        dir: tree(),
+        settings,
+        env: {},
+        prompt: fakePrompt(true).prompt,
+      }),
     ).rejects.toThrow("ENOENT");
+  });
+
+  test("opens the sign-in URL with the platform's opener", async () => {
+    captureLog();
+    const opened = nodePath.join(tree(), "argv.json");
+    const opener = `#!${process.execPath}
+require("node:fs").writeFileSync(${JSON.stringify(opened)}, JSON.stringify(process.argv.slice(2)));
+`;
+    const bin = tree({ open: opener, "xdg-open": opener });
+    for (const name of ["open", "xdg-open"]) {
+      fs.chmodSync(nodePath.join(bin, name), 0o755);
+    }
+    vi.stubEnv("PATH", `${bin}${nodePath.delimiter}${process.env.PATH}`);
+    await signInToGt({
+      dir: tree(),
+      settings,
+      env: {},
+      run: fakeGt(signedIn).run,
+      prompt: fakePrompt(true).prompt,
+    });
+    await vi.waitFor(() =>
+      expect(JSON.parse(fs.readFileSync(opened, "utf8"))).toEqual([
+        authorizationRequired.verificationUriComplete,
+      ]),
+    );
+  });
+
+  test("still signs in when no opener can be started", async () => {
+    captureLog();
+    vi.stubEnv("PATH", tree());
+    expect(
+      await signInToGt({
+        dir: tree(),
+        settings,
+        env: {},
+        run: fakeGt(signedIn).run,
+        prompt: fakePrompt(true).prompt,
+      }),
+    ).toEqual({ apiKey: API_KEY, projectId: "prj_1" });
   });
 });
