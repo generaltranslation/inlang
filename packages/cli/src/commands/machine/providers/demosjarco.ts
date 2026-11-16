@@ -121,7 +121,6 @@ export function createDemosjarcoTranslateProvider(
         result: {
           ok: false,
           error: SERVICE_UNAVAILABLE_ERROR,
-          unavailable: true,
         },
       };
     }
@@ -171,7 +170,6 @@ export function createDemosjarcoTranslateProvider(
       return {
         ok: false,
         error: SERVICE_UNAVAILABLE_ERROR,
-        unavailable: true,
       };
     },
   };

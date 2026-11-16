@@ -114,9 +114,6 @@ export function createOpenAITranslateProvider(
         return {
           ok: false,
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
-          ...(response.status === 429 || response.status >= 500
-            ? { unavailable: true }
-            : {}),
         };
       }
 
@@ -125,7 +122,6 @@ export function createOpenAITranslateProvider(
         return {
           ok: false,
           error: `OpenAI response was not completed: translating from ${args.sourceLocale} to ${args.targetLocale}`,
-          unavailable: true,
         };
       }
 
