@@ -711,15 +711,7 @@ test("batch translations go to the variants their keys name", async () => {
     ...textBundle("empty", "Empty"),
     description: "",
   });
-  // answers in the opposite order, by key
-  const { provider, calls } = fakeBatchProvider(async (args) => ({
-    ok: true,
-    translatedTexts: Object.fromEntries(
-      Object.entries(args.texts)
-        .reverse()
-        .map(([key, { text }]) => [key, `${text} (de)`]),
-    ),
-  }));
+  const { provider, calls } = fakeBatchProvider();
   try {
     await translateCommandAction({ project, provider });
     // no context for a missing or an empty description

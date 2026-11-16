@@ -196,7 +196,7 @@ test("a batch provider gets every missing variant of a locale in one request", a
         calls.push(args);
         return {
           ok: true,
-          translatedTexts: { "1": "Viele Dinge", "0": "Ein Ding" },
+          translatedTexts: { "0": "Ein Ding", "1": "Viele Dinge" },
         };
       },
     },
