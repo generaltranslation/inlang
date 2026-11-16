@@ -757,3 +757,53 @@ export function missingVariants(
 			!variants.some((variant) => variantCovers(variant, matches, declarations))
 	);
 }
+
+/**
+ * The reference variant a form of a translation (one of its
+ * {@link requiredVariants} in `targetLocale`) is translated from: the one with
+ * the same select values and exact numbers (ICU `=0`). A plural category the
+ * reference has no variant for in that branch of the other selectors is
+ * translated from the branch's explicit `other`, or else its catch-all:
+ * Russian `few` from English `*`, `few · female` from `* · female`.
+ * Undefined when the reference has no such variant, such as for a select
+ * value only the translation uses.
+ */
+export function sourceVariantFor<V extends WithMatches>(
+	target: readonly Match[],
+	reference: readonly V[],
+	declarations: readonly Declaration[] | undefined,
+	targetLocale: string
+): V | undefined {
+	const form = { matches: target };
+	const groups = selectorGroups(
+		{
+			locale: targetLocale,
+			selectors: target.map(({ key }) => ({
+				type: "variable-reference",
+				name: key,
+			})),
+		},
+		declarations,
+		{ variants: [form], referenceVariants: reference }
+	);
+	// per group, the reference keys that stand in for the form's key, best first: `other`
+	// before the catch-all, as the runtime selects it for every number of no other category
+	let candidates: string[][] = [[]];
+	for (const group of groups) {
+		const key = group.keyOf(form);
+		const keys =
+			group.isPlural && !isNumericKey(key)
+				? [...new Set([key, "other", "*"])]
+				: [key];
+		candidates = candidates.flatMap((candidate) =>
+			keys.map((value) => [...candidate, value])
+		);
+	}
+	for (const keys of candidates) {
+		const variant = reference.find((variant) =>
+			groups.every((group, index) => group.keyOf(variant) === keys[index])
+		);
+		if (variant) return variant;
+	}
+	return undefined;
+}

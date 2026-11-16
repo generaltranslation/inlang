@@ -18,6 +18,7 @@ export {
 	selectorGroups,
 	requiredVariants,
 	missingVariants,
+	sourceVariantFor,
 	variantCovers,
 	pluralRules,
 	pluralCategories,
@@ -32,6 +33,7 @@ export {
 	type SelectorOptions,
 	type PluralRules,
 } from "./selectors.js";
+export { pluralExamples } from "./pluralExamples.js";
 export type {
 	SourceFile,
 	UsageAnalysis,

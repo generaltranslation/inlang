@@ -33,7 +33,7 @@ export type {
 	MatchSuggestion,
 	SelectorMatches,
 } from "./helper/selectorMatches.js";
-export { pluralExamples } from "./helper/pluralExamples.js";
+export { pluralExamples } from "@inlang/sdk/browser";
 export { selectVariant } from "./helper/selectVariant.js";
 export {
 	addSelector,
