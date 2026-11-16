@@ -269,10 +269,15 @@ describe("inlang check", { timeout: 60_000 }, () => {
   });
 
   test("points to machine translate once, after the report, when a translation is missing", async () => {
-    const { code, stdout } = await run(app(), ["check", ...project]);
+    const { code, stdout } = await run(app(), [
+      "check",
+      "--project",
+      "project.inlang",
+    ]);
     expect(code).toBe(1);
+    // the --project value as typed
     expect(stdout).toContain(
-      `3 findings\n  missing-translation  1\n  missing-variable     2\n\n${translateHint}`,
+      "3 findings\n  missing-translation  1\n  missing-variable     2\n\nTranslate what's missing with `npx @inlang/cli machine translate --project project.inlang`.\n",
     );
     expect(stdout.split("machine translate")).toHaveLength(2);
   });
@@ -313,6 +318,13 @@ describe("inlang check", { timeout: 60_000 }, () => {
     expect(other.code).toBe(1);
     expect(other.stdout).toContain("missing-variable (2)");
     expect(other.stdout).not.toContain("machine translate");
+    const selector = await run(
+      app({ files: messages("pt-BR", (m) => (m.cart_items = "Itens")) }),
+      ["check", ...project, "--missing-selectors"],
+    );
+    expect(selector.code).toBe(1);
+    expect(selector.stdout).toContain("missing-selector (1)");
+    expect(selector.stdout).not.toContain("machine translate");
     // machine translation can't fill the base locale
     const base = await run(
       app({ files: messages("en-US", (m) => (m.welcome_back = "")) }),
