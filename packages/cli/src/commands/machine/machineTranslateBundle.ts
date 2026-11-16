@@ -123,7 +123,7 @@ export function planBundleTranslation(
   }
 
   const { declarations } = args.bundle;
-  const sourceMissing = missingVariants(sourceMessage, declarations);
+  let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const report: PluralReport = {
     skippedPlurals: [],
@@ -156,22 +156,33 @@ export function planBundleTranslation(
       selectors: targetMessage?.selectors ?? sourceMessage.selectors,
       variants: targetMessage?.variants ?? [],
     };
-    // an empty form is missing, like one the target doesn't have
-    const categories = new Set(
+    const categories = new Set<string>();
+    // The forms are the target's, so without a plural in the target no
+    // category can be missing. `missingVariants` takes seconds on a message
+    // with several selects, so it isn't called then.
+    if (
+      target.selectors.some(({ name }) => isPluralSelector(name, declarations))
+    ) {
+      const lackedBySource = (sourceMissing ??= missingVariants(
+        sourceMessage,
+        declarations,
+      ));
+      // an empty form is missing, like one the target doesn't have
       missingVariants(target, declarations, {
         variants: target.variants.filter((variant) => !isEmpty(variant)),
         referenceVariants: sourceMessage.variants,
       })
         .filter(
           (matches) =>
-            !sourceMissing.some((sourceMatches) =>
+            !lackedBySource.some((sourceMatches) =>
               variantCovers({ matches: sourceMatches }, matches, declarations),
             ),
         )
         .flatMap((matches) =>
           newCategories(matches, sourceMessage.variants, declarations),
-        ),
-    );
+        )
+        .forEach((category) => categories.add(category));
+    }
     if (categories.size > 0) {
       report.skippedPlurals.push({
         locale: targetLocale,

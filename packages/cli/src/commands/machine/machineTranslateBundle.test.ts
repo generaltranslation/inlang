@@ -480,6 +480,25 @@ test("two plurals: only the categories no source variant has are needed", async 
   ]);
 });
 
+test("two plurals: a category in any combination of the source counts for the other plural", async () => {
+  const bundle = formsBundle(
+    [...countPlural, input("guests"), plural("guestsPlural", "guests")],
+    ["countPlural", "guestsPlural"],
+    {
+      en: {
+        "countPlural=one,guestsPlural=one": "One item for one guest",
+        "countPlural=*,guestsPlural=*": "Items for guests",
+      },
+    },
+  );
+  const { result } = await translate(bundle, ["ru"]);
+
+  // Russian `one` × `few` has a source for `one`: `one` × `one`
+  expect(result.skippedPlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+});
+
 test("a target complete for one gender is skipped when another lacks a category", async () => {
   const bundle = formsBundle(
     [input("gender"), ...countPlural],
