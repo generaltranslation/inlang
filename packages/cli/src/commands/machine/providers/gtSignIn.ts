@@ -1,8 +1,7 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
 
@@ -96,6 +95,9 @@ function parseEnvFile(content: string): Record<string, string> {
  * creates a project and saves a development key to `dir/.env.local`. Asks
  * first, so call it only in an interactive terminal. Resolves `undefined`
  * if the user declines.
+ *
+ * gt itself adds `.env.local` to `.gitignore` (and refuses a tracked one),
+ * and adds `gt` to the devDependencies of a `package.json` without it.
  */
 export async function signInToGt(args: {
   dir: string;
@@ -103,7 +105,13 @@ export async function signInToGt(args: {
   run?: RunProcess;
   prompt?: Prompt;
 }): Promise<GtCredentials | undefined> {
-  const { dir, settings, run = runProcess, prompt = log.prompt } = args;
+  const {
+    dir,
+    settings,
+    run = runProcess,
+    // consola's prompt reads `this`.
+    prompt = (message, options) => log.prompt(message, options),
+  } = args;
   log.log(
     [
       "Machine translation is powered by General Translation.",
@@ -198,20 +206,6 @@ export async function signInToGt(args: {
       "General Translation sign-in succeeded, but .env.local has no General Translation key.",
     );
   }
-  const gitignored = await promisify(execFile)(
-    "git",
-    ["check-ignore", "-q", ".env.local"],
-    { cwd: dir },
-  ).then(
-    () => 0,
-    (error: { code?: unknown }) => error.code,
-  );
-  // 1 is "not ignored"; anything else (no repository, no git) isn't ours to judge.
-  if (gitignored === 1) {
-    log.warn(
-      ".env.local isn't in .gitignore. It holds your General Translation key; add it before you commit.",
-    );
-  }
   return credentials;
 }
 
@@ -257,12 +251,20 @@ function parseJson(text: string): any {
 
 const runProcess: RunProcess = (command, args, { cwd, onStdoutLine }) =>
   new Promise((resolve, reject) => {
+    // npx is npx.cmd on Windows, which Node starts only through a shell; the
+    // shell then needs each argument quoted (a directory name can have spaces).
+    const windows = process.platform === "win32";
     // stdin is closed so gt can never wait on a prompt; with --json it
     // reports missing input as a result event instead.
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      command,
+      windows ? args.map((arg) => `"${arg}"`) : args,
+      {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: windows,
+      },
+    );
     let stderr = "";
     child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
     createInterface({ input: child.stdout }).on("line", onStdoutLine);
