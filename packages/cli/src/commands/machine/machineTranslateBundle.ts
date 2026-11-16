@@ -4,11 +4,13 @@ import { v7 as randomUUID } from "uuid";
 import {
   checkBundle,
   isPluralSelector,
+  markupNames,
   matchValue,
   missingVariants,
   pluralRules,
   resolveAnnotation,
   selectorGroups,
+  variableNames,
   variantCovers,
   Text,
   type BundleNested,
@@ -78,8 +80,8 @@ export type BundleTranslationPlan = PluralReport & {
   missing: MissingTranslation[];
   /**
    * Adds a translation for each of `missing` to a copy of the bundle, except
-   * those that dropped or changed a placeholder (see `brokenPlaceholders`)
-   * and the other translations of a new message one of them is in.
+   * those that dropped or changed a placeholder (see `brokenPlaceholders`),
+   * and a new message whose catch-all is one of them.
    */
   apply: (
     translations: Map<MissingTranslation, VariantRow["pattern"]>,
@@ -97,7 +99,7 @@ type TranslatedBundle = {
   /**
    * Translations left out because they dropped or changed a variable or
    * markup of the source, with those placeholders (`{count}`, `<b>`), and
-   * the other translations of a new message that one of them was in.
+   * the other translations of a new message whose catch-all was one of them.
    */
   reverted: Array<{ locale: string; placeholders: string[] }>;
 };
@@ -310,18 +312,23 @@ export function planBundleTranslation(
         locales: args.targetLocales,
         referenceLocale: args.sourceLocale,
       });
-      // a new message is written whole or not at all: without one of its
-      // forms, such as its catch-all, it shows worse than no message, for
-      // which the runtime falls back to another locale
+      // a new message without its catch-all (`*`, or a plural's `other`)
+      // shows the bundle id for what no other form matches, worse than no
+      // message, for which the runtime falls back to another locale
       const brokenNewMessages = new Set(
         [...broken.keys()]
-          .map((id) => first.written.get(id)!.targetLocale)
+          .map((id) => first.written.get(id)!)
           .filter(
-            (locale) =>
+            ({ sourceVariant, targetLocale }) =>
+              sourceVariant.matches.every(
+                (match) =>
+                  match.type === "catchall-match" || match.value === "other",
+              ) &&
               !args.bundle.messages.some(
-                (message) => message.locale === locale,
+                (message) => message.locale === targetLocale,
               ),
-          ),
+          )
+          .map(({ targetLocale }) => targetLocale),
       );
       const reverted = [...first.written].filter(
         ([id, translation]) =>
@@ -352,11 +359,11 @@ export function planBundleTranslation(
  * changed, by variant id. The provider gets them as `notranslate` spans and
  * may translate or lose one, so the variant would print a wrong or no value.
  *
- * An issue counts only if the variant doesn't have it with the source's text
- * too, so neither hand-written content nor what the source lacks itself (an
- * English `one` without `{count}`, for French `one`, 0 and 1) reverts a
- * translation. The SDK compares by plural form: a German `one` may spell out
- * its number.
+ * An issue counts only if the source form doesn't share it: the checks are
+ * per variant and see its pattern only through its names, so hand-written
+ * content and what the source lacks itself (an English `one` without
+ * `{count}`, for French `one`, 0 and 1) revert nothing. The SDK compares by
+ * plural form: a German `one` may spell out its number.
  */
 function brokenPlaceholders(args: {
   bundle: BundleNested;
@@ -365,44 +372,25 @@ function brokenPlaceholders(args: {
   locales: string[];
   referenceLocale: string;
 }): Map<string, string[]> {
-  const issues = (bundle: BundleNested) =>
-    checkBundle({
-      bundle,
-      locales: args.locales,
-      referenceLocale: args.referenceLocale,
-      checks: ["missing-variable", "unknown-variable", "missing-markup"],
-    }).flatMap((diagnostic) =>
-      "variantId" in diagnostic && "name" in diagnostic
-        ? [
-            {
-              key: `${diagnostic.checkId} ${diagnostic.variantId} ${diagnostic.name}`,
-              variantId: diagnostic.variantId,
-              placeholder:
-                diagnostic.checkId === "missing-markup"
-                  ? `<${diagnostic.name}>`
-                  : `{${diagnostic.name}}`,
-            },
-          ]
-        : [],
-    );
-  const untranslated = new Set(
-    issues({
-      ...args.bundle,
-      messages: args.bundle.messages.map((message) => ({
-        ...message,
-        variants: message.variants.map((variant) => ({
-          ...variant,
-          pattern:
-            args.translated.get(variant.id)?.sourceVariant.pattern ??
-            variant.pattern,
-        })),
-      })),
-    }).map(({ key }) => key),
-  );
   const broken = new Map<string, string[]>();
-  for (const { key, variantId, placeholder } of issues(args.bundle)) {
-    if (untranslated.has(key)) continue;
-    broken.set(variantId, [...(broken.get(variantId) ?? []), placeholder]);
+  for (const diagnostic of checkBundle({
+    bundle: args.bundle,
+    locales: args.locales,
+    referenceLocale: args.referenceLocale,
+    checks: ["missing-variable", "unknown-variable", "missing-markup"],
+  })) {
+    if (!("variantId" in diagnostic && "name" in diagnostic)) continue;
+    const translation = args.translated.get(diagnostic.variantId);
+    if (!translation) continue;
+    const markup = diagnostic.checkId === "missing-markup";
+    const inSource = (markup ? markupNames : variableNames)(
+      translation.sourceVariant.pattern,
+    ).includes(diagnostic.name);
+    if (inSource === (diagnostic.checkId === "unknown-variable")) continue;
+    broken.set(diagnostic.variantId, [
+      ...(broken.get(diagnostic.variantId) ?? []),
+      markup ? `<${diagnostic.name}>` : `{${diagnostic.name}}`,
+    ]);
   }
   return broken;
 }

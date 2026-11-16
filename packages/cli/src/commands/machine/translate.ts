@@ -206,13 +206,10 @@ export async function translateCommandAction(args: {
       const bundleIds = new Set(
         translations.map((translation) => translation.bundleId),
       );
-      const [noun, pronoun, object] =
-        count === 1
-          ? ["translation", "it", "it"]
-          : ["translations", "they", "them"];
+      const noun = count === 1 ? "translation" : "translations";
       log.warn(
         [
-          `Reverted ${count} ${noun} in ${locale}: ${pronoun} dropped or changed a placeholder (${[...placeholders].join(", ")}). Translate ${object} by hand, or run again.`,
+          `Reverted ${count} ${noun} in ${locale} for a dropped or changed placeholder (${[...placeholders].join(", ")}). Translate by hand, or run again.`,
           `  ${[...bundleIds].join(", ")}`,
         ].join("\n"),
       );

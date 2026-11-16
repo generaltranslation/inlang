@@ -832,32 +832,61 @@ test("a form for one number may drop its number: German `one` is 1, French `one`
     text.endsWith(" item") ? dropPlaceholders(text) : text,
   );
 
-  // French `*` is kept out with French `one`, see the next test
   expect(result.reverted).toEqual([
     { locale: "fr", placeholders: ["{count}"] },
-    { locale: "fr", placeholders: [] },
   ]);
   expect(formsOf(result, "de")).toEqual({
     "countPlural=one": "[de]  item",
     "countPlural=*": "[de] {count} items",
   });
-  expect(formsOf(result, "fr")).toBeUndefined();
+  // a new message without `one` still has its catch-all
+  expect(formsOf(result, "fr")).toEqual({
+    "countPlural=*": "[fr] {count} items",
+  });
 });
 
-test("a new message is created whole or not at all: without its catch-all it would show the bundle id", async () => {
+test("a translation that drops a placeholder doesn't revert the other translations of a message that exists", async () => {
   const bundle = withPlaceholders(
-    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+    formsBundle(countPlural, ["countPlural"], {
+      en: itemCount,
+      de: { "countPlural=*": "" },
+    }),
   );
   const result = await translateEditing(bundle, ["de"], (text) =>
     text.endsWith(" items") ? dropPlaceholders(text) : text,
   );
 
   expect(result.reverted).toEqual([
-    { locale: "de", placeholders: [] },
     { locale: "de", placeholders: ["{count}"] },
   ]);
-  expect(formsOf(result, "de")).toBeUndefined();
+  expect(formsOf(result, "de")).toEqual({
+    "countPlural=one": "[de] {count} item",
+    "countPlural=*": "",
+  });
 });
+
+test.each(["*", "other"])(
+  "a new message whose catch-all (%s) is reverted isn't created: it would show the bundle id",
+  async (catchAll) => {
+    const bundle = withPlaceholders(
+      formsBundle(countPlural, ["countPlural"], {
+        en: {
+          "countPlural=one": "{count} item",
+          [`countPlural=${catchAll}`]: "{count} items",
+        },
+      }),
+    );
+    const result = await translateEditing(bundle, ["de"], (text) =>
+      text.endsWith(" items") ? dropPlaceholders(text) : text,
+    );
+
+    expect(result.reverted).toEqual([
+      { locale: "de", placeholders: [] },
+      { locale: "de", placeholders: ["{count}"] },
+    ]);
+    expect(formsOf(result, "de")).toBeUndefined();
+  },
+);
 
 test("a placeholder the source form lacks too doesn't revert: English `one` without `{count}` into `one` for 0 and 1", async () => {
   const bundle = withPlaceholders(

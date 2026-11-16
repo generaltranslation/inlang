@@ -908,11 +908,11 @@ test("translations that drop a placeholder are reported by locale, the others ar
     expect(translated).toBe(4);
     expect(warn.mock.calls).toEqual([
       [
-        "Reverted 3 translations in de: they dropped or changed a placeholder ({name}). Translate them by hand, or run again.\n" +
+        "Reverted 3 translations in de for a dropped or changed placeholder ({name}). Translate by hand, or run again.\n" +
           "  cart, items",
       ],
       [
-        "Reverted 1 translation in fr: it dropped or changed a placeholder ({name}). Translate it by hand, or run again.\n" +
+        "Reverted 1 translation in fr for a dropped or changed placeholder ({name}). Translate by hand, or run again.\n" +
           "  items",
       ],
     ]);
