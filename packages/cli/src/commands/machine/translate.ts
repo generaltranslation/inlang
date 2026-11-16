@@ -167,8 +167,10 @@ export async function translateCommandAction(args: {
       );
     }
 
-    for (const plan of plans) {
-      const bundle = plan.apply(result.translations);
+    const translatedBundles = plans.map((plan) =>
+      plan.apply(result.translations),
+    );
+    for (const bundle of translatedBundles) {
       await upsertBundleNested(args.project.db, bundle.data);
       // variants that got a new id to keep the order of the source
       // message; deleted after the write, so that nothing is lost if it

@@ -1,9 +1,11 @@
 import { afterEach, test, expect, vi } from "vitest";
 import {
   MachineTranslateError,
+  translate,
   translateAndSave,
   translateCommandAction,
 } from "./translate.js";
+import { log } from "../../utilities/log.js";
 import { BYOK_URL } from "./providers/resolveProvider.js";
 import type {
   BatchMachineTranslateProvider,
@@ -25,8 +27,15 @@ import {
   loadProjectInMemory,
   newProject,
   selectBundleNested,
+  upsertBundleNested,
   type NewBundleNested,
 } from "@inlang/sdk";
+
+// passes through; tests count the bundles that are written
+vi.mock("@inlang/sdk", async (importOriginal) => {
+  const sdk = await importOriginal<typeof import("@inlang/sdk")>();
+  return { ...sdk, upsertBundleNested: vi.fn(sdk.upsertBundleNested) };
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -789,16 +798,26 @@ test.each(["single-text", "batch"] as const)(
   },
 );
 
-test("writes no file when one batch request fails", async () => {
-  const en = `{"alpha": "Alpha", "zeta": "Zeta"}`;
+test("writes no file and no bundle when one batch request fails after another succeeded", async () => {
+  // 60 texts: a request of 50 that succeeds and one of 10 that fails
+  const en = JSON.stringify(
+    Object.fromEntries(
+      Array.from({ length: 60 }, (_, index) => [
+        `key${index}`,
+        `Text ${index}`,
+      ]),
+    ),
+  );
   const { project, path, read, cleanup } = await projectOnDisk({
     en,
     de: `{}`,
   });
-  const { provider } = fakeBatchProvider(async () => ({
-    ok: false,
-    error: "The batch failed.",
-  }));
+  const translated = fakeBatchProvider();
+  const { provider, calls } = fakeBatchProvider(async (args) =>
+    calls.length === 1
+      ? translated.provider.translateBatch(args)
+      : { ok: false, error: "The batch failed." },
+  );
   try {
     const error = await translateAndSave({ project, path, provider }).then(
       () => undefined,
@@ -806,10 +825,154 @@ test("writes no file when one batch request fails", async () => {
     );
     expect(error).toBeInstanceOf(MachineTranslateError);
     expect((error as Error).message).toBe("The batch failed.");
+    expect(calls).toHaveLength(2);
     expect(read("en")).toBe(en);
     expect(read("de")).toBe(`{}`);
+    const bundles = await selectBundleNested(project.db).execute();
+    expect(bundles).toHaveLength(60);
+    for (const bundle of bundles) {
+      expect(bundle.messages.map((message) => message.locale)).toEqual(["en"]);
+    }
   } finally {
     await cleanup();
+  }
+});
+
+test("a thrown error fails the run like a returned one and starts no more requests", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 10);
+  let calls = 0;
+  const provider = {
+    translateText: async () => {
+      calls++;
+      if (calls === 1) throw new TypeError("fetch failed");
+      return { ok: true as const, translatedText: "x" };
+    },
+  };
+  try {
+    await expect(
+      translateCommandAction({ project, provider }),
+    ).rejects.toThrowError(
+      new MachineTranslateError("TypeError: fetch failed"),
+    );
+    await settle();
+    // the first and the 3 started next to it
+    expect(calls).toBe(4);
+    const bundles = await selectBundleNested(project.db).execute();
+    for (const bundle of bundles) {
+      expect(bundle.messages.map((message) => message.locale)).toEqual(["en"]);
+    }
+  } finally {
+    await project.close();
+  }
+});
+
+test.each([
+  {
+    answer: "leaves out a text",
+    translatedText: () => undefined,
+    error: 'No translation was returned for "Text 0".',
+  },
+  {
+    answer: "has a placeholder that isn't valid",
+    translatedText: () => '<span class="notranslate">{broken</span>',
+    error: expect.stringMatching(/^SyntaxError: /),
+  },
+])(
+  "a batch answer that $answer fails the run and writes nothing",
+  async ({ translatedText, error }) => {
+    const project = await projectWithTextBundles(["en", "de"], 3);
+    const { provider } = fakeBatchProvider(async (args) => ({
+      ok: true,
+      translatedTexts: Object.fromEntries(
+        Object.entries(args.texts).flatMap(([key, { text }]) => {
+          const translation =
+            key === "bundle0_en" ? translatedText() : `${text} (de)`;
+          return translation === undefined ? [] : [[key, translation]];
+        }),
+      ),
+    }));
+    try {
+      const thrown = await translateCommandAction({ project, provider }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(thrown).toBeInstanceOf(MachineTranslateError);
+      expect((thrown as Error).message).toEqual(error);
+      const bundles = await selectBundleNested(project.db).execute();
+      for (const bundle of bundles) {
+        expect(bundle.messages.map((message) => message.locale)).toEqual([
+          "en",
+        ]);
+      }
+    } finally {
+      await project.close();
+    }
+  },
+);
+
+test("bundles with nothing to translate aren't written", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 0);
+  const done = textBundle("done", "Done");
+  done.messages.push({
+    id: "done_de",
+    bundle_id: "done",
+    locale: "de",
+    variants: [
+      {
+        id: "done_de",
+        message_id: "done_de",
+        pattern: [{ type: "text", value: "Fertig" }],
+      },
+    ],
+  });
+  await insertBundleNested(project.db, done);
+  await insertBundleNested(project.db, textBundle("todo", "Todo"));
+  const { provider } = fakeBatchProvider();
+  vi.mocked(upsertBundleNested).mockClear();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(
+      vi.mocked(upsertBundleNested).mock.calls.map(([, bundle]) => bundle.id),
+    ).toEqual(["todo"]);
+  } finally {
+    await project.close();
+  }
+});
+
+test("a bundle without a source message is reported and the others are translated", async () => {
+  const project = await projectWithTextBundles(["en", "de", "fr"], 1);
+  await insertBundleNested(project.db, {
+    id: "orphan",
+    messages: [
+      {
+        id: "orphan_de",
+        bundle_id: "orphan",
+        locale: "de",
+        variants: [
+          {
+            id: "orphan_de",
+            message_id: "orphan_de",
+            pattern: [{ type: "text", value: "Waise" }],
+          },
+        ],
+      },
+    ],
+  });
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider();
+  try {
+    const { translated } = await translateCommandAction({ project, provider });
+    expect(translated).toBe(2);
+    expect(warn).toHaveBeenCalledWith("Some bundles could not be translated.");
+    const bundles = await selectBundleNested(project.db).execute();
+    expect(
+      bundles
+        .find((bundle) => bundle.id === "bundle0")
+        ?.messages.map((message) => message.locale)
+        .sort(),
+    ).toEqual(["de", "en", "fr"]);
+  } finally {
+    await project.close();
   }
 });
 
@@ -832,5 +995,31 @@ test("a provider without credit says so and that nothing changed", async () => {
     );
   } finally {
     await project.close();
+  }
+});
+
+test("the command prints a translation failure as is and exits with 1", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  skipRetryDelay();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async () => unavailableResponse()),
+  );
+  const { path, cleanup } = await projectOnDisk({
+    en: `{"alpha": "Alpha"}`,
+    de: `{}`,
+  });
+  const error = vi.spyOn(log, "error");
+  const exit = vi
+    .spyOn(process, "exit")
+    .mockImplementation(() => undefined as never);
+  try {
+    await translate.parseAsync(["--project", path, "--nobar"], {
+      from: "user",
+    });
+    expect(error.mock.calls).toEqual([[SERVICE_UNAVAILABLE_ERROR]]);
+    expect(exit).toHaveBeenCalledWith(1);
+  } finally {
+    await cleanup();
   }
 });

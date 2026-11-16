@@ -14,6 +14,7 @@ import {
 } from "./patternSerialization.js";
 import type {
   AnyMachineTranslateProvider,
+  BatchMachineTranslateProvider,
   TranslateFailure,
 } from "./providers/types.js";
 
@@ -54,7 +55,7 @@ export type BundleTranslationPlan = {
   missing: MissingTranslation[];
   /** Adds a translation for each of `missing` to a copy of the bundle. */
   apply: (
-    translations: Map<MissingTranslation, string>,
+    translations: Map<MissingTranslation, VariantRow["pattern"]>,
   ) => MachineTranslateResult & { data: NewBundleNested };
 };
 
@@ -177,7 +178,7 @@ export function planBundleTranslation(
       >();
 
       for (const translation of missing) {
-        const pattern = deserializePattern(translations.get(translation)!);
+        const pattern = translations.get(translation)!;
         const { sourceVariant, targetLocale } = translation;
         const targetMessage = copy.messages.find(
           (message) => message.locale === targetLocale,
@@ -238,10 +239,11 @@ export function planBundleTranslation(
 /**
  * Translates the missing translations with at most `MAX_CONCURRENT_REQUESTS`
  * requests in flight. A batch provider gets the texts of each target locale in
- * requests of at most `MAX_TEXTS_PER_REQUEST`, keyed by source variant id.
+ * requests of at most `MAX_TEXTS_PER_REQUEST`, keyed by source variant id; a
+ * single-text provider gets one request per text.
  *
- * Stops starting requests at the first failure and returns it once the
- * requests in flight have settled.
+ * Stops starting requests at the first failure, returned or thrown, and
+ * returns it once the requests in flight have settled.
  */
 export async function translateMissing(args: {
   provider: AnyMachineTranslateProvider;
@@ -250,65 +252,65 @@ export async function translateMissing(args: {
   /** Called with the number of texts each successful request translated. */
   onProgress?: (translated: number) => void;
 }): Promise<
-  { ok: true; translations: Map<MissingTranslation, string> } | TranslateFailure
+  | { ok: true; translations: Map<MissingTranslation, VariantRow["pattern"]> }
+  | TranslateFailure
 > {
   const { provider, sourceLocale } = args;
-  const translations = new Map<MissingTranslation, string>();
+  const batched = "translateBatch" in provider;
+  // a single-text provider gets batches of one text, so that both kinds of
+  // provider share the scheduling and the checks of the results below
+  const translateBatch: BatchMachineTranslateProvider["translateBatch"] =
+    batched
+      ? (batch) => provider.translateBatch(batch)
+      : async ({ texts, ...locales }) => {
+          const [key, { text, context }] = Object.entries(texts)[0]!;
+          const result = await provider.translateText({
+            text,
+            ...locales,
+            ...(context ? { context } : {}),
+          });
+          return result.ok
+            ? { ok: true, translatedTexts: { [key]: result.translatedText } }
+            : result;
+        };
+  const textsPerRequest = batched ? MAX_TEXTS_PER_REQUEST : 1;
+
+  const byLocale = new Map<string, MissingTranslation[]>();
+  for (const translation of args.missing) {
+    const missing = byLocale.get(translation.targetLocale) ?? [];
+    missing.push(translation);
+    byLocale.set(translation.targetLocale, missing);
+  }
+
+  const translations = new Map<MissingTranslation, VariantRow["pattern"]>();
   /** Each sends one request and records what it translated. */
   const requests: Array<() => Promise<{ ok: true } | TranslateFailure>> = [];
-
-  if ("translateBatch" in provider) {
-    const byLocale = new Map<string, MissingTranslation[]>();
-    for (const translation of args.missing) {
-      const missing = byLocale.get(translation.targetLocale) ?? [];
-      missing.push(translation);
-      byLocale.set(translation.targetLocale, missing);
-    }
-    for (const [targetLocale, missing] of byLocale) {
-      for (
-        let start = 0;
-        start < missing.length;
-        start += MAX_TEXTS_PER_REQUEST
-      ) {
-        const chunk = missing.slice(start, start + MAX_TEXTS_PER_REQUEST);
-        requests.push(async () => {
-          const result = await provider.translateBatch({
-            sourceLocale,
-            targetLocale,
-            texts: Object.fromEntries(
-              chunk.map(({ sourceVariant, text, context }) => [
-                sourceVariant.id,
-                { text, context },
-              ]),
-            ),
-          });
-          if (result.ok) {
-            for (const translation of chunk) {
-              translations.set(
-                translation,
-                result.translatedTexts[translation.sourceVariant.id]!,
-              );
-            }
-            args.onProgress?.(chunk.length);
-          }
-          return result;
-        });
-      }
-    }
-  } else {
-    for (const translation of args.missing) {
-      const { text, targetLocale, context } = translation;
+  for (const [targetLocale, missing] of byLocale) {
+    for (let start = 0; start < missing.length; start += textsPerRequest) {
+      const chunk = missing.slice(start, start + textsPerRequest);
       requests.push(async () => {
-        const result = await provider.translateText({
-          text,
+        const result = await translateBatch({
           sourceLocale,
           targetLocale,
-          ...(context ? { context } : {}),
+          texts: Object.fromEntries(
+            chunk.map(({ sourceVariant, text, context }) => [
+              sourceVariant.id,
+              { text, context },
+            ]),
+          ),
         });
-        if (result.ok) {
-          translations.set(translation, result.translatedText);
-          args.onProgress?.(1);
+        if (!result.ok) return result;
+        for (const translation of chunk) {
+          const text = result.translatedTexts[translation.sourceVariant.id];
+          if (text === undefined) {
+            return {
+              ok: false,
+              error: `No translation was returned for "${translation.text}".`,
+            };
+          }
+          translations.set(translation, deserializePattern(text));
         }
+        args.onProgress?.(chunk.length);
         return result;
       });
     }
@@ -318,7 +320,10 @@ export async function translateMissing(args: {
   let next = 0;
   const worker = async () => {
     while (!failure && next < requests.length) {
-      const result = await requests[next++]!();
+      // e.g. a network error, or a translation that isn't a valid pattern
+      const result = await requests[next++]!().catch(
+        (error): TranslateFailure => ({ ok: false, error: String(error) }),
+      );
       if (!result.ok) failure ??= result;
     }
   };
