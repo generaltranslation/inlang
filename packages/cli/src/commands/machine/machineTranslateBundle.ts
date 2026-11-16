@@ -2,6 +2,11 @@
 // order of the source message
 import { v7 as randomUUID } from "uuid";
 import {
+  isPluralSelector,
+  matchValue,
+  missingVariants,
+  selectorGroups,
+  variantCovers,
   Text,
   type BundleNested,
   type NewBundleNested,
@@ -46,11 +51,34 @@ type MissingTranslation = {
   context?: string;
 };
 
+/** CLDR plural categories, in CLDR order. */
+export const PLURAL_CATEGORIES = ["zero", "one", "two", "few", "many", "other"];
+
+/** What a bundle's plurals tell the user. */
+export type PluralReport = {
+  /**
+   * Target locales left out, with the plural categories they need that no
+   * source variant has: translating the source's forms would leave the
+   * translation without them, so they are left to be added by hand.
+   */
+  skippedPlurals: Array<{ locale: string; categories: string[] }>;
+  /**
+   * Target locales translated without known plural rules (see the SDK's
+   * `pluralRules`): their plural forms are the source's.
+   */
+  unknownPluralRules: string[];
+  /**
+   * Selectors that aren't plurals but whose keys are all plural categories:
+   * they never match a number, the source likely lacks `: plural`.
+   */
+  categoryKeySelectors: string[];
+};
+
 /**
  * The translations a bundle is missing, and how to add them to it once they
  * are translated.
  */
-export type BundleTranslationPlan = {
+export type BundleTranslationPlan = PluralReport & {
   missing: MissingTranslation[];
   /** Adds a translation for each of `missing` to a copy of the bundle. */
   apply: (
@@ -71,6 +99,12 @@ type TranslatedBundle = {
 /**
  * Finds the translations the bundle is missing in the target locales: no
  * variant for a source variant, or an empty one.
+ *
+ * A target locale that lacks a form in a plural category no source variant
+ * has (Russian `few` and `many` for an English `one` and `*`) is left out,
+ * see `PluralReport`: this run translates only the source's forms. Forms the
+ * source lacks in its own locale too don't count: the translation is as
+ * complete as the source.
  */
 export function planBundleTranslation(
   args: MachineTranslateArgs,
@@ -85,23 +119,68 @@ export function planBundleTranslation(
     };
   }
 
+  const { declarations } = args.bundle;
+  const sourceMissing = missingVariants(sourceMessage, declarations);
   const missing: MissingTranslation[] = [];
+  const report: PluralReport = {
+    skippedPlurals: [],
+    unknownPluralRules: [],
+    categoryKeySelectors: sourceMessage.selectors
+      .map(({ name }) => name)
+      .filter((name) => {
+        const keys = sourceMessage.variants
+          .map((variant) => matchValue(variant, name))
+          .filter((key) => key !== "*");
+        return (
+          !isPluralSelector(name, declarations) &&
+          keys.length > 0 &&
+          keys.every((key) => PLURAL_CATEGORIES.includes(key))
+        );
+      }),
+  };
+
   // a locale given twice is translated once
-  const targetLocales = new Set(args.targetLocales);
-  for (const sourceVariant of sourceMessage.variants) {
-    const text = serializePattern(sourceVariant.pattern, {});
+  for (const targetLocale of new Set(args.targetLocales)) {
+    if (targetLocale === args.sourceLocale) {
+      continue;
+    }
 
-    for (const targetLocale of targetLocales) {
-      if (targetLocale === args.sourceLocale) {
-        continue;
-      }
+    const targetMessage = args.bundle.messages.find(
+      (message) => message.locale === targetLocale,
+    );
+    const target = {
+      locale: targetLocale,
+      selectors: targetMessage?.selectors ?? sourceMessage.selectors,
+      variants: targetMessage?.variants ?? [],
+    };
+    const categories = new Set(
+      missingVariants(target, declarations, {
+        referenceVariants: sourceMessage.variants,
+      })
+        .filter(
+          (matches) =>
+            !sourceMissing.some((sourceMatches) =>
+              variantCovers({ matches: sourceMatches }, matches, declarations),
+            ),
+        )
+        .flatMap((matches) =>
+          newCategories(matches, sourceMessage.variants, declarations),
+        ),
+    );
+    if (categories.size > 0) {
+      report.skippedPlurals.push({
+        locale: targetLocale,
+        categories: [...categories],
+      });
+      continue;
+    }
 
-      const targetMessage = args.bundle.messages.find(
-        (message) => message.locale === targetLocale,
+    const translated = missing.length;
+    for (const sourceVariant of sourceMessage.variants) {
+      const existingVariant = findMatchingVariant(
+        target.variants,
+        sourceVariant.matches,
       );
-      const existingVariant =
-        targetMessage &&
-        findMatchingVariant(targetMessage.variants, sourceVariant.matches);
 
       if (
         existingVariant &&
@@ -118,13 +197,20 @@ export function planBundleTranslation(
       missing.push({
         sourceVariant,
         targetLocale,
-        text,
+        text: serializePattern(sourceVariant.pattern, {}),
         context: args.bundle.description || undefined,
       });
+    }
+    if (
+      missing.length > translated &&
+      hasUnknownPluralRules(target, declarations)
+    ) {
+      report.unknownPluralRules.push(targetLocale);
     }
   }
 
   return {
+    ...report,
     missing,
     apply: (translations) => {
       const copy = structuredClone(args.bundle);
@@ -194,6 +280,73 @@ export function planBundleTranslation(
         : { data: copy };
     },
   };
+}
+
+/**
+ * The plural categories a missing form needs that no source variant of its
+ * branch has: Russian `few` × `female` when no English variant is `few` and
+ * `female`. A branch is the form's values of the other selectors (gender,
+ * the plural's type, an exact number), or their catch-all where the source
+ * has no variant for a value, as at runtime. So English ordinal `few` is no
+ * source for Russian cardinal `few`, and a gender only the translation has
+ * needs no category the source has.
+ */
+function newCategories(
+  matches: VariantRow["matches"],
+  sourceVariants: VariantRow[],
+  declarations: BundleNested["declarations"],
+): string[] {
+  const valueOf = (match: VariantRow["matches"][number]) =>
+    match.type === "literal-match" ? match.value : "*";
+  const branch = sourceVariants.filter((variant) =>
+    matches.every((match) => {
+      if (isPluralSelector(match.key, declarations)) return true;
+      const value = matchValue(variant, match.key);
+      return (
+        value === valueOf(match) ||
+        (value === "*" &&
+          !sourceVariants.some(
+            (other) => matchValue(other, match.key) === valueOf(match),
+          ))
+      );
+    }),
+  );
+  return matches.flatMap((match) =>
+    match.type === "literal-match" &&
+    isPluralSelector(match.key, declarations) &&
+    !branch.some((variant) => matchValue(variant, match.key) === match.value)
+      ? [match.value]
+      : [],
+  );
+}
+
+/**
+ * True when a plural of the message has no known rules in its locale, so the
+ * SDK requires only its catch-all: an unknown locale, or options only known
+ * at runtime. A plural whose `type` a select chooses (`type=$pluralType`)
+ * has rules per type, known when the locale is.
+ */
+function hasUnknownPluralRules(
+  message: Parameters<typeof selectorGroups>[0],
+  declarations: BundleNested["declarations"],
+): boolean {
+  return selectorGroups(message, declarations).some(
+    (group) =>
+      group.isPlural &&
+      (group.typeSelector ? !knowsPluralRules(message.locale) : !group.plural),
+  );
+}
+
+/** Whether `Intl` has plural rules for a locale, written as the SDK reads it. */
+function knowsPluralRules(locale: string): boolean {
+  try {
+    return (
+      Intl.PluralRules.supportedLocalesOf(locale.replace(/_/g, "-")).length > 0
+    );
+  } catch {
+    // not a valid locale, e.g. `x-foo`
+    return false;
+  }
 }
 
 /**

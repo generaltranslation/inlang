@@ -13,6 +13,7 @@ import progessBar from "cli-progress";
 import fs from "node:fs/promises";
 import {
   planBundleTranslation,
+  PLURAL_CATEGORIES,
   translateMissing,
   type BundleTranslationPlan,
 } from "./machineTranslateBundle.js";
@@ -128,19 +129,47 @@ export async function translateCommandAction(args: {
 
     const plans: BundleTranslationPlan[] = [];
     const errors: string[] = [];
+    /** bundle ids by locale */
+    const skipped = new Map<string, string[]>();
+    const skippedCategories = new Set<string>();
+    const unknownPluralRules = new Set<string>();
+    const categoryKeySelectors: string[] = [];
     for (const bundle of bundles) {
       const plan = planBundleTranslation({
         bundle,
         sourceLocale: settings.baseLocale,
         targetLocales,
       });
-      if ("error" in plan) errors.push(plan.error);
+      if ("error" in plan) {
+        errors.push(plan.error);
+        continue;
+      }
+      for (const { locale, categories } of plan.skippedPlurals) {
+        skipped.set(locale, [...(skipped.get(locale) ?? []), bundle.id]);
+        for (const category of categories) skippedCategories.add(category);
+      }
+      for (const locale of plan.unknownPluralRules) {
+        unknownPluralRules.add(locale);
+      }
+      if (plan.categoryKeySelectors.length > 0) {
+        categoryKeySelectors.push(
+          `  ${bundle.id}: ${plan.categoryKeySelectors.join(", ")}`,
+        );
+      }
       // Unchanged bundles aren't written back.
-      else if (plan.missing.length > 0) plans.push(plan);
+      if (plan.missing.length > 0) plans.push(plan);
     }
     if (errors.length > 0) {
       log.warn("Some bundles could not be translated.");
       log.warn(errors.join("\n"));
+    }
+    if (categoryKeySelectors.length > 0) {
+      log.warn(
+        [
+          `These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Declare them with ": plural".`,
+          ...categoryKeySelectors,
+        ].join("\n"),
+      );
     }
     const missing = plans.flatMap((plan) => plan.missing);
 
@@ -169,6 +198,22 @@ export async function translateCommandAction(args: {
       }
     }
 
+    if (skipped.size > 0) {
+      const count = [...skipped.values()].flat().length;
+      log.warn(
+        [
+          `Skipped ${count} ${count === 1 ? "message" : "messages"} in ${[...skipped.keys()].join(", ")}: their plurals need forms the source doesn't have (${PLURAL_CATEGORIES.filter((category) => skippedCategories.has(category)).join(", ")}). Add them by hand, then run again.`,
+          ...[...skipped].map(
+            ([locale, ids]) => `  ${locale}: ${ids.join(", ")}`,
+          ),
+        ].join("\n"),
+      );
+    }
+    for (const locale of unknownPluralRules) {
+      log.warn(
+        `Plural rules unknown for ${locale}; copied the source's forms.`,
+      );
+    }
     log.success("Machine translate complete.");
     return { translated: missing.length, bundles: bundles.length };
   } catch (error) {

@@ -11,39 +11,30 @@ type PlaceholderMetadata = Record<
 const escapeStart = `<span class="notranslate">`;
 const escapeEnd = "</span>";
 
+/**
+ * The variant with the same matches. An `other` matches a catch-all and the
+ * other way around, as a plural's explicit `other` is its catch-all (see the
+ * SDK's `variantCovers`).
+ */
 export function findMatchingVariant(
   variants: VariantRow[],
   matches: VariantRow["matches"],
 ): VariantRow | undefined {
-  if (matches.length === 0) {
-    return variants.find((variant) => variant.matches.length === 0);
-  }
-
-  return variants.find((variant) => {
-    if (variant.matches.length !== matches.length) {
-      return false;
-    }
-
-    return matches.every((sourceMatch) =>
-      variant.matches.some((targetMatch) => {
-        if (
-          targetMatch.key !== sourceMatch.key ||
-          targetMatch.type !== sourceMatch.type
-        ) {
-          return false;
-        }
-
-        if (
-          sourceMatch.type === "literal-match" &&
-          targetMatch.type === "literal-match"
-        ) {
-          return sourceMatch.value === targetMatch.value;
-        }
-
-        return true;
-      }),
-    );
-  });
+  const value = (match: VariantRow["matches"][number]) =>
+    match.type === "literal-match" && match.value !== "other"
+      ? match.value
+      : undefined;
+  return variants.find(
+    (variant) =>
+      variant.matches.length === matches.length &&
+      matches.every((sourceMatch) =>
+        variant.matches.some(
+          (targetMatch) =>
+            targetMatch.key === sourceMatch.key &&
+            value(targetMatch) === value(sourceMatch),
+        ),
+      ),
+  );
 }
 
 export function serializePattern(

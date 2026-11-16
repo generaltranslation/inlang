@@ -802,3 +802,108 @@ test("the command prints a translation failure as is and exits with 1", async ()
     await cleanup();
   }
 });
+
+/** A bundle with an English `one` and `*` of `count`, a plural unless `bare`. */
+function pluralBundle(id: string, bare = false): NewBundleNested {
+  const selector = bare ? "count" : "countPlural";
+  const variant = (value: string, text: string) => ({
+    id: `${id}_en_${value}`,
+    message_id: `${id}_en`,
+    matches: [
+      value === "*"
+        ? { type: "catchall-match" as const, key: selector }
+        : { type: "literal-match" as const, key: selector, value },
+    ],
+    pattern: [{ type: "text" as const, value: text }],
+  });
+  return {
+    id,
+    declarations: [
+      { type: "input-variable", name: "count" },
+      ...(bare
+        ? []
+        : [
+            {
+              type: "local-variable" as const,
+              name: "countPlural",
+              value: {
+                type: "expression" as const,
+                arg: { type: "variable-reference" as const, name: "count" },
+                annotation: {
+                  type: "function-reference" as const,
+                  name: "plural",
+                  options: [],
+                },
+              },
+            },
+          ]),
+    ],
+    messages: [
+      {
+        id: `${id}_en`,
+        bundle_id: id,
+        locale: "en",
+        selectors: [{ type: "variable-reference", name: selector }],
+        variants: [variant("one", "One item"), variant("*", "Items")],
+      },
+    ],
+  };
+}
+
+test("plurals the run can't translate are reported once, grouped by locale", async () => {
+  const project = await projectWithTextBundles(
+    ["en", "ru", "ar", "de", "x-foo"],
+    0,
+  );
+  for (const id of ["cart", "items"]) {
+    await insertBundleNested(project.db, pluralBundle(id));
+  }
+  await insertBundleNested(project.db, pluralBundle("bare", true));
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider();
+  try {
+    const { translated } = await translateCommandAction({ project, provider });
+    // de and x-foo for the plurals, every locale for the bare selector
+    expect(translated).toBe(2 * 2 * 2 + 4 * 2);
+    expect(warn.mock.calls).toEqual([
+      [
+        `These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Declare them with ": plural".\n` +
+          "  bare: count",
+      ],
+      [
+        "Skipped 4 messages in ru, ar: their plurals need forms the source doesn't have (zero, two, few, many). Add them by hand, then run again.\n" +
+          "  ru: cart, items\n" +
+          "  ar: cart, items",
+      ],
+      ["Plural rules unknown for x-foo; copied the source's forms."],
+    ]);
+    const bundles = await selectBundleNested(project.db).execute();
+    expect(
+      bundles
+        .find((bundle) => bundle.id === "items")
+        ?.messages.map((message) => message.locale)
+        .sort(),
+    ).toEqual(["de", "en", "x-foo"]);
+  } finally {
+    await project.close();
+  }
+});
+
+test("one skipped message is one message", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const warn = vi.spyOn(log, "warn");
+  const { provider, calls } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(calls).toEqual([]);
+    expect(warn.mock.calls).toEqual([
+      [
+        "Skipped 1 message in ru: their plurals need forms the source doesn't have (few, many). Add them by hand, then run again.\n" +
+          "  ru: items",
+      ],
+    ]);
+  } finally {
+    await project.close();
+  }
+});
