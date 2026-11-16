@@ -768,7 +768,8 @@ export function missingVariants(
  *   `*`. The runtime selects `other` for every number of no other category,
  *   so the translation's catch-all comes from `other` too.
  * - The category is taken from the same branch of the other selectors:
- *   `few · female` from `* · female`, `one · male` from `* · male`. Only when
+ *   `few · female` from `* · female`, `one · male` from `* · male` (the
+ *   runtime may show `one · *` there, but its text lacks the gender). Only when
  *   that branch has no variant for the category does the select value fall
  *   back to the reference's catch-all, which the runtime then shows: `few ·
  *   male` from `* · *` when only `one · male` exists.
@@ -796,6 +797,7 @@ export function sourceVariantFor<V extends WithMatches>(
 			)
 		),
 	];
+	// the selects first, so a select falls back only when no plural key of its branch matches
 	const groups = selectorGroups(
 		{
 			locale: referenceLocale,
@@ -803,16 +805,13 @@ export function sourceVariantFor<V extends WithMatches>(
 		},
 		declarations,
 		{ variants: [form], referenceVariants: shown }
-	);
-	// per group, the reference keys that stand in for the form's key, best first; the
-	// selects first, so a select falls back only when no plural key of its branch matches
-	let candidates = [new Map<SelectorGroup, string>()];
-	for (const group of [...groups].sort(
-		(a, b) => Number(a.isPlural) - Number(b.isPlural)
-	)) {
+	).sort((a, b) => Number(a.isPlural) - Number(b.isPlural));
+	// per group, the reference keys that stand in for the form's key, best first
+	let candidates: string[][] = [[]];
+	for (const group of groups) {
 		const key = group.keyOf(form);
 		const keys = !group.isPlural
-			? key !== "*" && shown.some((variant) => group.keyOf(variant) === key)
+			? shown.some((variant) => group.keyOf(variant) === key)
 				? [key, "*"]
 				: [key]
 			: isNumericKey(key)
@@ -821,12 +820,12 @@ export function sourceVariantFor<V extends WithMatches>(
 					? ["other", "*"]
 					: [key, "other", "*"];
 		candidates = candidates.flatMap((candidate) =>
-			keys.map((value) => new Map([...candidate, [group, value]]))
+			keys.map((value) => [...candidate, value])
 		);
 	}
-	for (const candidate of candidates) {
+	for (const keys of candidates) {
 		const variant = shown.find((variant) =>
-			groups.every((group) => group.keyOf(variant) === candidate.get(group))
+			groups.every((group, index) => group.keyOf(variant) === keys[index])
 		);
 		if (variant) return variant;
 	}

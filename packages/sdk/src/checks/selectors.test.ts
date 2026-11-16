@@ -454,6 +454,40 @@ test("a variant the reference never selects is not a source", () => {
 			["zero", "one", "*"].map((countPlural) => variant({ countPlural }))
 		)
 	).toEqual(["zero <- *", "one <- one", "* <- *"]);
+	// Russian selects `few` and `many`, so they are sources for Polish
+	expect(
+		sources(
+			message("pl", ["countPlural"]),
+			plural,
+			["one", "few", "many", "*"].map((countPlural) =>
+				variant({ countPlural })
+			),
+			"ru"
+		)
+	).toEqual(["one <- one", "few <- few", "many <- many", "* <- *"]);
+});
+
+test("a selector the reference lacks has no source except its catch-all", () => {
+	const english = [
+		variant({ countPlural: "one" }),
+		variant({ countPlural: "*" }),
+	];
+	expect(
+		sourceVariantFor(
+			variant({ countPlural: "few", gender: "female" }).matches,
+			english,
+			genderPlural,
+			"en"
+		)
+	).toBeUndefined();
+	expect(
+		sourceVariantFor(
+			variant({ countPlural: "few", gender: "*" }).matches,
+			english,
+			genderPlural,
+			"en"
+		)
+	).toBe(english[1]);
 });
 
 test("words on the count's own selector make it a select, in the reference or the form", () => {
