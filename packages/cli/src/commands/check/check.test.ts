@@ -109,6 +109,21 @@ function run(
 }
 
 const project = ["--project", "./project.inlang"];
+const translateHint =
+  "Translate what's missing with `npx @inlang/cli machine translate --project ./project.inlang`.\n";
+
+/** The check-app fixture's messages file of a locale, changed. */
+function messages(
+  locale: "en-US" | "pt-BR",
+  change: (messages: Record<string, any>) => void,
+): Record<string, string> {
+  const path = `messages/${locale}.json`;
+  const content = JSON.parse(
+    fs.readFileSync(nodePath.join(fixtures, "check-app", path), "utf8"),
+  );
+  change(content);
+  return { [path]: JSON.stringify(content, undefined, 2) };
+}
 
 describe("inlang check", { timeout: 60_000 }, () => {
   test("reports findings grouped by check and why unused messages can't be determined", async () => {
@@ -166,6 +181,7 @@ describe("inlang check", { timeout: 60_000 }, () => {
       ["check", ...project, "--format", "json"],
     );
     expect(code).toBe(1);
+    expect(stdout).not.toContain("machine translate");
     const report = JSON.parse(stdout);
     expect(report).toMatchObject({
       version: 1,
@@ -249,6 +265,64 @@ describe("inlang check", { timeout: 60_000 }, () => {
     const noFail = await run(root, ["check", ...project, "--no-fail"]);
     expect(noFail.code).toBe(0);
     expect(noFail.stdout).toContain("3 findings");
+    expect(noFail.stdout).toContain(translateHint);
+  });
+
+  test("points to machine translate once, after the report, when a translation is missing", async () => {
+    const { code, stdout } = await run(app(), ["check", ...project]);
+    expect(code).toBe(1);
+    expect(stdout).toContain(
+      `3 findings\n  missing-translation  1\n  missing-variable     2\n\n${translateHint}`,
+    );
+    expect(stdout.split("machine translate")).toHaveLength(2);
+  });
+
+  test.each([
+    [
+      "empty-translation",
+      "--empty-translations",
+      messages("pt-BR", (m) => (m.welcome_back = "")),
+    ],
+    [
+      "empty-variant",
+      "--empty-variants",
+      messages("pt-BR", (m) => (m.cart_items[0].match["countPlural=one"] = "")),
+    ],
+    [
+      "missing-variant",
+      "--missing-variants",
+      messages("pt-BR", (m) => delete m.cart_items[0].match["countPlural=one"]),
+    ],
+  ])("%s points to machine translate", async (id, flag, files) => {
+    const { code, stdout } = await run(app({ files }), [
+      "check",
+      ...project,
+      flag,
+    ]);
+    expect(code).toBe(1);
+    expect(stdout).toContain(`${id} (1)\n`);
+    expect(stdout).toContain(translateHint);
+  });
+
+  test("doesn't point to machine translate without a missing translation", async () => {
+    const other = await run(app(), [
+      "check",
+      ...project,
+      "--missing-variables",
+    ]);
+    expect(other.code).toBe(1);
+    expect(other.stdout).toContain("missing-variable (2)");
+    expect(other.stdout).not.toContain("machine translate");
+    // machine translation can't fill the base locale
+    const base = await run(
+      app({ files: messages("en-US", (m) => (m.welcome_back = "")) }),
+      ["check", ...project, "--empty-translations"],
+    );
+    expect(base.code).toBe(1);
+    expect(base.stdout).toContain(
+      "empty-translation (1)\n  welcome_back  en-US",
+    );
+    expect(base.stdout).not.toContain("machine translate");
   });
 
   test("--locales filters findings and validates the locales", async () => {
@@ -342,7 +416,11 @@ describe("inlang check", { timeout: 60_000 }, () => {
         settings.modules = [legacy];
       },
     });
-    const { stdout } = await run(root, ["check", ...project, "--unused-messages"]);
+    const { stdout } = await run(root, [
+      "check",
+      ...project,
+      "--unused-messages",
+    ]);
     expect(stdout).toContain(
       "Unused-message check needs @inlang/plugin-i18next ≥ 6.5.0, update the module URL in settings.json",
     );
