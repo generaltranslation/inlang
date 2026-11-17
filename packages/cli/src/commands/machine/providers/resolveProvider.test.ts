@@ -53,7 +53,7 @@ function fakeNpx(code: number): () => string[] {
 // that isn't signed in.
 let npxCalls: () => string[];
 beforeEach(() => {
-  npxCalls = fakeNpx(1);
+  npxCalls = fakeNpx(2);
 });
 
 /** A folder with `files`, and the path of a project.inlang in it. */
@@ -259,7 +259,7 @@ test("the gt init command for agents keeps a known project and saves the key nex
   }
 });
 
-test("declining the sign-in uses the community service", async () => {
+test("answering no uses the community service", async () => {
   vi.spyOn(log, "log").mockImplementation(() => undefined);
   vi.spyOn(log, "prompt").mockResolvedValue(false);
   const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
