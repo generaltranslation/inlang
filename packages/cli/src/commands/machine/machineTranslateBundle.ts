@@ -231,12 +231,26 @@ export function planBundleTranslation(
 
     const missingBefore = missing.length;
     for (const sourceVariant of sourceMessage.variants) {
-      const existingVariant = findMatchingVariant({
-        variants: target.variants,
-        matches: sourceVariant.matches,
-        sourceVariants: sourceMessage.variants,
-        declarations,
-      });
+      const existingVariant =
+        findMatchingVariant({
+          variants: target.variants,
+          matches: sourceVariant.matches,
+          sourceVariants: sourceMessage.variants,
+          declarations,
+        }) ??
+        // or the category that selects only the source's exact number: Arabic
+        // "zero" is `=0`, as i18next's Arabic `_zero` is imported (see the
+        // SDK's `variantCovers`). Only that: `findMatchingVariant` decides
+        // about `other` and the catch-all.
+        target.variants.find(
+          (variant) =>
+            variantCovers(
+              variant,
+              sourceVariant.matches,
+              declarations,
+              targetLocale,
+            ) && !variantCovers(variant, sourceVariant.matches, declarations),
+        );
 
       // A blank variant is missing, as `inlang check` reports it, unless its
       // source is blank too: then a translation can't fill it.
@@ -559,7 +573,7 @@ function missingForms(args: {
   const missing: MissingTranslation[] = [];
   for (const form of forms) {
     const covering = target.variants.filter((variant) =>
-      variantCovers(variant, form, declarations),
+      variantCovers(variant, form, declarations, target.locale),
     );
     // an empty `other` can be shown instead of a filled `*` (a literal key is
     // preferred, or stored first), so it is still missing
