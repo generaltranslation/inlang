@@ -310,6 +310,67 @@ test("a translation needs the reference's select values and exact numbers, not i
 	).toEqual(["0 · *", "* · one"]);
 });
 
+test("an exact number and the plural category that selects only it are one form", () => {
+	// what `@inlang/plugin-i18next` imports for English `_zero`, `_one`, `_other`
+	const english = [
+		variant({ count: "0", countPlural: "*" }),
+		variant({ count: "*", countPlural: "one" }),
+		variant({ count: "*", countPlural: "*" }),
+	];
+	const arabic = message("ar", ["count", "countPlural"]);
+	// Arabic "zero" selects only 0, where the exact form is shown
+	expect(
+		values(requiredVariants(arabic, plural, { referenceVariants: english }))
+	).toEqual(["0 · *", "* · one", "* · two", "* · few", "* · many", "* · *"]);
+	// and is the exact form: the plugin imports Arabic `_zero` as "zero"
+	expect(
+		missingVariants(
+			message(
+				"ar",
+				["count", "countPlural"],
+				["zero", "one", "two", "few", "many", "*"].map((category) => ({
+					count: "*",
+					countPlural: category,
+				}))
+			),
+			plural,
+			{ referenceVariants: english }
+		)
+	).toEqual([]);
+	// Latvian "zero" also selects 10–20, 30…
+	expect(
+		values(
+			missingVariants(
+				message(
+					"lv",
+					["count", "countPlural"],
+					["zero", "one", "*"].map((category) => ({
+						count: "*",
+						countPlural: category,
+					}))
+				),
+				plural,
+				{ referenceVariants: english }
+			)
+		)
+	).toEqual(["0 · *"]);
+	// ICU `=1` next to German "one", which selects only 1
+	expect(
+		values(
+			requiredVariants(
+				message("de", ["countPluralExact", "countPlural"]),
+				icuExact,
+				{
+					referenceVariants: [
+						variant({ countPluralExact: "1", countPlural: "*" }),
+						variant({ countPluralExact: "*", countPlural: "*" }),
+					],
+				}
+			)
+		)
+	).toEqual(["1 · *", "* · *"]);
+});
+
 test("an explicit other covers the catch-all, a missing match counts as catch-all", () => {
 	expect(
 		missingVariants(
