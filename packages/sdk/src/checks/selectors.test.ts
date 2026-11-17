@@ -364,7 +364,8 @@ test("a category is taken from the same branch of the other selectors", () => {
 		sources(message("pl", ["countPlural", "gender"]), genderPlural, english)
 	).toEqual([
 		"one · female <- one · female",
-		"one · male <- * · male",
+		// English 1 and male shows `one · *`, see below
+		"one · male <- one · *",
 		"one · * <- one · *",
 		"few · female <- * · female",
 		"few · male <- * · male",
@@ -376,6 +377,61 @@ test("a category is taken from the same branch of the other selectors", () => {
 		"* · male <- * · male",
 		"* · * <- * · *",
 	]);
+});
+
+test("of the variants that hold, the one with literal keys on earlier selectors is shown, as at runtime", () => {
+	// "You have one free trial left" / "He has paid credits" / "Paid credits remaining":
+	// Paraglide shows the first for count 1 and male
+	const english = [
+		variant({ countPlural: "one", gender: "*" }),
+		variant({ countPlural: "*", gender: "male" }),
+		variant({ countPlural: "*", gender: "*" }),
+	];
+	expect(
+		sources(message("de", ["countPlural", "gender"]), genderPlural, english)
+	).toEqual([
+		"one · male <- one · *",
+		"one · * <- one · *",
+		"* · male <- * · male",
+		"* · * <- * · *",
+	]);
+	// Russian `one` (1, 21, 31…) and `few` are `other` in English: 21 and male shows `* · male`
+	expect(
+		sources(message("ru", ["countPlural", "gender"]), genderPlural, english)
+	).toEqual([
+		"one · male <- * · male",
+		"one · * <- * · *",
+		"few · male <- * · male",
+		"few · * <- * · *",
+		"many · male <- * · male",
+		"many · * <- * · *",
+		"* · male <- * · male",
+		"* · * <- * · *",
+	]);
+	// the selector order decides: with gender first, male 1 shows `male · *`
+	const genderFirst = [
+		variant({ gender: "*", countPlural: "one" }),
+		variant({ gender: "male", countPlural: "*" }),
+		variant({ gender: "*", countPlural: "*" }),
+	];
+	expect(
+		sources(message("de", ["gender", "countPlural"]), genderPlural, genderFirst)
+	).toEqual([
+		"male · one <- male · *",
+		"male · * <- male · *",
+		"* · one <- * · one",
+		"* · * <- * · *",
+	]);
+});
+
+test("an explicit other never holds for a category the reference's locale has", () => {
+	// English 1 is `one`, which `other` doesn't match: the runtime shows `*`
+	expect(
+		sources(message("de", ["countPlural"]), plural, [
+			variant({ countPlural: "other" }),
+			variant({ countPlural: "*" }),
+		])
+	).toEqual(["one <- *", "* <- other"]);
 });
 
 test("a select value falls back to the catch-all only when its branch lacks the category", () => {

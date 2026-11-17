@@ -760,22 +760,22 @@ export function missingVariants(
 
 /**
  * The reference variant a form of a translation (one of its
- * {@link requiredVariants}) is translated from. The form has the reference's
+ * {@link requiredVariants}) is translated from: the variant the reference
+ * shows at runtime for the form's inputs. The form has the reference's
  * selectors.
  *
  * - Exact numbers (ICU `=0`) must match.
- * - A plural category the reference has no variant for is translated from
- *   its explicit `other`, or else its catch-all: Russian `few` from English
- *   `*`. The runtime selects `other` for every number of no other category,
- *   so the translation's catch-all comes from `other` too.
- * - So is a category that is one number in the reference but more in the
- *   translation: English `one` ("One file") for Russian `one` (1, 21, 31…).
- * - The category is taken from the same branch of the other selectors:
- *   `few · female` from `* · female`, `one · male` from `* · male` (the
- *   runtime may show `one · *` there, but its text lacks the gender). Only when
- *   that branch has no variant for the category does the select value fall
- *   back to the reference's catch-all, which the runtime then shows: `few ·
- *   male` from `* · *` when only `one · male` exists.
+ * - The form's numbers have the form's category in the reference, unless
+ *   the reference's locale lacks it: then they are `other` there, matched by
+ *   an explicit `other` or the catch-all. Russian `few` comes from English
+ *   `*`, and so does the translation's catch-all.
+ * - So are the numbers of a category that is one number in the reference but
+ *   more in the translation, most of which are `other` there: Russian `one`
+ *   (1, 21, 31…) is not translated from English `one` ("One file").
+ * - Of the variants whose keys all hold, the runtime shows the one with
+ *   literal keys on the earliest selectors (Paraglide's order, as in MF2):
+ *   with selectors `count`, `gender`, `one · male` from `one · *` rather than
+ *   `* · male`, and `few · male` from `* · male`.
  * - Variants the reference never selects in `referenceLocale` (English
  *   `zero`) are skipped.
  *
@@ -793,7 +793,6 @@ export function sourceVariantFor<V extends WithMatches>(
 	const shown = reference.filter(
 		(variant) => !isUnreachableVariant(variant, declarations, referenceLocale)
 	);
-	// the selects first, so a select falls back only when no plural key of its branch matches
 	const groups = selectorGroups(
 		{
 			locale: referenceLocale,
@@ -804,38 +803,42 @@ export function sourceVariantFor<V extends WithMatches>(
 		},
 		declarations,
 		{ variants: [form], referenceVariants: shown }
-	).sort((a, b) => Number(a.isPlural) - Number(b.isPlural));
-	// per group, the reference keys that stand in for the form's key, best first
-	let candidates: string[][] = [[]];
-	for (const group of groups) {
+	);
+	// per group, the reference keys that hold for the form's inputs
+	const holds = groups.map((group) => {
 		const key = group.keyOf(form);
+		if (!group.isPlural)
+			return shown.some((variant) => group.keyOf(variant) === key)
+				? [key, "*"]
+				: [key];
+		if (isNumericKey(key)) return [key];
+		const rules = pluralRules(group.selector, declarations, referenceLocale);
 		// the reference's text for one number may spell it out ("One file")
 		const spelledOut =
-			isSingleNumberCategory(
+			(rules?.singleNumberCategories.includes(key) ?? false) &&
+			!pluralRules(
 				group.selector,
 				declarations,
-				referenceLocale,
-				key
-			) &&
-			!isSingleNumberCategory(group.selector, declarations, targetLocale, key);
-		const keys = !group.isPlural
-			? shown.some((variant) => group.keyOf(variant) === key)
-				? [key, "*"]
-				: [key]
-			: isNumericKey(key)
-				? [key]
-				: key === "*" || spelledOut
-					? ["other", "*"]
-					: [key, "other", "*"];
-		candidates = candidates.flatMap((candidate) =>
-			keys.map((value) => [...candidate, value])
-		);
-	}
-	for (const keys of candidates) {
-		const variant = shown.find((variant) =>
-			groups.every((group, index) => group.keyOf(variant) === keys[index])
-		);
-		if (variant) return variant;
-	}
-	return undefined;
+				targetLocale
+			)?.singleNumberCategories.includes(key);
+		const category =
+			key === "*" || spelledOut || (rules && !rules.categories.includes(key))
+				? "other"
+				: key;
+		return [category, "*"];
+	});
+	// Paraglide checks the variants with a literal key on an earlier selector first
+	const rank = (variant: V) =>
+		target.map(({ key }) => (matchValue(variant, key) === "*" ? 1 : 0));
+	return shown
+		.filter((variant) =>
+			groups.every((group, index) =>
+				holds[index]!.includes(group.keyOf(variant))
+			)
+		)
+		.map((variant) => ({ variant, rank: rank(variant) }))
+		.sort((a, b) => {
+			const index = a.rank.findIndex((value, i) => value !== b.rank[i]);
+			return index === -1 ? 0 : a.rank[index]! - b.rank[index]!;
+		})[0]?.variant;
 }
