@@ -485,6 +485,40 @@ test("saves the translations that came back when one fails", async () => {
   }
 });
 
+test("a failed save fails the run, without claiming success", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"alpha": "Alpha"}`,
+    de: `{}`,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      return Response.json({
+        data: {
+          translations: [
+            { translatedText: `${query.get("q")} (${query.get("target")})` },
+          ],
+        },
+      });
+    }),
+  );
+  const success = vi.spyOn(log, "success");
+  const de = nodePath.join(path, "../messages/de.json");
+  fs.chmodSync(de, 0o444);
+  try {
+    await expect(translateAndSave({ project, path })).rejects.toThrow(
+      /^The translations couldn't be saved: .*EACCES/,
+    );
+    expect(success).not.toHaveBeenCalled();
+    expect(read("de")).toBe(`{}`);
+  } finally {
+    fs.chmodSync(de, 0o644);
+    await cleanup();
+  }
+});
+
 test("a bundle gets a locale only with all its translations", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
   skipRetryDelay();
