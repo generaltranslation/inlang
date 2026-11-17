@@ -221,7 +221,6 @@ export async function translateCommandAction(args: {
     // A provider without context finds nothing when only plural forms it
     // can't add are missing.
     if (!provider || missing.length === 0) {
-      log.success("Machine translate complete.");
       return { translated: 0, bundles: bundles.length };
     }
     if (
