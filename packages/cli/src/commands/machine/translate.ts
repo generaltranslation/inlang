@@ -246,7 +246,7 @@ export async function translateCommandAction(args: {
       const lines = result.ok ? [] : [result.error];
       if (rejected.size > 0) {
         lines.push(
-          "Some translations came back empty or with a placeholder dropped or changed, so they weren't saved:",
+          "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:",
           ...[...rejected].map(
             ([locale, byId]) =>
               `  ${locale}: ${[...byId].map(([id, reasons]) => `${id} (${[...reasons].join(", ")})`).join(", ")}`,
