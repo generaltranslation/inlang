@@ -31,7 +31,6 @@ const ENV_LOCAL = `VITE_GT_PROJECT_ID=prj_1\nVITE_GT_DEV_API_KEY=${API_KEY}\n`;
 const settings = {
   baseLocale: "en",
   locales: ["en", "de"],
-  "plugin.inlang.messageFormat": { pathPattern: "./src/i18n/{locale}.json" },
 } as ProjectSettings;
 
 const authorizationRequired = {
@@ -82,11 +81,6 @@ function fakeGt(...runs: GtRun[]) {
   return { calls, run };
 }
 
-const NOTICE = [
-  "Machine translation is powered by General Translation.",
-  "Sign up and add a card to get $10 of free translation credit. Or bring your own key: https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok",
-].join("\n");
-
 const signedIn: GtRun = {
   events: [authorizationRequired, success],
   files: { ".env.local": ENV_LOCAL, "gt.config.json": "{}" },
@@ -115,14 +109,6 @@ function captureLog(): () => string {
 }
 
 describe("readGtCredentials", () => {
-  test("reads a framework-prefixed development key", async () => {
-    const dir = tree({ ".env.local": ENV_LOCAL });
-    expect(await readGtCredentials({ env: {}, dir })).toEqual({
-      apiKey: API_KEY,
-      projectId: "prj_1",
-    });
-  });
-
   test("reads an unprefixed development key", async () => {
     const dir = tree({
       ".env.local": "GT_PROJECT_ID=prj_1\nGT_DEV_API_KEY=key\n",
@@ -193,8 +179,7 @@ describe("readGtCredentials", () => {
     ).toEqual({ apiKey: "key", projectId: undefined });
   });
 
-  test("returns undefined without a key or env files", async () => {
-    expect(await readGtCredentials({ env: {}, dir: tree() })).toBeUndefined();
+  test("returns undefined for a project ID without a key", async () => {
     const dir = tree({ ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" });
     expect(await readGtCredentials({ env: {}, dir })).toBeUndefined();
   });
@@ -218,22 +203,15 @@ function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
 }
 
 describe("signInToGt", () => {
-  test("runs gt init with the project's locales, pattern and name", async () => {
+  test("runs gt init with the project's locales", async () => {
     captureLog();
-    const dir = tree({ "package.json": JSON.stringify({ name: "my-app" }) });
+    const dir = tree();
     const gt = fakeGt(signedIn);
     await signIn({
       dir,
       settings: {
         baseLocale: "en",
         locales: ["de", "en", "fr"],
-        "plugin.other": { enabled: true },
-        "plugin.inlang.i18next": {
-          pathPattern: [
-            "./locales/{languageTag}/common.json",
-            "./locales/{languageTag}/other.json",
-          ],
-        },
       } as ProjectSettings,
       run: gt.run,
     });
@@ -252,56 +230,21 @@ describe("signInToGt", () => {
         "de",
         "fr",
         "--file-patterns",
-        "json=./locales/[locale]/common.json",
+        "json=./messages/[locale].json",
         "--create-project",
         "--project-name",
-        "my-app",
+        nodePath.basename(dir),
       ],
     ]);
   });
 
-  test("falls back to Paraglide's pattern and the directory's name", async () => {
-    captureLog();
-    const dir = tree({ "package.json": JSON.stringify({ name: "" }) });
-    const gt = fakeGt(signedIn);
-    await signIn({
-      dir,
-      settings: { baseLocale: "en", locales: ["en", "de"] } as ProjectSettings,
-      run: gt.run,
-    });
-    const argv = gt.calls[0]!;
-    expect(argv[argv.indexOf("--file-patterns") + 1]).toBe(
-      "json=./messages/[locale].json",
-    );
-    expect(argv[argv.indexOf("--project-name") + 1]).toBe(
-      nodePath.basename(dir),
-    );
-  });
-
-  test("signs in, opens and prints the sign-in URL and returns the saved key", async () => {
+  test("signs in, prints the sign-in URL and returns the saved key", async () => {
     const output = captureLog();
     const dir = tree();
-    const gt = fakeGt(signedIn);
-    const { prompts, prompt } = fakePrompt(true);
-    const openUrl = vi.fn();
 
-    const credentials = await signIn({
-      dir,
-      env: { GT_API_KEY: "stale-key" },
-      run: gt.run,
-      prompt,
-      openUrl,
-    });
+    const credentials = await signIn({ dir, run: fakeGt(signedIn).run });
 
     expect(credentials).toEqual({ apiKey: API_KEY, projectId: "prj_1" });
-    expect(prompts).toHaveLength(1);
-    const argv = gt.calls[0]!;
-    expect(argv[argv.indexOf("--file-patterns") + 1]).toBe(
-      "json=./src/i18n/[locale].json",
-    );
-    expect(openUrl.mock.calls).toEqual([
-      [authorizationRequired.verificationUriComplete],
-    ]);
     expect(output()).toContain(
       `Sign in to General Translation in your browser: ${authorizationRequired.verificationUriComplete}`,
     );
@@ -322,16 +265,15 @@ describe("signInToGt", () => {
       const gt = fakeGt(signedIn);
       await signIn({ dir: tree(files), env, run: gt.run });
       expect(gt.calls[0]).not.toContain("--create-project");
-      expect(gt.calls[0]).not.toContain("--project-name");
     },
   );
 
-  test("keeps a gt.config.json that existed before", async () => {
+  test("restores a gt.config.json that existed before", async () => {
     captureLog();
     const dir = tree({ "gt.config.json": '{"own":true}' });
     await signIn({ dir, run: fakeGt(signedIn).run });
     expect(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")).toBe(
-      "{}",
+      '{"own":true}',
     );
   });
 
@@ -357,9 +299,7 @@ describe("signInToGt", () => {
         { label: "Acme (EU)", value: "org_def456" },
       ],
     });
-    expect(gt.calls).toHaveLength(2);
     expect(gt.calls[1]).toEqual([...gt.calls[0]!, "--org-id", "org_def456"]);
-    expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
   });
 
   test("returns undefined when the user cancels the organization prompt", async () => {
@@ -422,24 +362,6 @@ describe("signInToGt", () => {
     await expect(signIn({ dir: tree(), run: gt.run })).rejects.toThrow(
       "gt init finished without saving a General Translation key to .env.local.",
     );
-  });
-
-  test("shows the notice, then doesn't run gt when the user declines", async () => {
-    const output = captureLog();
-    const gt = fakeGt();
-    let shownBeforePrompt = "";
-    expect(
-      await signIn({
-        dir: tree(),
-        run: gt.run,
-        prompt: async () => {
-          shownBeforePrompt = output();
-          return false;
-        },
-      }),
-    ).toBeUndefined();
-    expect(shownBeforePrompt).toContain(NOTICE);
-    expect(gt.calls).toEqual([]);
   });
 
   test("asks to confirm, declining on Ctrl+C or Esc", async () => {

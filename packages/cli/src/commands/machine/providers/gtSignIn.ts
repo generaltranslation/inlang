@@ -8,11 +8,11 @@ import { log } from "../../../utilities/log.js";
 // Pinned because this module parses `gt init --json`'s flags and events, which
 // a new gt release may change. Bump only after rechecking both.
 const GT_CLI = "gt@2.28.3";
+const GT_LOG_TAIL_LINES = 20;
+// gt requires a file pattern even though its file workflow isn't used.
+const GT_FILE_PATTERN = "json=./messages/[locale].json";
 
-// resolveProvider.ts's BYOK_URL; it isn't exported.
-const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
-
-export type GtCredentials = { apiKey: string; projectId?: string };
+type GtCredentials = { apiKey: string; projectId?: string };
 
 /**
  * Runs `command` and resolves with its stderr when it exits. Each stdout line
@@ -57,7 +57,7 @@ export async function readGtCredentials(args: {
 const API_KEY = /^GT_API_KEY$|(^|_)GT_DEV_API_KEY$/;
 const PROJECT_ID = /(^|_)GT_PROJECT_ID$/;
 
-function find(
+function findVariable(
   variables: Record<string, string | undefined>,
   name: RegExp,
 ): string | undefined {
@@ -69,9 +69,9 @@ function find(
 function findCredentials(
   variables: Record<string, string | undefined>,
 ): GtCredentials | undefined {
-  const apiKey = find(variables, API_KEY);
+  const apiKey = findVariable(variables, API_KEY);
   if (!apiKey) return undefined;
-  return { apiKey, projectId: find(variables, PROJECT_ID) };
+  return { apiKey, projectId: findVariable(variables, PROJECT_ID) };
 }
 
 async function readEnvFiles(dir: string): Promise<Record<string, string>> {
@@ -126,12 +126,6 @@ export async function signInToGt(args: {
     prompt = (message, options) => log.prompt(message, options),
     openUrl = openInBrowser,
   } = args;
-  log.log(
-    [
-      "Machine translation is powered by General Translation.",
-      `Sign up and add a card to get $10 of free translation credit. Or bring your own key: ${BYOK_URL}`,
-    ].join("\n"),
-  );
   const confirmed = await prompt("Sign in to General Translation?", {
     type: "confirm",
     initial: true,
@@ -143,10 +137,10 @@ export async function signInToGt(args: {
   const config = await fs.readFile(configPath, "utf8").catch(() => undefined);
   // gt refuses --create-project when it already has a project ID, from
   // gt.config.json or the environment, and then makes a key for that project.
-  const configProjectId = parseJson(config ?? "")?.projectId;
   const hasProject =
-    (typeof configProjectId === "string" && configProjectId !== "") ||
-    find({ ...(await readEnvFiles(dir)), ...env }, PROJECT_ID) !== undefined;
+    parseJson(config ?? "")?.projectId ||
+    findVariable({ ...(await readEnvFiles(dir)), ...env }, PROJECT_ID) !==
+      undefined;
   const initArgs = [
     "--yes",
     GT_CLI,
@@ -158,12 +152,15 @@ export async function signInToGt(args: {
     settings.baseLocale,
     "--locales",
     ...settings.locales.filter((locale) => locale !== settings.baseLocale),
-    // gt requires a file pattern even though its file workflow isn't used.
     "--file-patterns",
-    `json=${messageFilePattern(settings)}`,
+    GT_FILE_PATTERN,
     ...(hasProject
       ? []
-      : ["--create-project", "--project-name", await projectName(dir)]),
+      : [
+          "--create-project",
+          "--project-name",
+          nodePath.basename(nodePath.resolve(dir)),
+        ]),
   ];
   const init = async (extraArgs: string[]) => {
     let result: InitResult | undefined;
@@ -204,7 +201,11 @@ export async function signInToGt(args: {
       ({ result, stderr } = await init(["--org-id", orgId]));
     }
     if (result?.outcome !== "success") {
-      const tail = stderr.trimEnd().split("\n").slice(-20).join("\n");
+      const tail = stderr
+        .trimEnd()
+        .split("\n")
+        .slice(-GT_LOG_TAIL_LINES)
+        .join("\n");
       throw new Error(
         [
           `General Translation sign-in failed: ${result?.error ?? "gt init exited without a result."}`,
@@ -213,12 +214,12 @@ export async function signInToGt(args: {
       );
     }
   } finally {
-    // GT's file workflow isn't used; a leftover config would invite a second
-    // translation path (`gt translate`).
-    if (config === undefined) await fs.rm(configPath, { force: true });
+    // gt init writes its file workflow into gt.config.json, which isn't used.
+    await (config === undefined
+      ? fs.rm(configPath, { force: true })
+      : fs.writeFile(configPath, config));
   }
 
-  // Only the files: a stale key in the environment must not shadow the new one.
   const credentials = await readGtCredentials({ env: {}, dir });
   if (!credentials) {
     throw new Error(
@@ -226,31 +227,6 @@ export async function signInToGt(args: {
     );
   }
   return credentials;
-}
-
-/**
- * The first plugin's message file pattern in gt's `[locale]` syntax, else
- * Paraglide's default.
- */
-function messageFilePattern(settings: ProjectSettings): string {
-  for (const [key, value] of Object.entries(settings)) {
-    if (!key.startsWith("plugin.")) continue;
-    const pathPattern = value?.pathPattern;
-    const pattern = Array.isArray(pathPattern) ? pathPattern[0] : pathPattern;
-    if (typeof pattern === "string") {
-      return pattern.replace(/\{(locale|languageTag)\}/g, "[locale]");
-    }
-  }
-  return "./messages/[locale].json";
-}
-
-async function projectName(dir: string): Promise<string> {
-  const packageJson = await fs
-    .readFile(nodePath.join(dir, "package.json"), "utf8")
-    .then(parseJson, () => undefined);
-  return typeof packageJson?.name === "string" && packageJson.name
-    ? packageJson.name
-    : nodePath.basename(nodePath.resolve(dir));
 }
 
 /** gt lists the organizations only as text: `  - Emails (org_abc123)`. */
