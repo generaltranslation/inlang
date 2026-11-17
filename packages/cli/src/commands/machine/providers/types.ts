@@ -9,8 +9,6 @@ export type TranslateTextArgs = {
 export type TranslateFailure = {
   ok: false;
   error: string;
-  /** Set when the caller tells the user something specific, e.g. how to add credit. */
-  code?: "unauthorized" | "payment-required";
 };
 
 export type TranslateTextResult =

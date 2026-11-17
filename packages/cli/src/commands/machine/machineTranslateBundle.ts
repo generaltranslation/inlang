@@ -19,9 +19,8 @@ import type {
 } from "./providers/types.js";
 
 /**
- * Texts per batch request. The batch API documents no limit but rejects
- * bodies that are too large; 50 messages stay far below that, while a project
- * with hundreds of messages still needs only a few requests per locale.
+ * Texts per batch request. Keeps request bodies small while a large project
+ * needs only a few requests per locale.
  */
 const MAX_TEXTS_PER_REQUEST = 50;
 
@@ -69,7 +68,7 @@ type TranslatedBundle = {
   replacedVariantIds?: string[];
 };
 
-export type MachineTranslateResult = Partial<TranslatedBundle> & {
+type MachineTranslateResult = Partial<TranslatedBundle> & {
   error?: string;
 };
 
@@ -107,11 +106,12 @@ export function planBundleTranslation(
   }
 
   const missing: MissingTranslation[] = [];
+  // a locale given twice is translated once
+  const targetLocales = new Set(args.targetLocales);
   for (const sourceVariant of sourceMessage.variants) {
     const text = serializePattern(sourceVariant.pattern, {});
 
-    // a locale given twice is translated once
-    for (const targetLocale of new Set(args.targetLocales)) {
+    for (const targetLocale of targetLocales) {
       if (targetLocale === args.sourceLocale) {
         continue;
       }

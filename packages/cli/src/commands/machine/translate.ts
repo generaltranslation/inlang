@@ -16,10 +16,7 @@ import {
   translateMissing,
   type BundleTranslationPlan,
 } from "./machineTranslateBundle.js";
-import {
-  BYOK_URL,
-  resolveMachineTranslateProvider,
-} from "./providers/resolveProvider.js";
+import { resolveMachineTranslateProvider } from "./providers/resolveProvider.js";
 import type { AnyMachineTranslateProvider } from "./providers/types.js";
 
 export const translate = new Command()
@@ -55,12 +52,6 @@ export class MachineTranslateError extends Error {
   override name = "MachineTranslateError";
 }
 
-const PAYMENT_REQUIRED_ERROR = [
-  "Your General Translation account has no credit left, so no files were changed.",
-  "Add a card to get $10 of free translation credit: https://dash.generaltranslation.com",
-  `Or bring your own key: ${BYOK_URL}`,
-].join("\n");
-
 /**
  * Translates and writes the translation files, but only if something was
  * translated: saving still rewrites settings.json, and plugins that don't
@@ -70,7 +61,6 @@ const PAYMENT_REQUIRED_ERROR = [
 export async function translateAndSave(args: {
   project: InlangProject;
   path: string;
-  provider?: AnyMachineTranslateProvider;
 }) {
   const { translated, bundles } = await translateCommandAction(args);
   if (translated > 0) {
@@ -163,18 +153,10 @@ export async function translateCommandAction(args: {
     });
     bar?.stop();
 
-    if (!result.ok) {
-      throw new MachineTranslateError(
-        result.code === "payment-required"
-          ? PAYMENT_REQUIRED_ERROR
-          : result.error,
-      );
-    }
+    if (!result.ok) throw new MachineTranslateError(result.error);
 
-    const translatedBundles = plans.map((plan) =>
-      plan.apply(result.translations),
-    );
-    for (const bundle of translatedBundles) {
+    for (const plan of plans) {
+      const bundle = plan.apply(result.translations);
       await upsertBundleNested(args.project.db, bundle.data);
       // variants that got a new id to keep the order of the source
       // message; deleted after the write, so that nothing is lost if it

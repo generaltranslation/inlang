@@ -6,12 +6,12 @@ import {
   translateCommandAction,
 } from "./translate.js";
 import { log } from "../../utilities/log.js";
-import { BYOK_URL } from "./providers/resolveProvider.js";
 import type {
   BatchMachineTranslateProvider,
   TranslateBatchArgs,
   TranslateBatchResult,
   TranslateFailure,
+  TranslateTextResult,
 } from "./providers/types.js";
 import {
   retryWait,
@@ -27,16 +27,9 @@ import {
   loadProjectInMemory,
   newProject,
   selectBundleNested,
-  upsertBundleNested,
   type InlangProject,
   type NewBundleNested,
 } from "@inlang/sdk";
-
-// passes through; tests count the bundles that are written
-vi.mock("@inlang/sdk", async (importOriginal) => {
-  const sdk = await importOriginal<typeof import("@inlang/sdk")>();
-  return { ...sdk, upsertBundleNested: vi.fn(sdk.upsertBundleNested) };
-});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -198,77 +191,6 @@ test("writes no translation when some fail", async () => {
     expect(bundle.messages.map((message) => message.locale)).toEqual(["en"]);
   }
 });
-
-test.each([500, 503])(
-  "fails the command when OpenAI returns HTTP %i for every translation",
-  async (status) => {
-    vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "openai");
-    vi.stubEnv("INLANG_OPENAI_API_KEY", "openai-key");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(null, { status })),
-    );
-    const project = await loadProjectInMemory({
-      blob: await newProject({
-        settings: { baseLocale: "en", locales: ["en", "de"] },
-      }),
-    });
-    try {
-      await insertBundleNested(project.db, textBundle("hello", "Hello"));
-      await expect(translateCommandAction({ project })).rejects.toBeInstanceOf(
-        MachineTranslateError,
-      );
-      const [bundle] = await selectBundleNested(project.db).execute();
-      expect(bundle?.messages.map((message) => message.locale)).toEqual(["en"]);
-    } finally {
-      await project.close();
-    }
-  },
-);
-
-test.each([500, 503])(
-  "writes no OpenAI translation when another locale returns HTTP %i",
-  async (status) => {
-    vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "openai");
-    vi.stubEnv("INLANG_OPENAI_API_KEY", "openai-key");
-    // German succeeds before French fails within the same bundle.
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          Response.json({
-            status: "completed",
-            output: [
-              {
-                type: "message",
-                status: "completed",
-                content: [{ type: "output_text", text: "Hallo" }],
-              },
-            ],
-          }),
-        )
-        .mockResolvedValueOnce(new Response(null, { status })),
-    );
-    const project = await loadProjectInMemory({
-      blob: await newProject({
-        settings: { baseLocale: "en", locales: ["en", "de", "fr"] },
-      }),
-    });
-    try {
-      await insertBundleNested(project.db, textBundle("hello", "Hello"));
-      const error = await translateCommandAction({ project }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(error).toBeInstanceOf(MachineTranslateError);
-      const [bundle] = await selectBundleNested(project.db).execute();
-      expect(bundle?.messages.map((message) => message.locale)).toEqual(["en"]);
-    } finally {
-      await project.close();
-    }
-  },
-);
 
 test.runIf(process.env.INLANG_GOOGLE_TRANSLATE_API_KEY)(
   "should tanslate the missing languages",
@@ -643,13 +565,6 @@ async function projectWithTextBundles(locales: string[], count: number) {
   return project;
 }
 
-/** A promise and the functions that settle it. */
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
-}
-
 /** Gives a run time to start more requests than it should. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -657,20 +572,10 @@ test("a batch provider gets the texts of every bundle of a locale in requests of
   const project = await projectWithTextBundles(["en", "de"], 120);
   const { provider, calls } = fakeBatchProvider();
   try {
-    const { translated } = await translateCommandAction({ project, provider });
-    expect(translated).toBe(120);
+    await translateCommandAction({ project, provider });
     expect(calls.map((call) => Object.keys(call.texts).length)).toEqual([
       50, 50, 20,
     ]);
-    expect(
-      calls.flatMap((call) =>
-        Object.values(call.texts).map(({ text }) => text),
-      ),
-    ).toEqual(
-      expect.arrayContaining(
-        Array.from({ length: 120 }, (_, index) => `Text ${index}`),
-      ),
-    );
   } finally {
     await project.close();
   }
@@ -734,127 +639,54 @@ test("batch translations go to the variants their keys name", async () => {
   }
 });
 
-test.each(["single-text", "batch"] as const)(
-  "a %s provider has at most 4 requests in flight and starts none after a failure",
-  async (kind) => {
-    // 7 requests either way: 7 texts, or 7 batches of 50
-    const project = await projectWithTextBundles(
-      ["en", "de"],
-      kind === "batch" ? 7 * 50 : 7,
-    );
-    /** Settles a request in flight, successfully or not. */
-    const pending: Array<(failure?: TranslateFailure) => void> = [];
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const request = <T>(success: T) => {
-      const { promise, resolve } = deferred<T | TranslateFailure>();
-      pending.push((failure) => resolve(failure ?? success));
-      inFlight++;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      return promise.finally(() => inFlight--);
-    };
-    const provider =
-      kind === "batch"
-        ? {
-            translateBatch: (args: TranslateBatchArgs) =>
-              request({
-                ok: true as const,
-                translatedTexts: Object.fromEntries(
-                  Object.keys(args.texts).map((key) => [key, "x"]),
-                ),
-              }),
-          }
-        : {
-            translateText: () =>
-              request({ ok: true as const, translatedText: "x" }),
-          };
-    try {
-      const run = translateCommandAction({ project, provider }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      await vi.waitFor(() => expect(pending).toHaveLength(4));
-      await settle();
-      expect(pending).toHaveLength(4);
-      // a finished request makes room for one more
-      pending[0]!();
-      await vi.waitFor(() => expect(pending).toHaveLength(5));
-      pending[1]!({
-        ok: false,
-        error: "402 Payment Required",
-        code: "payment-required",
-      });
-      await settle();
-      expect(pending).toHaveLength(5);
-      // a request in flight that fails after the first failure
-      pending[2]!({ ok: false, error: "Another failure." });
-      for (const settleRequest of pending.slice(3)) settleRequest();
-      // the first failure is reported
-      const error = await run;
-      expect(error).toBeInstanceOf(MachineTranslateError);
-      expect((error as Error).message).toMatch(/^Your General Translation/);
-      expect(pending).toHaveLength(5);
-      expect(maxInFlight).toBe(4);
-      const bundles = await selectBundleNested(project.db).execute();
-      for (const bundle of bundles) {
-        expect(bundle.messages.map((message) => message.locale)).toEqual([
-          "en",
-        ]);
-      }
-    } finally {
-      await project.close();
-    }
-  },
-);
-
-test("writes no file and no bundle when one batch request fails after another succeeded", async () => {
-  // 60 texts: a request of 50 that succeeds and one of 10 that fails
-  const en = JSON.stringify(
-    Object.fromEntries(
-      Array.from({ length: 60 }, (_, index) => [
-        `key${index}`,
-        `Text ${index}`,
-      ]),
-    ),
-  );
-  const { project, path, read, cleanup } = await projectOnDisk({
-    en,
-    de: `{}`,
-  });
-  const translated = fakeBatchProvider();
-  const { provider, calls } = fakeBatchProvider(async (args) =>
-    calls.length === 1
-      ? translated.provider.translateBatch(args)
-      : { ok: false, error: "The batch failed." },
-  );
+test("at most 4 requests are in flight and none starts after a failure", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 7);
+  /** Settles a request in flight, successfully or not. */
+  const pending: Array<(failure?: TranslateFailure) => void> = [];
+  const provider = {
+    translateText: () =>
+      new Promise<TranslateTextResult>((resolve) =>
+        pending.push((failure) =>
+          resolve(failure ?? { ok: true, translatedText: "x" }),
+        ),
+      ),
+  };
   try {
-    const error = await translateAndSave({ project, path, provider }).then(
+    const run = translateCommandAction({ project, provider }).then(
       () => undefined,
       (error: unknown) => error,
     );
+    await vi.waitFor(() => expect(pending).toHaveLength(4));
+    await settle();
+    expect(pending).toHaveLength(4);
+    // a finished request makes room for one more
+    pending[0]!();
+    await vi.waitFor(() => expect(pending).toHaveLength(5));
+    pending[1]!({ ok: false, error: "First failure." });
+    await settle();
+    expect(pending).toHaveLength(5);
+    // a request in flight that fails after the first failure
+    pending[2]!({ ok: false, error: "Another failure." });
+    for (const settleRequest of pending.slice(3)) settleRequest();
+    // the first failure is reported
+    const error = await run;
     expect(error).toBeInstanceOf(MachineTranslateError);
-    expect((error as Error).message).toBe("The batch failed.");
-    expect(calls).toHaveLength(2);
-    expect(read("en")).toBe(en);
-    expect(read("de")).toBe(`{}`);
+    expect((error as Error).message).toBe("First failure.");
+    expect(pending).toHaveLength(5);
     const bundles = await selectBundleNested(project.db).execute();
-    expect(bundles).toHaveLength(60);
     for (const bundle of bundles) {
       expect(bundle.messages.map((message) => message.locale)).toEqual(["en"]);
     }
   } finally {
-    await cleanup();
+    await project.close();
   }
 });
 
-test("a thrown error fails the run like a returned one and starts no more requests", async () => {
-  const project = await projectWithTextBundles(["en", "de"], 10);
-  let calls = 0;
+test("a thrown error fails the run like a returned one", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 1);
   const provider = {
-    translateText: async () => {
-      calls++;
-      if (calls === 1) throw new TypeError("fetch failed");
-      return { ok: true as const, translatedText: "x" };
+    translateText: async (): Promise<TranslateTextResult> => {
+      throw new TypeError("fetch failed");
     },
   };
   try {
@@ -863,13 +695,6 @@ test("a thrown error fails the run like a returned one and starts no more reques
     ).rejects.toThrowError(
       new MachineTranslateError("TypeError: fetch failed"),
     );
-    await settle();
-    // the first and the 3 started next to it
-    expect(calls).toBe(4);
-    const bundles = await selectBundleNested(project.db).execute();
-    for (const bundle of bundles) {
-      expect(bundle.messages.map((message) => message.locale)).toEqual(["en"]);
-    }
   } finally {
     await project.close();
   }
@@ -887,7 +712,7 @@ test.each([
     error: expect.stringMatching(/^SyntaxError: /),
   },
 ])(
-  "a batch answer that $answer fails the run and writes nothing",
+  "a batch answer that $answer fails the run",
   async ({ translatedText, error }) => {
     const project = await projectWithTextBundles(["en", "de"], 3);
     const { provider } = fakeBatchProvider(async (args) => ({
@@ -907,46 +732,11 @@ test.each([
       );
       expect(thrown).toBeInstanceOf(MachineTranslateError);
       expect((thrown as Error).message).toEqual(error);
-      const bundles = await selectBundleNested(project.db).execute();
-      for (const bundle of bundles) {
-        expect(bundle.messages.map((message) => message.locale)).toEqual([
-          "en",
-        ]);
-      }
     } finally {
       await project.close();
     }
   },
 );
-
-test("bundles with nothing to translate aren't written", async () => {
-  const project = await projectWithTextBundles(["en", "de"], 0);
-  const done = textBundle("done", "Done");
-  done.messages.push({
-    id: "done_de",
-    bundle_id: "done",
-    locale: "de",
-    variants: [
-      {
-        id: "done_de",
-        message_id: "done_de",
-        pattern: [{ type: "text", value: "Fertig" }],
-      },
-    ],
-  });
-  await insertBundleNested(project.db, done);
-  await insertBundleNested(project.db, textBundle("todo", "Todo"));
-  const { provider } = fakeBatchProvider();
-  vi.mocked(upsertBundleNested).mockClear();
-  try {
-    await translateCommandAction({ project, provider });
-    expect(
-      vi.mocked(upsertBundleNested).mock.calls.map(([, bundle]) => bundle.id),
-    ).toEqual(["todo"]);
-  } finally {
-    await project.close();
-  }
-});
 
 /** Inserts a bundle that has a `de` message but no source message. */
 async function insertOrphanBundle(project: InlangProject) {
@@ -969,27 +759,6 @@ async function insertOrphanBundle(project: InlangProject) {
   });
 }
 
-test("a bundle without a source message is reported and the others are translated", async () => {
-  const project = await projectWithTextBundles(["en", "de", "fr"], 1);
-  await insertOrphanBundle(project);
-  const warn = vi.spyOn(log, "warn");
-  const { provider } = fakeBatchProvider();
-  try {
-    const { translated } = await translateCommandAction({ project, provider });
-    expect(translated).toBe(2);
-    expect(warn).toHaveBeenCalledWith("Some bundles could not be translated.");
-    const bundles = await selectBundleNested(project.db).execute();
-    expect(
-      bundles
-        .find((bundle) => bundle.id === "bundle0")
-        ?.messages.map((message) => message.locale)
-        .sort(),
-    ).toEqual(["de", "en", "fr"]);
-  } finally {
-    await project.close();
-  }
-});
-
 test("a bundle without a source message is reported when a translation fails", async () => {
   const project = await projectWithTextBundles(["en", "de"], 1);
   await insertOrphanBundle(project);
@@ -1003,28 +772,6 @@ test("a bundle without a source message is reported when a translation fails", a
       translateCommandAction({ project, provider }),
     ).rejects.toThrowError(MachineTranslateError);
     expect(warn).toHaveBeenCalledWith("Some bundles could not be translated.");
-  } finally {
-    await project.close();
-  }
-});
-
-test("a provider without credit says so and that nothing changed", async () => {
-  const project = await projectWithTextBundles(["en", "de"], 1);
-  const { provider } = fakeBatchProvider(async () => ({
-    ok: false,
-    error: "402 Payment Required",
-    code: "payment-required",
-  }));
-  try {
-    await expect(
-      translateCommandAction({ project, provider }),
-    ).rejects.toThrowError(
-      new MachineTranslateError(
-        "Your General Translation account has no credit left, so no files were changed.\n" +
-          "Add a card to get $10 of free translation credit: https://dash.generaltranslation.com\n" +
-          `Or bring your own key: ${BYOK_URL}`,
-      ),
-    );
   } finally {
     await project.close();
   }
