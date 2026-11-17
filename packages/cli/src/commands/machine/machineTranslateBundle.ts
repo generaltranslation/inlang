@@ -563,7 +563,7 @@ function missingForms(args: {
     );
     // an empty `other` can be shown instead of a filled `*` (a literal key is
     // preferred, or stored first), so it is still missing
-    const empty = covering.filter(isEmpty);
+    const empty = covering.filter((variant) => isEmptyPattern(variant.pattern));
     if (covering.length > 0 && empty.length === 0) continue;
     const sourceVariant = sourceVariantFor(
       form,
@@ -572,7 +572,12 @@ function missingForms(args: {
       args.sourceLocale,
       target.locale,
     );
-    if (!sourceVariant) continue;
+    // a blank source can't fill a blank variant
+    if (
+      !sourceVariant ||
+      (empty.length > 0 && isEmptyPattern(sourceVariant.pattern))
+    )
+      continue;
     const plurals = groups.flatMap((group) => {
       if (!group.isPlural) return [];
       const category = categoryOf({ matches: form }, group.selector);

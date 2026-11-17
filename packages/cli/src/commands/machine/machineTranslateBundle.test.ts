@@ -1245,6 +1245,20 @@ test("`other` and the catch-all are the same form when expanding", async () => {
     ["countPlural=one", "Ein Ding"],
     ["countPlural=other", "[de] Many items"],
   ]);
+
+  // a whitespace-only form is missing too, as `inlang check` reports it, but
+  // not one whose source is blank as well: a translation can't fill it
+  const blank = await expand(
+    formsBundle(countPlural, ["countPlural"], {
+      en: { "countPlural=one": " ", "countPlural=*": "Many items" },
+      de: { "countPlural=one": "", "countPlural=other": " \n " },
+    }),
+    ["de"],
+  );
+  expect(Object.entries(formsOf(blank.result, "de")!)).toEqual([
+    ["countPlural=one", ""],
+    ["countPlural=other", "[de] Many items"],
+  ]);
 });
 
 test("a plural whose type a select chooses gets the forms of each type", async () => {
