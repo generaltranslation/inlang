@@ -78,7 +78,7 @@ Create `messages/en.json`:
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-In a terminal, the first run asks you to sign in to General Translation. Without one, as in CI and most coding agents, or on Linux without a display, as over SSH, it prints the steps to get a key. Sign up and add a card to get $10 of free translation credit. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
+In a terminal, the first run asks whether to use General Translation and, if you say yes, signs you in; signing up is free. Without a terminal, as in CI and most coding agents, or on Linux without a display, as over SSH, it prints the steps to get a key. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
@@ -188,7 +188,7 @@ The translate command has the following options:
 
 **General Translation**
 
-Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks you to sign in and opens General Translation in your browser. Sign up and add a card to get $10 of free translation credit. The CLI saves a development API key to `.env.local` next to `project.inlang`, and in a git repository adds `.env.local` to `.gitignore` unless git already ignores it.
+Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks whether to use General Translation for the project. If you say yes, it opens General Translation in your browser to sign in; signing up is free. The CLI saves a development API key to `.env.local` next to `project.inlang`, and in a git repository adds `.env.local` to `.gitignore` unless git already ignores it.
 
 Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. Sign-in saves `GT_DEV_API_KEY` and `GT_PROJECT_ID`. `GT_API_KEY` works too, and so do framework-prefixed names such as `VITE_GT_DEV_API_KEY` and `VITE_GT_PROJECT_ID`.
 
@@ -198,7 +198,7 @@ Without a terminal, as in CI and most coding agents, or on Linux without a displ
 
 To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
-If you decline to sign in, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default, and asks again on the next run. To use that service without being asked, set `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`.
+If you answer no when asked to use General Translation, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default, and asks again on the next run. To use that service without being asked, set `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`.
 
 **What gets translated**
 
