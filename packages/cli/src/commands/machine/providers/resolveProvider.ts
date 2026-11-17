@@ -103,18 +103,22 @@ export async function resolveMachineTranslateProvider(args: {
   signIn?: typeof signInToGt;
 }): Promise<AnyMachineTranslateProvider> {
   const { env } = args;
-  // Answering No saves the choice to .env.local; the environment beats it.
-  const saved =
-    PROVIDER_ENV in env
-      ? {}
-      : await readEnvFiles(nodePath.dirname(args.projectPath));
-  const providerName = resolveMachineTranslateProviderName({
-    [PROVIDER_ENV]: saved[PROVIDER_ENV],
-    ...env,
-  });
+  const providerName = resolveMachineTranslateProviderName(env);
   if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
   const dir = nodePath.dirname(args.projectPath);
+  // Answering No saves the choice to .env.local. A provider or key in the
+  // environment beats it.
+  if (
+    !(PROVIDER_ENV in env) &&
+    (await readEnvFiles(dir))[PROVIDER_ENV] === "demosjarco"
+  ) {
+    const provider = createCommunityProvider(env);
+    log.info(
+      `You chose this service in .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
+    );
+    return provider;
+  }
   let credentials = await readGtCredentials({ env, dir });
   if (!credentials) {
     if (!args.interactive)
@@ -191,7 +195,7 @@ async function missingGtKeyError(
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",
-      "- In a terminal: run this command directly, not through a task runner that captures its output, to sign in.",
+      "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output, with CI set, or on Linux without a display.",
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
       `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
       `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,

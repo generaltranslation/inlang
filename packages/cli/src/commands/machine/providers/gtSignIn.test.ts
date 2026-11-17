@@ -5,7 +5,12 @@ import os from "node:os";
 import nodePath from "node:path";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
-import { readGtCredentials, shareGtProjectId, signInToGt } from "./gtSignIn.js";
+import {
+  appendToEnvLocal,
+  readGtCredentials,
+  shareGtProjectId,
+  signInToGt,
+} from "./gtSignIn.js";
 
 type SignInArgs = Parameters<typeof signInToGt>[0];
 
@@ -228,6 +233,16 @@ function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
     ...args,
   });
 }
+
+describe("appendToEnvLocal", () => {
+  test("adds no second .gitignore rule outside a git work tree", async () => {
+    const dir = tree({ ".gitignore": "dist\r\n.env.local\r\n" });
+    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(false);
+    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
+      "dist\r\n.env.local\r\n",
+    );
+  });
+});
 
 describe("shareGtProjectId", () => {
   test("adds the project ID to a gt.config.json without one", async () => {
