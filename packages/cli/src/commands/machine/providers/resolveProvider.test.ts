@@ -232,7 +232,7 @@ test("fails fast without credentials outside an interactive terminal", async () 
     new MachineTranslateError(
       [
         "Machine translation needs a General Translation API key.",
-        "- In a terminal: run this command directly, not through a task runner that captures its output, to sign in.",
+        "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output, with CI set, or on Linux without a display.",
         "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
         `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app' && { echo; cat .env.local; } >> '${nodePath.dirname(dir)}/bob'\\''s app/.env.local')\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
         "- Or use the community-operated service: set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
@@ -283,9 +283,10 @@ test("answering no uses the community service and saves the choice", async () =>
   ]);
 });
 
-test("uses the choice saved in .env.local without asking", async () => {
+test("uses the choice saved in .env.local without asking, and says where it is", async () => {
   const prompt = vi.spyOn(log, "prompt");
   vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
   const provider = await resolve({
     projectPath: projectIn({
       ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n",
@@ -294,9 +295,24 @@ test("uses the choice saved in .env.local without asking", async () => {
   });
   expect(prompt).not.toHaveBeenCalled();
   expect(npxCalls()).toEqual([]);
+  expect(info.mock.calls).toEqual([
+    [
+      "You chose this service in .env.local. To be asked about General Translation again, remove INLANG_MACHINE_TRANSLATE_PROVIDER from it.",
+    ],
+  ]);
   expect((await firstRequest(provider)).url).toMatch(
     /^https:\/\/translate\.demosjarco\.dev\//,
   );
+});
+
+test("a bring-your-own key beats the choice saved in .env.local", async () => {
+  const provider = await resolve({
+    env: { INLANG_DEEPL_API_KEY: "deepl-key" },
+    projectPath: projectIn({
+      ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n",
+    }).projectPath,
+  });
+  expect((await firstRequest(provider)).url).toMatch(/deepl\.com\//);
 });
 
 test("the environment's provider beats the choice saved in .env.local", async () => {

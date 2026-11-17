@@ -245,11 +245,16 @@ export async function appendToEnvLocal(
   dir: string,
   text: string,
 ): Promise<boolean> {
-  // Exit code 0: ignored.
+  const gitignore = nodePath.join(dir, ".gitignore");
   const ignored =
-    (await git(dir, "check-ignore", "-q", "--", ".env.local")).code === 0;
+    // Exit code 0: ignored.
+    (await git(dir, "check-ignore", "-q", "--", ".env.local")).code === 0 ||
+    // Outside a work tree, git can't tell: a rule added before.
+    (await fs.readFile(gitignore, "utf8").catch(() => ""))
+      .split(/\r?\n/)
+      .includes(".env.local");
   if (!ignored) {
-    await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
+    await appendToFile(gitignore, ".env.local\n");
   }
   await appendToFile(nodePath.join(dir, ".env.local"), text, { mode: 0o600 });
   return !ignored;
