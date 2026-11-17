@@ -1131,6 +1131,45 @@ test("with context, a target gets every plural form its language needs, each fro
   });
 });
 
+test("an exact number and the category that selects only it are one form: Arabic `zero` is `=0`", async () => {
+  // what @inlang/plugin-i18next imports for English `_zero`, `_one`, `_other`
+  const selectors = ["count", "countPlural"];
+  const en = {
+    "count=0,countPlural=*": "No items",
+    "count=*,countPlural=one": "One item",
+    "count=*,countPlural=*": "Many items",
+  };
+  // `=0` and no "zero", which `=0` always wins over
+  const { result } = await expand(formsBundle(countPlural, selectors, { en }), [
+    "ar",
+  ]);
+  expect(Object.keys(formsOf(result, "ar")!)).toEqual([
+    "count=0,countPlural=*",
+    "count=*,countPlural=one",
+    "count=*,countPlural=two",
+    "count=*,countPlural=few",
+    "count=*,countPlural=many",
+    "count=*,countPlural=*",
+  ]);
+  // as the plugin reads Arabic `_zero` back: nothing is missing
+  const ar = Object.fromEntries(
+    ["zero", "one", "two", "few", "many", "*"].map((category) => [
+      `count=*,countPlural=${category}`,
+      `[ar] ${category}`,
+    ]),
+  );
+  for (const supportsContext of [true, false]) {
+    expect(
+      planBundleTranslation({
+        bundle: formsBundle(countPlural, selectors, { en, ar }),
+        sourceLocale: "en",
+        targetLocales: ["ar"],
+        supportsContext,
+      }),
+    ).toMatchObject({ missing: [] });
+  }
+});
+
 test("two plurals: the context names each category that isn't the source's", async () => {
   const bundle = formsBundle(
     [...countPlural, input("guests"), plural("guestsPlural", "guests")],
