@@ -986,6 +986,8 @@ test.each([
       de: `{}`,
     });
     const root = nodePath.dirname(path);
+    // npx can't be found, so checking the gt sign-in never runs the real gt
+    vi.stubEnv("PATH", nodePath.join(root, "no-npx"));
     const error = vi.spyOn(log, "error");
     vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     try {

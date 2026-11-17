@@ -6,8 +6,9 @@ import { createInterface } from "node:readline";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
 
-// Pinned because this module parses `gt init --json`'s flags and events, which
-// a new gt release may change. Bump only after rechecking both.
+// Pinned because this module parses `gt init --json`'s flags and events and
+// `gt whoami`'s exit code, which a new gt release may change. Bump only after
+// rechecking them.
 export const GT_CLI = "gt@2.28.3";
 const GT_LOG_TAIL_LINES = 20;
 // gt requires a file pattern even though its file workflow isn't used.
@@ -213,6 +214,18 @@ export async function signInToGt(args: {
   } finally {
     await fs.rm(cwd, { recursive: true, force: true });
   }
+}
+
+/**
+ * Whether gt has a sign-in stored on this machine. `gt whoami` has no --json,
+ * so only its exit code is read; any failure counts as signed out.
+ */
+export async function isSignedInToGt(dir: string): Promise<boolean> {
+  const result = await runProcess("npx", ["--yes", GT_CLI, "whoami"], {
+    cwd: dir,
+    onStdoutLine: () => {},
+  }).catch(() => undefined);
+  return result?.code === 0;
 }
 
 /** Appends `text` to `file` on a new line, creating the file if needed. */

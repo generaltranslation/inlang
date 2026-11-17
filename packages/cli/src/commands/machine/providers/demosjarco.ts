@@ -6,9 +6,9 @@ import type {
 
 /**
  * A free, third-party hosted translation service, used when the user declines
- * to sign in to General Translation. It is community-run and is not owned,
- * operated, or maintained by inlang. It mirrors the Google Cloud Translation
- * v2 API surface, so the response shape matches the Google provider.
+ * General Translation. It is community-run and is not owned, operated, or
+ * maintained by inlang. It mirrors the Google Cloud Translation v2 API
+ * surface, so the response shape matches the Google provider.
  *
  * @see https://translate.demosjarco.dev
  */

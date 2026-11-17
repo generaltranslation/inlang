@@ -1,4 +1,4 @@
-import { afterEach, test, expect, vi } from "vitest";
+import { afterEach, beforeEach, test, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
@@ -26,8 +26,36 @@ type ResolveArgs = Parameters<typeof resolveMachineTranslateProvider>[0];
 const directories: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const directory of directories.splice(0))
     fs.rmSync(directory, { recursive: true, force: true });
+});
+
+/**
+ * Puts a fake `npx` alone on PATH that exits with `code`, and returns the
+ * argument lists it was called with.
+ */
+function fakeNpx(code: number): () => string[] {
+  const bin = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-npx-"));
+  directories.push(bin);
+  const calls = nodePath.join(bin, "calls");
+  fs.writeFileSync(
+    nodePath.join(bin, "npx"),
+    `#!/bin/sh\necho "$@" >> '${calls}'\nexit ${code}\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", bin);
+  return () =>
+    fs.existsSync(calls)
+      ? fs.readFileSync(calls, "utf8").trimEnd().split("\n")
+      : [];
+}
+
+// The sign-in check must never run the real gt: by default it finds a gt
+// that isn't signed in.
+let npxCalls: () => string[];
+beforeEach(() => {
+  npxCalls = fakeNpx(1);
 });
 
 /** A folder with `files`, and the path of a project.inlang in it. */
@@ -120,6 +148,7 @@ test("uses General Translation with the key in .env.local next to project.inlang
     Authorization: "Bearer gt-local-key",
     "gt-project-id": "prj_local",
   });
+  expect(npxCalls()).toEqual([]);
 });
 
 test("an explicit gt beats a bring-your-own key", async () => {
@@ -158,15 +187,12 @@ test("signs in to General Translation in an interactive terminal without credent
     signIn,
   });
   expect(notice.mock.calls).toEqual([
-    [
-      "Machine translation is powered by General Translation.\n" +
-        `Sign up and add a card to get $10 of free translation credit. Or bring your own key: ${BYOK_URL}`,
-    ],
+    ["Machine translation is powered by General Translation. Sign up for free"],
   ]);
   // consola otherwise resolves a cancelled confirm with `initial`, a yes.
   expect(prompt.mock.calls).toEqual([
     [
-      "Sign in to General Translation?",
+      "Use General Translation for this project?",
       { type: "confirm", initial: true, cancel: "undefined" },
     ],
   ]);
@@ -175,6 +201,31 @@ test("signs in to General Translation in an interactive terminal without credent
     Authorization: "Bearer gt-signed-in-key",
     "gt-project-id": "prj_new",
   });
+});
+
+// Windows needs an npx.cmd.
+test.skipIf(process.platform === "win32")(
+  "doesn't ask a user who is signed in to gt to sign up",
+  async () => {
+    const calls = fakeNpx(0);
+    const notice = vi.spyOn(log, "log").mockImplementation(() => undefined);
+    vi.spyOn(log, "prompt").mockResolvedValue(undefined as never);
+    await resolve({ interactive: true }).catch(() => undefined);
+    expect(calls()).toEqual(["--yes gt@2.28.3 whoami"]);
+    expect(notice.mock.calls).toEqual([
+      ["Machine translation is powered by General Translation."],
+    ]);
+  },
+);
+
+test("counts gt as signed out when npx can't be started", async () => {
+  vi.stubEnv("PATH", nodePath.join(projectIn().dir, "no-npx"));
+  const notice = vi.spyOn(log, "log").mockImplementation(() => undefined);
+  vi.spyOn(log, "prompt").mockResolvedValue(undefined as never);
+  await resolve({ interactive: true }).catch(() => undefined);
+  expect(notice.mock.calls).toEqual([
+    ["Machine translation is powered by General Translation. Sign up for free"],
+  ]);
 });
 
 test("fails fast without credentials outside an interactive terminal", async () => {
@@ -189,6 +240,7 @@ test("fails fast without credentials outside an interactive terminal", async () 
       ].join("\n"),
     ),
   );
+  expect(npxCalls()).toEqual([]);
 });
 
 test("the gt init command for agents keeps a known project and saves the key next to a relative project.inlang", async () => {

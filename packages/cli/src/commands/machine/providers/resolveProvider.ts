@@ -9,6 +9,7 @@ import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
 import {
   GT_CLI,
   gtInitArgs,
+  isSignedInToGt,
   readGtCredentials,
   signInToGt,
 } from "./gtSignIn.js";
@@ -107,18 +108,19 @@ export async function resolveMachineTranslateProvider(args: {
   if (!credentials) {
     if (!args.interactive)
       throw await missingGtKeyError(dir, args.settings, env);
+    const notice = "Machine translation is powered by General Translation.";
     log.log(
-      [
-        "Machine translation is powered by General Translation.",
-        `Sign up and add a card to get $10 of free translation credit. Or bring your own key: ${BYOK_URL}`,
-      ].join("\n"),
+      (await isSignedInToGt(dir)) ? notice : `${notice} Sign up for free`,
     );
     // consola otherwise resolves a cancelled confirm with `initial`, a yes.
-    const confirmed = await log.prompt("Sign in to General Translation?", {
-      type: "confirm",
-      initial: true,
-      cancel: "undefined",
-    });
+    const confirmed = await log.prompt(
+      "Use General Translation for this project?",
+      {
+        type: "confirm",
+        initial: true,
+        cancel: "undefined",
+      },
+    );
     if (confirmed === false) return createCommunityProvider(env);
     if (confirmed) {
       credentials = await (args.signIn ?? signInToGt)({
