@@ -69,7 +69,7 @@ export function createGtTranslateProvider(args: {
       if (response.status === 402) {
         return {
           ok: false,
-          error: `General Translation could not bill this request. Add a card to get $10 of free translation credit, or check your billing: ${GT_DASHBOARD_URL}`,
+          error: `General Translation could not bill this request. Add a card or check your billing: ${GT_DASHBOARD_URL}`,
         };
       }
 
