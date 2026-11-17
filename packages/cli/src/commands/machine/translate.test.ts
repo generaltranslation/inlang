@@ -803,16 +803,15 @@ test("the command prints a translation failure as is and exits with 1", async ()
   }
 });
 
-/** A bundle with an English `one` and `*` of `count`, a plural unless `bare`. */
-function pluralBundle(id: string, bare = false): NewBundleNested {
-  const selector = bare ? "count" : "countPlural";
+/** A bundle with an English `one` and `*` of the plural `countPlural`. */
+function pluralBundle(id: string): NewBundleNested {
   const variant = (value: string, text: string) => ({
     id: `${id}_en_${value}`,
     message_id: `${id}_en`,
     matches: [
       value === "*"
-        ? { type: "catchall-match" as const, key: selector }
-        : { type: "literal-match" as const, key: selector, value },
+        ? { type: "catchall-match" as const, key: "countPlural" }
+        : { type: "literal-match" as const, key: "countPlural", value },
     ],
     pattern: [{ type: "text" as const, value: text }],
   });
@@ -820,30 +819,26 @@ function pluralBundle(id: string, bare = false): NewBundleNested {
     id,
     declarations: [
       { type: "input-variable", name: "count" },
-      ...(bare
-        ? []
-        : [
-            {
-              type: "local-variable" as const,
-              name: "countPlural",
-              value: {
-                type: "expression" as const,
-                arg: { type: "variable-reference" as const, name: "count" },
-                annotation: {
-                  type: "function-reference" as const,
-                  name: "plural",
-                  options: [],
-                },
-              },
-            },
-          ]),
+      {
+        type: "local-variable",
+        name: "countPlural",
+        value: {
+          type: "expression",
+          arg: { type: "variable-reference", name: "count" },
+          annotation: {
+            type: "function-reference",
+            name: "plural",
+            options: [],
+          },
+        },
+      },
     ],
     messages: [
       {
         id: `${id}_en`,
         bundle_id: id,
         locale: "en",
-        selectors: [{ type: "variable-reference", name: selector }],
+        selectors: [{ type: "variable-reference", name: "countPlural" }],
         variants: [variant("one", "One item"), variant("*", "Items")],
       },
     ],
@@ -858,16 +853,11 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
   for (const id of ["cart", "items"]) {
     await insertBundleNested(project.db, pluralBundle(id));
   }
-  await insertBundleNested(project.db, pluralBundle("bare", true));
   const warn = vi.spyOn(log, "warn");
   const { provider } = fakeBatchProvider();
   try {
     await translateCommandAction({ project, provider });
     expect(warn.mock.calls).toEqual([
-      [
-        "These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Make them plurals.\n" +
-          "  bare: count",
-      ],
       [
         "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
           "  ru (few, many): cart, items\n" +

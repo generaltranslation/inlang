@@ -13,7 +13,6 @@ import progessBar from "cli-progress";
 import fs from "node:fs/promises";
 import {
   planBundleTranslation,
-  PLURAL_CATEGORIES,
   translateMissing,
   type BundleTranslationPlan,
 } from "./machineTranslateBundle.js";
@@ -135,7 +134,6 @@ export async function translateCommandAction(args: {
       { ids: string[]; categories: Set<string> }
     >();
     const unknownPluralRules = new Set<string>();
-    const categoryKeySelectors: string[] = [];
     for (const bundle of bundles) {
       const plan = planBundleTranslation({
         bundle,
@@ -155,25 +153,12 @@ export async function translateCommandAction(args: {
       for (const locale of plan.unknownPluralRules) {
         unknownPluralRules.add(locale);
       }
-      if (plan.categoryKeySelectors.length > 0) {
-        categoryKeySelectors.push(
-          `  ${bundle.id}: ${plan.categoryKeySelectors.join(", ")}`,
-        );
-      }
       // Unchanged bundles aren't written back.
       if (plan.missing.length > 0) plans.push(plan);
     }
     if (errors.length > 0) {
       log.warn("Some bundles could not be translated.");
       log.warn(errors.join("\n"));
-    }
-    if (categoryKeySelectors.length > 0) {
-      log.warn(
-        [
-          `These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Make them plurals.`,
-          ...categoryKeySelectors,
-        ].join("\n"),
-      );
     }
     const missing = plans.flatMap((plan) => plan.missing);
 
@@ -208,7 +193,7 @@ export async function translateCommandAction(args: {
           "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.",
           ...[...skipped].map(
             ([locale, { ids, categories }]) =>
-              `  ${locale} (${PLURAL_CATEGORIES.filter((category) => categories.has(category)).join(", ")}): ${ids.join(", ")}`,
+              `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
           ),
         ].join("\n"),
       );

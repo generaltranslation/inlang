@@ -54,9 +54,6 @@ type MissingTranslation = {
   context?: string;
 };
 
-/** CLDR plural categories, in CLDR order. */
-export const PLURAL_CATEGORIES = ["zero", "one", "two", "few", "many", "other"];
-
 /** What a bundle's plurals tell the user. */
 type PluralReport = {
   /**
@@ -70,11 +67,6 @@ type PluralReport = {
    * `pluralRules`): their plural forms are the source's.
    */
   unknownPluralRules: string[];
-  /**
-   * Selectors that aren't plurals but whose keys are all plural categories:
-   * they never match a number, the source likely lacks `: plural`.
-   */
-  categoryKeySelectors: string[];
 };
 
 /**
@@ -124,18 +116,6 @@ export function planBundleTranslation(
   const report: PluralReport = {
     skippedPlurals: [],
     unknownPluralRules: [],
-    categoryKeySelectors: sourceMessage.selectors
-      .map(({ name }) => name)
-      .filter((name) => {
-        const keys = sourceMessage.variants
-          .map((variant) => matchValue(variant, name))
-          .filter((key) => key !== "*");
-        return (
-          !isPluralSelector(name, declarations) &&
-          keys.length > 0 &&
-          keys.every((key) => PLURAL_CATEGORIES.includes(key))
-        );
-      }),
   };
 
   // a locale given twice is translated once

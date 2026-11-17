@@ -614,8 +614,6 @@ test("a plural whose type a select chooses needs the categories of each type", a
   ]);
   // the rules are known per type, unless the locale is unknown
   expect(result.unknownPluralRules).toEqual(["x-foo"]);
-  // pluralType's keys aren't categories
-  expect(result.categoryKeySelectors).toEqual([]);
 });
 
 test("unknown plural rules skip nothing and are reported", async () => {
@@ -669,31 +667,6 @@ test("unknown plural rules skip nothing and are reported", async () => {
   );
   expect(translated.calls).toEqual([]);
   expect(translated.result.unknownPluralRules).toEqual([]);
-});
-
-test("a selector with plural categories as keys that isn't a plural is reported", async () => {
-  // a bare `count`: `one` and `other` only match those words, never a number
-  const { result } = await translate(
-    formsBundle([input("count")], ["count"], {
-      en: { "count=one": "One item", "count=other": "Items", "count=*": "?" },
-    }),
-    ["ru"],
-  );
-  expect(result.categoryKeySelectors).toEqual(["count"]);
-
-  // keys that aren't all categories, or a plural
-  const keys = await translate(
-    formsBundle([input("count")], ["count"], {
-      en: { "count=one": "One item", "count=3": "Three", "count=*": "?" },
-    }),
-    ["ru"],
-  );
-  expect(keys.result.categoryKeySelectors).toEqual([]);
-  const catchAll = await translate(
-    formsBundle([input("count")], ["count"], { en: { "count=*": "Items" } }),
-    ["ru"],
-  );
-  expect(catchAll.result.categoryKeySelectors).toEqual([]);
 });
 
 test("forms the source lacks in its own locale too don't skip a locale", async () => {
