@@ -206,7 +206,7 @@ When a bundle has a description, providers that support context, including Gener
 
 With a provider that supports context, a plural gets every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. Otherwise, with a provider without context or when a translation's selectors differ from the source's, messages whose target needs forms the source lacks are skipped and listed so you can add them by hand.
 
-If the provider is unavailable, throttles requests or a translation fails, the command writes nothing and exits with code 1. A translation that drops or changes a variable or markup tag is left out, and so is every translation of a message new in that language. The command lists them.
+If the provider is unavailable, throttles requests or a translation fails, the command writes nothing and exits with code 1. A translation that drops or changes a variable or markup tag is left out; if its message is new in that language, the whole message is left out. The command lists them.
 
 ## `check`
 
