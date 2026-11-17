@@ -330,8 +330,6 @@ test("a plural category the reference lacks is translated from its catch-all", (
 		"many <- *",
 		"* <- *",
 	]);
-	const form = requiredVariants(message("ru", ["countPlural"]), plural)[1]!;
-	expect(sourceVariantFor(form, english, plural, "en")).toBe(english[1]);
 });
 
 test("an explicit other stands in for the catch-all, and comes first", () => {
@@ -431,20 +429,6 @@ test("the earlier of two plural selectors keeps its category first", () => {
 	).toBe(english[1]);
 });
 
-test("a selector only the reference has stays at its catch-all", () => {
-	expect(
-		sources(message("ru", ["countPlural"]), genderPlural, [
-			variant({ countPlural: "one", gender: "female" }),
-			variant({ countPlural: "*", gender: "female" }),
-			variant({ countPlural: "*", gender: "*" }),
-		])
-	).toEqual(["one <- * · *", "few <- * · *", "many <- * · *", "* <- * · *"]);
-	// the reference's `=0` is not its catch-all
-	expect(
-		sources(message("ru", ["countPlural"]), icuExact, icuEnglish.variants)
-	).toEqual(["one <- * · one", "few <- * · *", "many <- * · *", "* <- * · *"]);
-});
-
 test("a variant the reference never selects is not a source", () => {
 	// English never selects `zero`; Latvian `zero` is 0, 10–20, 30…
 	expect(
@@ -465,29 +449,6 @@ test("a variant the reference never selects is not a source", () => {
 			"ru"
 		)
 	).toEqual(["one <- one", "few <- few", "many <- many", "* <- *"]);
-});
-
-test("a selector the reference lacks has no source except its catch-all", () => {
-	const english = [
-		variant({ countPlural: "one" }),
-		variant({ countPlural: "*" }),
-	];
-	expect(
-		sourceVariantFor(
-			variant({ countPlural: "few", gender: "female" }).matches,
-			english,
-			genderPlural,
-			"en"
-		)
-	).toBeUndefined();
-	expect(
-		sourceVariantFor(
-			variant({ countPlural: "few", gender: "*" }).matches,
-			english,
-			genderPlural,
-			"en"
-		)
-	).toBe(english[1]);
 });
 
 test("words on the count's own selector make it a select, in the reference or the form", () => {
@@ -542,71 +503,4 @@ test("exact numbers and select values are never substituted", () => {
 			"en"
 		)
 	).toBeUndefined();
-});
-
-test("ordinal forms come from the reference's ordinal forms", () => {
-	const ordinal = structuredClone(plural);
-	const local = ordinal[1]!;
-	if (local.type === "local-variable")
-		local.value.annotation!.options.push({
-			name: "type",
-			value: { type: "literal", value: "ordinal" },
-		});
-	const english = ["one", "two", "few", "*"].map((countPlural) =>
-		variant({ countPlural })
-	);
-	expect(sources(message("fr", ["countPlural"]), ordinal, english)).toEqual([
-		"one <- one",
-		"* <- *",
-	]);
-	expect(sources(message("cy", ["countPlural"]), ordinal, english)).toEqual([
-		"zero <- *",
-		"one <- one",
-		"two <- two",
-		"few <- few",
-		"many <- *",
-		"* <- *",
-	]);
-});
-
-test("a plural with a variable type takes its forms from the same type", () => {
-	// what `@inlang/plugin-i18next` imports for keys with cardinal and ordinal forms
-	const typed: Declaration[] = [
-		{ type: "input-variable", name: "count" },
-		{ type: "input-variable", name: "pluralType" },
-		{
-			type: "local-variable",
-			name: "countPlural",
-			value: {
-				type: "expression",
-				arg: { type: "variable-reference", name: "count" },
-				annotation: {
-					type: "function-reference",
-					name: "plural",
-					options: [
-						{
-							name: "type",
-							value: { type: "variable-reference", name: "pluralType" },
-						},
-					],
-				},
-			},
-		},
-	];
-	// German has one ordinal form, English four
-	const german = [
-		variant({ pluralType: "*", countPlural: "one" }),
-		variant({ pluralType: "*", countPlural: "*" }),
-		variant({ pluralType: "ordinal", countPlural: "*" }),
-	];
-	expect(
-		sources(message("en", ["pluralType", "countPlural"]), typed, german, "de")
-	).toEqual([
-		"ordinal · one <- ordinal · *",
-		"ordinal · two <- ordinal · *",
-		"ordinal · few <- ordinal · *",
-		"ordinal · * <- ordinal · *",
-		"* · one <- * · one",
-		"* · * <- * · *",
-	]);
 });

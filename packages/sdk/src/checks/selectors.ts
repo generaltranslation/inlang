@@ -760,10 +760,10 @@ export function missingVariants(
 
 /**
  * The reference variant a form of a translation (one of its
- * {@link requiredVariants}) is translated from.
+ * {@link requiredVariants}) is translated from. The form has the reference's
+ * selectors.
  *
- * - Exact numbers (ICU `=0`) must match. They are matched by selector name,
- *   which holds within a bundle because its messages share declarations.
+ * - Exact numbers (ICU `=0`) must match.
  * - A plural category the reference has no variant for is translated from
  *   its explicit `other`, or else its catch-all: Russian `few` from English
  *   `*`. The runtime selects `other` for every number of no other category,
@@ -774,7 +774,6 @@ export function missingVariants(
  *   that branch has no variant for the category does the select value fall
  *   back to the reference's catch-all, which the runtime then shows: `few ·
  *   male` from `* · *` when only `one · male` exists.
- * - A selector only the reference has stays at its catch-all.
  * - Variants the reference never selects in `referenceLocale` (English
  *   `zero`) are skipped.
  *
@@ -791,18 +790,14 @@ export function sourceVariantFor<V extends WithMatches>(
 	const shown = reference.filter(
 		(variant) => !isUnreachableVariant(variant, declarations, referenceLocale)
 	);
-	const names = [
-		...new Set(
-			[form, ...shown].flatMap((variant) =>
-				variant.matches.map((match) => match.key)
-			)
-		),
-	];
 	// the selects first, so a select falls back only when no plural key of its branch matches
 	const groups = selectorGroups(
 		{
 			locale: referenceLocale,
-			selectors: names.map((name) => ({ type: "variable-reference", name })),
+			selectors: target.map(({ key }) => ({
+				type: "variable-reference",
+				name: key,
+			})),
 		},
 		declarations,
 		{ variants: [form], referenceVariants: shown }
@@ -812,7 +807,7 @@ export function sourceVariantFor<V extends WithMatches>(
 	for (const group of groups) {
 		const key = group.keyOf(form);
 		const keys = !group.isPlural
-			? key !== "*" && shown.some((variant) => group.keyOf(variant) === key)
+			? shown.some((variant) => group.keyOf(variant) === key)
 				? [key, "*"]
 				: [key]
 			: isNumericKey(key)
