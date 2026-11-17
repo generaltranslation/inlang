@@ -42,9 +42,19 @@ const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";
 
-/** An error whose message is for the user as is: the command prints it without a stack trace. */
+/**
+ * An error whose message is for the user as is: the command prints it
+ * without a stack trace. When a translation failed, `translated`
+ * translations came back before the failure and were added to the project.
+ */
 export class MachineTranslateError extends Error {
   override name = "MachineTranslateError";
+  constructor(
+    message: string,
+    readonly translated = 0,
+  ) {
+    super(message);
+  }
 }
 
 type Env = Record<string, string | undefined>;

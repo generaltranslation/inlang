@@ -205,7 +205,7 @@ describe("createGtTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error:
-        "General Translation could not bill this request. Add a card or check your billing: https://dash.generaltranslation.com",
+        "General Translation could not bill this request. Check your billing: https://dash.generaltranslation.com",
     });
   });
 
