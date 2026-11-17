@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import nodePath from "node:path";
 import { createInterface } from "node:readline";
 import type { ProjectSettings } from "@inlang/sdk";
@@ -15,14 +16,14 @@ const GT_FILE_PATTERN = "json=./messages/[locale].json";
 type GtCredentials = { apiKey: string; projectId?: string };
 
 /**
- * Runs `command` and resolves with its stderr when it exits. Each stdout line
- * is passed to `onStdoutLine` as it arrives.
+ * Runs `command` and resolves with its exit code and stderr when it exits.
+ * Each stdout line is passed to `onStdoutLine` as it arrives.
  */
 type RunProcess = (
   command: string,
   args: string[],
   options: { cwd: string; onStdoutLine: (line: string) => void },
-) => Promise<{ stderr: string }>;
+) => Promise<{ code: number | null; stderr: string }>;
 
 type Prompt = (
   message: string,
@@ -102,12 +103,13 @@ function parseEnvFile(content: string): Record<string, string> {
 
 /**
  * Signs the user in to General Translation with `gt init --json`, which
- * creates a project (unless gt.config.json or the environment names one) and
- * saves a development key for it to `dir/.env.local`. Asks first, so call it
- * only in an interactive terminal. Resolves `undefined` if the user declines.
+ * creates a project (unless `dir`'s gt.config.json, .env files or the
+ * environment name one) and makes a development key for it, then appends the
+ * key to `dir/.env.local`. Asks first, so call it only in an interactive
+ * terminal. Resolves `undefined` if the user declines.
  *
- * gt itself appends a `.gitignore` rule for an unignored `.env.local` and
- * refuses a tracked one (gt's `packages/cli/src/utils/credentials.ts`).
+ * In a git work tree, `.env.local` gets a `.gitignore` rule unless it is
+ * ignored already, and a tracked `.env.local` fails before the sign-in.
  */
 export async function signInToGt(args: {
   dir: string;
@@ -133,14 +135,26 @@ export async function signInToGt(args: {
   });
   if (!confirmed) return undefined;
 
-  const configPath = nodePath.join(dir, "gt.config.json");
-  const config = await fs.readFile(configPath, "utf8").catch(() => undefined);
-  // gt refuses --create-project when it already has a project ID, from
-  // gt.config.json or the environment, and then makes a key for that project.
-  const hasProject =
+  const git = (...gitArgs: string[]) =>
+    runProcess("git", gitArgs, { cwd: dir, onStdoutLine: () => {} });
+  if (
+    (await git("ls-files", "--error-unmatch", "--", ".env.local")).code === 0
+  ) {
+    throw new Error(
+      "Can't save the General Translation key: .env.local is tracked by git. Untrack it with `git rm --cached .env.local`, then run again.",
+    );
+  }
+
+  const config = await fs
+    .readFile(nodePath.join(dir, "gt.config.json"), "utf8")
+    .catch(() => undefined);
+  // gt runs in an empty folder, so it doesn't see this folder's project ID.
+  // One in .env or .env.local comes first: the key is saved next to it, and
+  // readGtCredentials pairs a key with the project ID from the same source.
+  const projectId =
+    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
     parseJson(config ?? "")?.projectId ||
-    findVariable({ ...(await readEnvFiles(dir)), ...env }, PROJECT_ID) !==
-      undefined;
+    findVariable(env, PROJECT_ID);
   const initArgs = [
     "--yes",
     GT_CLI,
@@ -154,18 +168,21 @@ export async function signInToGt(args: {
     ...settings.locales.filter((locale) => locale !== settings.baseLocale),
     "--file-patterns",
     GT_FILE_PATTERN,
-    ...(hasProject
-      ? []
+    ...(projectId
+      ? ["--project-id", projectId]
       : [
           "--create-project",
           "--project-name",
           nodePath.basename(nodePath.resolve(dir)),
         ]),
   ];
+  // gt init adds gt to a package.json in its folder and installs it, which
+  // can't be turned off, so it runs in an empty one.
+  const cwd = await fs.mkdtemp(nodePath.join(os.tmpdir(), "inlang-gt-"));
   const init = async (extraArgs: string[]) => {
     let result: InitResult | undefined;
     const { stderr } = await run("npx", [...initArgs, ...extraArgs], {
-      cwd: dir,
+      cwd,
       onStdoutLine: (line) => {
         const event = parseJson(line);
         if (event?.type === "authorization_required") {
@@ -213,20 +230,37 @@ export async function signInToGt(args: {
         ].join("\n"),
       );
     }
-  } finally {
-    // gt init writes its file workflow into gt.config.json, which isn't used.
-    await (config === undefined
-      ? fs.rm(configPath, { force: true })
-      : fs.writeFile(configPath, config));
-  }
 
-  const credentials = await readGtCredentials({ env: {}, dir });
-  if (!credentials) {
-    throw new Error(
-      "gt init finished without saving a General Translation key to .env.local.",
+    const credentials = await readGtCredentials({ env: {}, dir: cwd });
+    if (!credentials) {
+      throw new Error(
+        "gt init finished without saving a General Translation key to .env.local.",
+      );
+    }
+    // Exit code 1: in a git work tree and not ignored.
+    if ((await git("check-ignore", "-q", "--", ".env.local")).code === 1) {
+      await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
+    }
+    await appendToFile(
+      nodePath.join(dir, ".env.local"),
+      await fs.readFile(nodePath.join(cwd, ".env.local"), "utf8"),
+      { mode: 0o600 },
     );
+    return credentials;
+  } finally {
+    await fs.rm(cwd, { recursive: true, force: true });
   }
-  return credentials;
+}
+
+/** Appends `text` to `file` on a new line, creating the file if needed. */
+async function appendToFile(
+  file: string,
+  text: string,
+  options?: { mode: number },
+): Promise<void> {
+  const content = await fs.readFile(file, "utf8").catch(() => "");
+  const separator = content && !content.endsWith("\n") ? "\n" : "";
+  await fs.appendFile(file, separator + text, options);
 }
 
 /** gt lists the organizations only as text: `  - Emails (org_abc123)`. */
@@ -265,7 +299,7 @@ const runProcess: RunProcess = (command, args, { cwd, onStdoutLine }) =>
     child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
     createInterface({ input: child.stdout }).on("line", onStdoutLine);
     child.once("error", reject);
-    child.once("close", () => resolve({ stderr }));
+    child.once("close", (code) => resolve({ code, stderr }));
   });
 
 /** Best effort: the printed URL is the fallback, so failures are ignored. */

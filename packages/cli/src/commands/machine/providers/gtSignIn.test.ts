@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
@@ -26,7 +27,8 @@ function tree(files: Record<string, string> = {}): string {
 }
 
 const API_KEY = "gtx-dev-secret-123";
-const ENV_LOCAL = `VITE_GT_PROJECT_ID=prj_1\nVITE_GT_DEV_API_KEY=${API_KEY}\n`;
+// What gt writes in a folder without a framework.
+const ENV_LOCAL = `GT_PROJECT_ID=prj_1\nGT_DEV_API_KEY=${API_KEY}\n`;
 
 const settings = {
   baseLocale: "en",
@@ -62,23 +64,28 @@ type GtRun = {
   stderr?: string;
 };
 
-/** A fake `npx gt init` that plays one `GtRun` per call and records argv. */
+/**
+ * A fake `npx gt init` that plays one `GtRun` per call and records argv and
+ * the files in the folder it runs in.
+ */
 function fakeGt(...runs: GtRun[]) {
   const calls: string[][] = [];
+  const folders: Array<{ cwd: string; files: string[] }> = [];
   const run: NonNullable<SignInArgs["run"]> = async (
     command,
     args,
     { cwd, onStdoutLine },
   ) => {
     calls.push([command, ...args]);
+    folders.push({ cwd, files: fs.readdirSync(cwd) });
     const { events, files = {}, stderr = "" } = runs[calls.length - 1]!;
     for (const [path, content] of Object.entries(files)) {
       fs.writeFileSync(nodePath.join(cwd, path), content);
     }
     for (const event of events) onStdoutLine(JSON.stringify(event));
-    return { stderr };
+    return { code: 0, stderr };
   };
-  return { calls, run };
+  return { calls, folders, run };
 }
 
 const signedIn: GtRun = {
@@ -95,6 +102,23 @@ function fakePrompt(...answers: unknown[]) {
     return answers[prompts.length - 1];
   };
   return { prompts, prompt };
+}
+
+/** A git work tree with `files`, shielded from the user's git config. */
+function gitTree(files: Record<string, string> = {}): string {
+  vi.stubEnv("GIT_CONFIG_GLOBAL", nodePath.join(tree(), "none"));
+  vi.stubEnv("XDG_CONFIG_HOME", tree());
+  const dir = tree(files);
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  return dir;
+}
+
+/** A folder with only git, to put on PATH. */
+function binWithGit(): string {
+  const bin = tree();
+  const git = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  fs.symlinkSync(git, nodePath.join(bin, "git"));
+  return bin;
 }
 
 /** Everything the CLI prints, joined: every consola log type. */
@@ -203,9 +227,10 @@ function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
 }
 
 describe("signInToGt", () => {
-  test("runs gt init with the project's locales", async () => {
+  test("runs gt init with the project's locales in an empty folder", async () => {
     captureLog();
-    const dir = tree();
+    // gt would add itself to this package.json and install it.
+    const dir = tree({ "package.json": "{}" });
     const gt = fakeGt(signedIn);
     await signIn({
       dir,
@@ -236,6 +261,9 @@ describe("signInToGt", () => {
         nodePath.basename(dir),
       ],
     ]);
+    expect(gt.folders[0]!.files).toEqual([]);
+    // It held a copy of the key.
+    expect(fs.existsSync(gt.folders[0]!.cwd)).toBe(false);
   });
 
   test("signs in, prints the sign-in URL and returns the saved key", async () => {
@@ -251,30 +279,78 @@ describe("signInToGt", () => {
     expect(output()).not.toContain(API_KEY);
     // gt's own log stays out of the terminal when it succeeds.
     expect(output()).not.toContain("Visit:");
-    expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "saves the key to a new .env.local that only the user can read",
+    async () => {
+      captureLog();
+      const dir = tree();
+      await signIn({ dir, run: fakeGt(signedIn).run });
+      const envLocal = nodePath.join(dir, ".env.local");
+      expect(fs.readFileSync(envLocal, "utf8")).toBe(ENV_LOCAL);
+      expect(fs.statSync(envLocal).mode & 0o777).toBe(0o600);
+    },
+  );
+
+  test("adds the key below the lines already in .env.local", async () => {
+    captureLog();
+    const dir = tree({ ".env.local": "OTHER=1" });
+    await signIn({ dir, run: fakeGt(signedIn).run });
+    expect(fs.readFileSync(nodePath.join(dir, ".env.local"), "utf8")).toBe(
+      `OTHER=1\n${ENV_LOCAL}`,
+    );
   });
 
   test.each([
     ["gt.config.json", { "gt.config.json": '{"projectId":"prj_1"}' }, {}],
-    [".env.local", { ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" }, {}],
     ["the environment", {}, { VITE_GT_PROJECT_ID: "prj_1" }],
-  ])(
-    "uses the project ID in %s instead of creating a project",
-    async (_, files, env) => {
-      captureLog();
-      const gt = fakeGt(signedIn);
-      await signIn({ dir: tree(files), env, run: gt.run });
-      expect(gt.calls[0]).not.toContain("--create-project");
-    },
-  );
-
-  test("restores a gt.config.json that existed before", async () => {
+    [
+      ".env.local, before the environment",
+      { ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" },
+      { GT_PROJECT_ID: "prj_env" },
+    ],
+  ])("makes the key for the project ID in %s", async (_, files, env) => {
     captureLog();
-    const dir = tree({ "gt.config.json": '{"own":true}' });
+    const gt = fakeGt(signedIn);
+    await signIn({ dir: tree(files), env, run: gt.run });
+    expect(gt.calls[0]!.slice(-2)).toEqual(["--project-id", "prj_1"]);
+  });
+
+  test("adds a .gitignore rule for .env.local in a git work tree", async () => {
+    captureLog();
+    const dir = gitTree({ ".gitignore": "node_modules" });
     await signIn({ dir, run: fakeGt(signedIn).run });
-    expect(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")).toBe(
-      '{"own":true}',
+    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
+      "node_modules\n.env.local\n",
     );
+  });
+
+  test("leaves .gitignore alone when it ignores .env.local already", async () => {
+    captureLog();
+    const dir = gitTree({ ".gitignore": ".env*\n" });
+    await signIn({ dir, run: fakeGt(signedIn).run });
+    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
+      ".env*\n",
+    );
+  });
+
+  test("adds no .gitignore outside a git work tree", async () => {
+    captureLog();
+    const dir = tree();
+    await signIn({ dir, run: fakeGt(signedIn).run });
+    expect(fs.existsSync(nodePath.join(dir, ".gitignore"))).toBe(false);
+  });
+
+  test("refuses a .env.local that git tracks before signing in", async () => {
+    captureLog();
+    const dir = gitTree({ ".env.local": "OTHER=1\n" });
+    execFileSync("git", ["add", ".env.local"], { cwd: dir });
+    const gt = fakeGt(signedIn);
+    await expect(signIn({ dir, run: gt.run })).rejects.toThrow(
+      "Can't save the General Translation key: .env.local is tracked by git. Untrack it with `git rm --cached .env.local`, then run again.",
+    );
+    expect(gt.calls).toEqual([]);
   });
 
   test("asks for the organization when gt needs one and reruns with it", async () => {
@@ -317,10 +393,9 @@ describe("signInToGt", () => {
       }),
     ).toBeUndefined();
     expect(gt.calls).toHaveLength(1);
-    expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
   });
 
-  test("throws gt's error and shows the tail of its log", async () => {
+  test("throws gt's error, shows the tail of its log and removes gt's folder", async () => {
     const output = captureLog();
     const dir = tree();
     const gtLog = Array.from({ length: 25 }, (_, i) => `gt log line ${i + 1}`);
@@ -345,7 +420,7 @@ describe("signInToGt", () => {
     expect(error.message).toContain("gt log line 25");
     expect(error.message).not.toContain("gt log line 5\n");
     expect(output()).not.toContain("gt log line");
-    expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
+    expect(fs.existsSync(gt.folders[0]!.cwd)).toBe(false);
   });
 
   test("throws when gt exits without a result", async () => {
@@ -403,6 +478,7 @@ describe("signInToGt", () => {
 describe.skipIf(process.platform === "win32")("signInToGt's defaults", () => {
   test("prints the sign-in URL while gt is still running", async () => {
     const dir = tree();
+    const urlSeen = nodePath.join(tree(), "url-seen");
     const bin = tree({
       // Waits until the URL was printed, as gt waits for the browser sign-in.
       npx: `#!${process.execPath}
@@ -413,7 +489,7 @@ console.log("npm warn exec The following package was not found and will be insta
 console.log(JSON.stringify(${JSON.stringify(authorizationRequired)}));
 const deadline = Date.now() + 5000;
 const timer = setInterval(() => {
-  const seen = fs.existsSync("url-seen") && stdin === "";
+  const seen = fs.existsSync(${JSON.stringify(urlSeen)}) && stdin === "";
   if (!seen && Date.now() < deadline) return;
   clearInterval(timer);
   if (seen) fs.writeFileSync(".env.local", "GT_DEV_API_KEY=key\\n");
@@ -427,7 +503,7 @@ const timer = setInterval(() => {
     vi.stubEnv("PATH", `${bin}${nodePath.delimiter}${process.env.PATH}`);
     vi.spyOn(log, "log").mockImplementation((message: unknown) => {
       if (String(message).includes("in your browser")) {
-        fs.writeFileSync(nodePath.join(dir, "url-seen"), "");
+        fs.writeFileSync(urlSeen, "");
       }
     });
     expect(
@@ -443,7 +519,7 @@ const timer = setInterval(() => {
 
   test("rejects when npx can't be started", async () => {
     captureLog();
-    vi.stubEnv("PATH", tree());
+    vi.stubEnv("PATH", binWithGit());
     await expect(
       signInToGt({
         dir: tree(),
@@ -451,7 +527,7 @@ const timer = setInterval(() => {
         env: {},
         prompt: fakePrompt(true).prompt,
       }),
-    ).rejects.toThrow("ENOENT");
+    ).rejects.toThrow("spawn npx ENOENT");
   });
 
   test("opens the sign-in URL with the platform's opener", async () => {
@@ -481,7 +557,7 @@ require("node:fs").writeFileSync(${JSON.stringify(opened)}, JSON.stringify(proce
 
   test("still signs in when no opener can be started", async () => {
     captureLog();
-    vi.stubEnv("PATH", tree());
+    vi.stubEnv("PATH", binWithGit());
     expect(
       await signInToGt({
         dir: tree(),
