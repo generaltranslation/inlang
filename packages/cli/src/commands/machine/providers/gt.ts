@@ -8,6 +8,11 @@ const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
 // A batch of texts can take a while; this only ends a request that hangs.
 const GT_REQUEST_TIMEOUT_MINUTES = 5;
 
+const timedOut = {
+  ok: false,
+  error: `General Translation didn't answer within ${GT_REQUEST_TIMEOUT_MINUTES} minutes.`,
+} as const;
+
 export function createGtTranslateProvider(args: {
   apiKey: string;
   projectId?: string;
@@ -49,12 +54,7 @@ export function createGtTranslateProvider(args: {
           signal: AbortSignal.timeout(GT_REQUEST_TIMEOUT_MINUTES * 60_000),
         });
       } catch (error) {
-        if ((error as Error).name === "TimeoutError") {
-          return {
-            ok: false,
-            error: `General Translation didn't answer within ${GT_REQUEST_TIMEOUT_MINUTES} minutes.`,
-          };
-        }
+        if ((error as Error).name === "TimeoutError") return timedOut;
         // Never quote the message: it can contain the Authorization header.
         // Network errors carry a code; errors without one are thrown before
         // sending, typically for a header value fetch can't encode.
@@ -89,7 +89,14 @@ export function createGtTranslateProvider(args: {
         };
       }
 
-      const json = await response.json();
+      let json: Record<string, any>;
+      try {
+        json = await response.json();
+      } catch (error) {
+        // The timeout covers reading the answer too.
+        if ((error as Error).name === "TimeoutError") return timedOut;
+        throw error;
+      }
       const translations: [string, string][] = [];
       const failures: string[] = [];
       for (const key of Object.keys(texts)) {
