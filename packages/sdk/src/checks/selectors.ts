@@ -814,6 +814,12 @@ export function sourceVariantFor<V extends WithMatches>(
 	targetLocale: string
 ): V | undefined {
 	const form = { matches: target };
+	// Candidates exclude variants the reference never shows: an exact number's
+	// key holds as is, so `0 · zero` would otherwise stand in for English 0.
+	// Those variants still count as using their select values.
+	const shown = reference.filter(
+		(variant) => !isUnreachableVariant(variant, declarations, referenceLocale)
+	);
 	const groups = selectorGroups(
 		{
 			locale: referenceLocale,
@@ -823,7 +829,7 @@ export function sourceVariantFor<V extends WithMatches>(
 			})),
 		},
 		declarations,
-		{ variants: [form], referenceVariants: reference }
+		{ variants: [form], referenceVariants: shown }
 	);
 	// per group, the reference keys that hold for the form's inputs
 	const holds = groups.map((group) => {
@@ -848,8 +854,6 @@ export function sourceVariantFor<V extends WithMatches>(
 				targetLocale,
 				target
 			)?.singleNumberCategories.includes(key);
-		// a category the reference lacks, such as English `zero`, is never kept,
-		// so a variant the reference never shows never holds
 		const category =
 			key === "*" || spelledOut || (rules && !rules.categories.includes(key))
 				? "other"
@@ -859,7 +863,7 @@ export function sourceVariantFor<V extends WithMatches>(
 	// Paraglide checks the variants with a literal key on an earlier selector first
 	const rank = (variant: V) =>
 		target.map(({ key }) => (matchValue(variant, key) === "*" ? 1 : 0));
-	return reference
+	return shown
 		.filter((variant) =>
 			groups.every((group, index) =>
 				holds[index]!.includes(group.keyOf(variant))
