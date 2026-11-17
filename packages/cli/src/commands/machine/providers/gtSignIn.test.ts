@@ -5,7 +5,7 @@ import os from "node:os";
 import nodePath from "node:path";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
-import { readGtCredentials, signInToGt } from "./gtSignIn.js";
+import { readGtCredentials, shareGtProjectId, signInToGt } from "./gtSignIn.js";
 
 type SignInArgs = Parameters<typeof signInToGt>[0];
 
@@ -55,7 +55,11 @@ const success = {
   type: "result",
   command: "init",
   outcome: "success",
-  completedSteps: ["created gt.config.json"],
+  completedSteps: [
+    "created project prj_1",
+    "created a development key",
+    "saved development credentials to .env.local",
+  ],
 };
 
 type GtRun = {
@@ -225,6 +229,37 @@ function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
   });
 }
 
+describe("shareGtProjectId", () => {
+  test("adds the project ID to a gt.config.json without one", async () => {
+    const dir = tree({
+      ".env.local": ENV_LOCAL,
+      "gt.config.json": '{"defaultLocale":"en"}',
+    });
+    expect(await shareGtProjectId(dir)).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")),
+    ).toEqual({ defaultLocale: "en", projectId: "prj_1" });
+  });
+
+  test.each([
+    ["names a project", '{"projectId":"prj_other"}'],
+    ["isn't a JSON object", "[]"],
+    ["isn't JSON", "{"],
+  ])("leaves a gt.config.json that %s alone", async (_, config) => {
+    const dir = tree({ ".env.local": ENV_LOCAL, "gt.config.json": config });
+    expect(await shareGtProjectId(dir)).toBe(false);
+    expect(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")).toBe(
+      config,
+    );
+  });
+
+  test("shares no project ID from .env, which may be shared already", async () => {
+    const dir = tree({ ".env": ENV_LOCAL });
+    expect(await shareGtProjectId(dir)).toBe(false);
+    expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
+  });
+});
+
 describe("signInToGt", () => {
   test("runs gt init with the project's locales in an empty folder", async () => {
     captureLog();
@@ -337,11 +372,58 @@ describe("signInToGt", () => {
     );
   });
 
-  test("adds no .gitignore outside a git work tree", async () => {
+  test("adds a .gitignore rule outside a git work tree too", async () => {
     captureLog();
     const dir = tree();
     await signIn({ dir, run: fakeGt(signedIn).run });
-    expect(fs.existsSync(nodePath.join(dir, ".gitignore"))).toBe(false);
+    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
+      ".env.local\n",
+    );
+  });
+
+  test("signs in without git", async () => {
+    captureLog();
+    vi.stubEnv("PATH", tree());
+    const dir = tree();
+    expect(await signIn({ dir, run: fakeGt(signedIn).run })).toEqual({
+      apiKey: API_KEY,
+      projectId: "prj_1",
+    });
+    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
+      ".env.local\n",
+    );
+  });
+
+  test("says what it created and saved", async () => {
+    const output = captureLog();
+    const dir = tree();
+    await signIn({ dir, run: fakeGt(signedIn).run });
+    expect(output()).toContain(
+      [
+        `Created the General Translation project "${nodePath.basename(dir)}" and saved a development key for it to .env.local.`,
+        "Added .env.local to .gitignore.",
+      ].join("\n"),
+    );
+  });
+
+  test("says only that it saved a key when it created no project", async () => {
+    const output = captureLog();
+    const dir = gitTree({ ".gitignore": ".env.local\n" });
+    await signIn({
+      dir,
+      env: { GT_PROJECT_ID: "prj_1" },
+      run: fakeGt({
+        ...signedIn,
+        events: [
+          { ...success, completedSteps: success.completedSteps.slice(1) },
+        ],
+      }).run,
+    });
+    expect(output()).toContain(
+      "Saved a General Translation development key to .env.local.",
+    );
+    expect(output()).not.toContain("Created");
+    expect(output()).not.toContain(".gitignore");
   });
 
   test("refuses a .env.local that git tracks before signing in", async () => {

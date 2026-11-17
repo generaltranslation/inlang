@@ -232,8 +232,10 @@ test("fails fast without credentials outside an interactive terminal", async () 
     new MachineTranslateError(
       [
         "Machine translation needs a General Translation API key.",
+        "- In a terminal: run this command directly, not through a task runner that captures its output, to sign in.",
         "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
         `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app' && { echo; cat .env.local; } >> '${nodePath.dirname(dir)}/bob'\\''s app/.env.local')\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
+        "- Or use the community-operated service: set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
         `- Or bring your own key: ${BYOK_URL}`,
       ].join("\n"),
     ),
@@ -259,15 +261,80 @@ test("the gt init command for agents keeps a known project and saves the key nex
   }
 });
 
-test("answering no uses the community service", async () => {
+test("answering no uses the community service and saves the choice", async () => {
   vi.spyOn(log, "log").mockImplementation(() => undefined);
   vi.spyOn(log, "prompt").mockResolvedValue(false);
   const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-  const provider = await resolve({ interactive: true });
+  const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+  const { dir, projectPath } = projectIn({ ".env.local": "OTHER=1\n" });
+  const provider = await resolve({ projectPath, interactive: true });
   expect(warn.mock.calls).toEqual([[COMMUNITY_WARNING]]);
   expect((await firstRequest(provider)).url).toMatch(
     /^https:\/\/translate\.demosjarco\.dev\//,
   );
+  expect(fs.readFileSync(nodePath.join(dir, ".env.local"), "utf8")).toBe(
+    "OTHER=1\nINLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n",
+  );
+  // Outside a git work tree, so the rule is added.
+  expect(info.mock.calls).toEqual([
+    [
+      "Saved your choice to .env.local. To be asked again, remove INLANG_MACHINE_TRANSLATE_PROVIDER from it.\nAdded .env.local to .gitignore.",
+    ],
+  ]);
+});
+
+test("uses the choice saved in .env.local without asking", async () => {
+  const prompt = vi.spyOn(log, "prompt");
+  vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const provider = await resolve({
+    projectPath: projectIn({
+      ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n",
+    }).projectPath,
+    interactive: true,
+  });
+  expect(prompt).not.toHaveBeenCalled();
+  expect(npxCalls()).toEqual([]);
+  expect((await firstRequest(provider)).url).toMatch(
+    /^https:\/\/translate\.demosjarco\.dev\//,
+  );
+});
+
+test("the environment's provider beats the choice saved in .env.local", async () => {
+  const provider = await resolve({
+    env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt", GT_API_KEY: "gt-env-key" },
+    projectPath: projectIn({
+      ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n",
+    }).projectPath,
+  });
+  expect((await firstRequest(provider)).headers).toMatchObject({
+    Authorization: "Bearer gt-env-key",
+  });
+});
+
+test("shares the project ID from .env.local in gt.config.json, once", async () => {
+  const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+  const { dir, projectPath } = projectIn({
+    ".env.local": "GT_PROJECT_ID=prj_local\nGT_API_KEY=gt-local-key\n",
+  });
+  await resolve({ projectPath });
+  await resolve({ projectPath });
+  expect(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")).toBe(
+    '{\n  "projectId": "prj_local"\n}\n',
+  );
+  expect(info.mock.calls).toEqual([
+    [
+      "Saved the General Translation project ID to gt.config.json. Commit it so teammates use the same project.",
+    ],
+  ]);
+});
+
+test("shares no project ID that only the environment has", async () => {
+  const { dir } = projectIn();
+  await resolve({
+    env: { GT_API_KEY: "gt-env-key", GT_PROJECT_ID: "prj_env" },
+    projectPath: nodePath.join(dir, "project.inlang"),
+  });
+  expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
 });
 
 test("a failed sign-in is a MachineTranslateError, which prints without a stack trace", async () => {
