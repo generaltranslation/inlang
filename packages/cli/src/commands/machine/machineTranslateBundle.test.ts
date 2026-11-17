@@ -1274,11 +1274,19 @@ test("a plural whose type a select chooses gets the forms of each type", async (
   expect(Object.entries(formsOf(result, "ru")!)).toEqual([
     ["pluralType=cardinal,count=0,countPlural=*", "[ru] None"],
     ["pluralType=ordinal,count=*,countPlural=other", "[ru] nth"],
-    ["pluralType=*,count=*,countPlural=one", "[ru] One item"],
+    // the catch-all type is cardinal, whose Russian `one` is also 21, 31…
+    ["pluralType=*,count=*,countPlural=one", "[ru] Items"],
     ["pluralType=*,count=*,countPlural=few", "[ru] Items"],
     ["pluralType=*,count=*,countPlural=many", "[ru] Items"],
     ["pluralType=*,count=*,countPlural=other", "[ru] Items"],
   ]);
+  expect(
+    calls.find(
+      (call) =>
+        call.targetLocale === "ru" &&
+        call.context?.includes("Plural form: one (cardinal)"),
+    )?.context,
+  ).toContain("21");
   // Welsh `zero` is an ordinal and a cardinal form, each of its type
   expect(
     calls.flatMap((call) =>
