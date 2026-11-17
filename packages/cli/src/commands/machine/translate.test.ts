@@ -754,7 +754,10 @@ test.each([
   {
     answer: "has a placeholder that isn't valid",
     translatedText: () => '<span class="notranslate">{broken</span>',
-    error: expect.stringMatching(/^SyntaxError: /),
+    // the other two texts came back
+    error: expect.stringMatching(
+      /^SyntaxError: .*\nSaved the 2 translations that came back\./s,
+    ),
   },
 ])(
   "a batch answer that $answer fails the run",
