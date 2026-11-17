@@ -415,7 +415,8 @@ describe("signInToGt", () => {
     await signIn({ dir, run: fakeGt(signedIn).run });
     expect(output()).toContain(
       [
-        `Created the General Translation project "${nodePath.basename(dir)}" and saved a development key for it to .env.local.`,
+        "Created the General Translation project.",
+        "Saved the API key to .env.local.",
         "Added .env.local to .gitignore.",
       ].join("\n"),
     );
@@ -434,9 +435,7 @@ describe("signInToGt", () => {
         ],
       }).run,
     });
-    expect(output()).toContain(
-      "Saved a General Translation development key to .env.local.",
-    );
+    expect(output()).toContain("Saved the API key to .env.local.");
     expect(output()).not.toContain("Created");
     expect(output()).not.toContain(".gitignore");
   });

@@ -209,11 +209,12 @@ export async function signInToGt(args: {
     );
     log.success(
       [
-        result.completedSteps?.some((step) =>
+        ...(result.completedSteps?.some((step) =>
           step.startsWith("created project "),
         )
-          ? `Created the General Translation project "${gtProjectName(dir)}" and saved a development key for it to .env.local.`
-          : "Saved a General Translation development key to .env.local.",
+          ? ["Created the General Translation project."]
+          : []),
+        "Saved the API key to .env.local.",
         ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
       ].join("\n"),
     );
@@ -345,13 +346,12 @@ export async function gtInitArgs(args: {
     GT_FILE_PATTERN,
     ...(projectId
       ? ["--project-id", projectId]
-      : ["--create-project", "--project-name", gtProjectName(dir)]),
+      : [
+          "--create-project",
+          "--project-name",
+          nodePath.basename(nodePath.resolve(dir)),
+        ]),
   ];
-}
-
-/** The name of a project that gt init creates for `dir`: the folder's. */
-function gtProjectName(dir: string): string {
-  return nodePath.basename(nodePath.resolve(dir));
 }
 
 /** gt lists the organizations only as text: `  - Emails (org_abc123)`. */
