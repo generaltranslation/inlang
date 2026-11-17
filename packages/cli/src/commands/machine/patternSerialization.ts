@@ -93,6 +93,17 @@ export function serializePattern(
   return result;
 }
 
+/** An expression with an argument, or markup with a name. */
+function isPlaceholder(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const { type, arg, name } = value as Record<string, unknown>;
+  return type === "expression"
+    ? typeof arg === "object" && arg !== null
+    : typeof type === "string" &&
+        type.startsWith("markup-") &&
+        typeof name === "string";
+}
+
 export function deserializePattern(text: string): VariantRow["pattern"] {
   const result: VariantRow["pattern"] = [];
   const unescapedText = text
@@ -123,6 +134,10 @@ export function deserializePattern(text: string): VariantRow["pattern"] {
       end,
     );
     const expression = JSON.parse(expressionAsText) as VariableReference;
+    // The provider can return any JSON here, which later checks would trip on.
+    if (!isPlaceholder(expression)) {
+      throw new SyntaxError(`Not a placeholder: ${expressionAsText}`);
+    }
 
     // @ts-expect-error placeholder metadata is preserved at runtime
     result.push(expression);

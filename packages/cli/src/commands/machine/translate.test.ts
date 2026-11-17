@@ -752,6 +752,13 @@ test.each([
       'No translation was returned for "Text 0".\nSaved the 2 translations that came back. Run again to translate the rest.',
   },
   {
+    answer: "has a placeholder that isn't one",
+    translatedText: () => '<span class="notranslate">null</span>',
+    // the other two texts came back
+    error:
+      "SyntaxError: Not a placeholder: null\nSaved the 2 translations that came back. Run again to translate the rest.",
+  },
+  {
     answer: "has a placeholder that isn't valid",
     translatedText: () => '<span class="notranslate">{broken</span>',
     // the other two texts came back
