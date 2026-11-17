@@ -99,6 +99,7 @@ export function createGtTranslateProvider(args: {
         return {
           ok: false,
           error: `${failures.length} of ${Object.keys(texts).length} translations from ${sourceLocale} to ${targetLocale} failed: ${failures[0]}`,
+          translatedTexts: Object.fromEntries(translations),
         };
       }
 
