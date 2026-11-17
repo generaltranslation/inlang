@@ -45,13 +45,16 @@ export function createGtTranslateProvider(args: {
           }),
         });
       } catch (error) {
-        // The message can quote the Authorization header (for example when
-        // the key contains a newline), so only the network error code is shown.
+        // Never quote the message: it can contain the Authorization header.
+        // Network errors carry a code; errors without one are thrown before
+        // sending, typically for a header value fetch can't encode.
         const code = (error as { cause?: { code?: unknown } })?.cause?.code;
         return {
           ok: false,
-          unavailable: true,
-          error: `General Translation could not be reached${typeof code === "string" ? ` (${code})` : ""}.`,
+          error:
+            typeof code === "string"
+              ? `General Translation could not be reached (${code}).`
+              : "The General Translation API key or project ID contains characters that can't be sent.",
         };
       }
 
@@ -69,21 +72,13 @@ export function createGtTranslateProvider(args: {
       if (response.status === 402) {
         // The body is either JSON with the reason or an HTML page.
         const reason = await response.json().then(
-          (json) => (typeof json?.error === "string" ? json.error : undefined),
+          (json) => json.error,
           () => undefined,
         );
         return {
           ok: false,
           code: "payment-required",
           error: `General Translation could not bill this request${reason ? `: ${reason}` : "."}`,
-        };
-      }
-
-      if (response.status === 429 || response.status >= 500) {
-        return {
-          ok: false,
-          unavailable: true,
-          error: `General Translation is not available (${response.status} ${response.statusText}).`,
         };
       }
 
@@ -116,7 +111,6 @@ export function createGtTranslateProvider(args: {
         };
       }
 
-      // fromEntries defines own properties, so a "__proto__" key is kept.
       return { ok: true, translatedTexts: Object.fromEntries(translations) };
     },
   };

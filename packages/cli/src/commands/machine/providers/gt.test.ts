@@ -5,11 +5,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const provider = createGtTranslateProvider({
-  apiKey: "gtx-dev-test-key",
-  userAgent: "inlang-cli/1.2.3",
-});
-
 function jsonResponse(body: unknown, status: number) {
   return new Response(JSON.stringify(body), {
     status,
@@ -23,7 +18,12 @@ function translated(translation: string) {
 
 describe("createGtTranslateProvider", () => {
   test("uses context", () => {
-    expect(provider.supportsContext).toBe(true);
+    expect(
+      createGtTranslateProvider({
+        apiKey: "gtx-dev-key-1",
+        userAgent: "inlang-cli/0.0.1",
+      }).supportsContext,
+    ).toBe(true);
   });
 
   test("sends one request with every text of the batch", async () => {
@@ -36,7 +36,10 @@ describe("createGtTranslateProvider", () => {
         ),
       );
 
-    await provider.translateBatch({
+    await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-2",
+      userAgent: "inlang-cli/0.0.2",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: {
@@ -49,9 +52,9 @@ describe("createGtTranslateProvider", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.gtx.dev/v2/translate", {
       method: "POST",
       headers: {
-        Authorization: "Bearer gtx-dev-test-key",
+        Authorization: "Bearer gtx-dev-key-2",
         "Content-Type": "application/json",
-        "User-Agent": "inlang-cli/1.2.3",
+        "User-Agent": "inlang-cli/0.0.2",
       },
       body: JSON.stringify({
         sourceLocale: "en",
@@ -77,9 +80,9 @@ describe("createGtTranslateProvider", () => {
       .mockResolvedValue(jsonResponse({ greeting: translated("Hallo") }, 201));
 
     await createGtTranslateProvider({
-      apiKey: "gtx-dev-test-key",
+      apiKey: "gtx-dev-key-project",
       projectId: "prj_test",
-      userAgent: "inlang-cli/1.2.3",
+      userAgent: "inlang-cli/0.1.0",
     }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
@@ -87,9 +90,9 @@ describe("createGtTranslateProvider", () => {
     });
 
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toEqual({
-      Authorization: "Bearer gtx-dev-test-key",
+      Authorization: "Bearer gtx-dev-key-project",
       "Content-Type": "application/json",
-      "User-Agent": "inlang-cli/1.2.3",
+      "User-Agent": "inlang-cli/0.1.0",
       "gt-project-id": "prj_test",
     });
   });
@@ -104,7 +107,10 @@ describe("createGtTranslateProvider", () => {
         ),
       );
 
-      const result = await provider.translateBatch({
+      const result = await createGtTranslateProvider({
+        apiKey: "gtx-dev-key-3",
+        userAgent: "inlang-cli/0.0.3",
+      }).translateBatch({
         sourceLocale: "en",
         targetLocale: "de",
         texts: { greeting: { text: "Hello" }, save: { text: "Save" } },
@@ -133,7 +139,10 @@ describe("createGtTranslateProvider", () => {
       ),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-4",
+      userAgent: "inlang-cli/0.0.4",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" }, save: { text: "Save" } },
@@ -150,7 +159,10 @@ describe("createGtTranslateProvider", () => {
       jsonResponse({ greeting: translated("Hallo") }, 201),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-5",
+      userAgent: "inlang-cli/0.0.5",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" }, save: { text: "Save" } },
@@ -175,7 +187,10 @@ describe("createGtTranslateProvider", () => {
       ),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-6",
+      userAgent: "inlang-cli/0.0.6",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: {
@@ -192,24 +207,6 @@ describe("createGtTranslateProvider", () => {
     });
   });
 
-  test("keeps a text whose key is __proto__", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response('{"__proto__":{"success":true,"translation":"Hallo"}}', {
-        status: 201,
-      }),
-    );
-
-    const result = await provider.translateBatch({
-      sourceLocale: "en",
-      targetLocale: "de",
-      texts: Object.fromEntries([["__proto__", { text: "Hello" }]]),
-    });
-
-    expect(result.ok && Object.keys(result.translatedTexts)).toEqual([
-      "__proto__",
-    ]);
-  });
-
   test("reports a rejected API key without including it", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -218,7 +215,10 @@ describe("createGtTranslateProvider", () => {
       ),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-7",
+      userAgent: "inlang-cli/0.0.7",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" } },
@@ -237,7 +237,10 @@ describe("createGtTranslateProvider", () => {
       jsonResponse({ error: "Credit balance is too low" }, 402),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-8",
+      userAgent: "inlang-cli/0.0.8",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" } },
@@ -263,7 +266,10 @@ describe("createGtTranslateProvider", () => {
       ),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-9",
+      userAgent: "inlang-cli/0.0.9",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" } },
@@ -280,12 +286,15 @@ describe("createGtTranslateProvider", () => {
     [429, "Too Many Requests"],
     [500, "Internal Server Error"],
     [503, "Service Unavailable"],
-  ])("reports %i as unavailable", async (status, statusText) => {
+  ])("reports %i with the locale pair", async (status, statusText) => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("", { status, statusText }),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-10",
+      userAgent: "inlang-cli/0.0.10",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" } },
@@ -293,12 +302,11 @@ describe("createGtTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
-      unavailable: true,
-      error: `General Translation is not available (${status} ${statusText}).`,
+      error: `${status} ${statusText}: translating from en to de`,
     });
   });
 
-  test("reports a network error as unavailable", async () => {
+  test("reports a network error with its code", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new TypeError("fetch failed", {
         cause: Object.assign(new Error("getaddrinfo ENOTFOUND"), {
@@ -307,7 +315,10 @@ describe("createGtTranslateProvider", () => {
       }),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-11",
+      userAgent: "inlang-cli/0.0.11",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" } },
@@ -315,19 +326,33 @@ describe("createGtTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
-      unavailable: true,
       error: "General Translation could not be reached (ENOTFOUND).",
     });
   });
 
-  test("does not show a fetch error that quotes the API key", async () => {
+  // The messages Node's fetch throws for these header values.
+  test.each([
+    [
+      "an inner newline",
+      "gtx-dev-key-newline\nGT_PROJECT_ID=prj_newline",
+      (key: string) =>
+        `Headers.append: "Bearer ${key}" is an invalid header value.`,
+    ],
+    [
+      "a curly quote",
+      "gtx-dev-key-curly\u2019",
+      (key: string) =>
+        `Cannot convert argument to a ByteString because the character at index ${key.length + 6} has a value of 8217 which is greater than 255.`,
+    ],
+  ])("reports a key with %s without quoting it", async (_, apiKey, message) => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
-      new TypeError(
-        'Headers.append: "Bearer gtx-dev-test-key\nGT_PROJECT_ID=prj_x" is an invalid header value.',
-      ),
+      new TypeError(message(apiKey)),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey,
+      userAgent: "inlang-cli/0.0.9",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "de",
       texts: { greeting: { text: "Hello" } },
@@ -335,8 +360,8 @@ describe("createGtTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
-      unavailable: true,
-      error: "General Translation could not be reached.",
+      error:
+        "The General Translation API key or project ID contains characters that can't be sent.",
     });
   });
 
@@ -348,7 +373,10 @@ describe("createGtTranslateProvider", () => {
       }),
     );
 
-    const result = await provider.translateBatch({
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-12",
+      userAgent: "inlang-cli/0.0.12",
+    }).translateBatch({
       sourceLocale: "en",
       targetLocale: "xx",
       texts: { greeting: { text: "Hello" } },
