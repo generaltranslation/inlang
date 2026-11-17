@@ -169,7 +169,7 @@ test("fails fast without credentials outside an interactive terminal", async () 
       [
         "Machine translation needs a General Translation API key.",
         "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-        `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(cd "$(mktemp -d)" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app' && { echo; cat .env.local; } >> '${nodePath.dirname(dir)}/bob'\\''s app/.env.local')\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
+        `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app' && { echo; cat .env.local; } >> '${nodePath.dirname(dir)}/bob'\\''s app/.env.local')\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
         `- Or bring your own key: ${BYOK_URL}`,
       ].join("\n"),
     ),
@@ -187,7 +187,7 @@ test("the gt init command for agents keeps a known project and saves the key nex
         projectPath: "./project.inlang",
       }),
     ).rejects.toThrow(
-      `then run \`(cd "$(mktemp -d)" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --project-id prj_known && { echo; cat .env.local; } >> ${process.cwd()}/.env.local)\` to save`,
+      `then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --project-id prj_known && { echo; cat .env.local; } >> ${process.cwd()}/.env.local)\` to save`,
     );
   } finally {
     process.chdir(cwd);

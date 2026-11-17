@@ -147,7 +147,7 @@ async function missingGtKeyError(
   // one, and the .env.local it saves there is appended to the project's. The
   // subshell keeps the caller's working directory: an agent's shell keeps it
   // between commands, and this command must then run again from where it was.
-  const command = `(cd "$(mktemp -d)" && ${init} && { echo; cat .env.local; } >> ${envLocal})`;
+  const command = `(d=$(mktemp -d) && cd "$d" && ${init} && { echo; cat .env.local; } >> ${envLocal})`;
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",

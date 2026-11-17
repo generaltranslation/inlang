@@ -996,7 +996,7 @@ test.each([
             : [
                 "Machine translation needs a General Translation API key.",
                 "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-                `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(cd "$(mktemp -d)" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name ${nodePath.basename(root)} && { echo; cat .env.local; } >> ${root}/.env.local)\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
+                `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name ${nodePath.basename(root)} && { echo; cat .env.local; } >> ${root}/.env.local)\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
                 `- Or bring your own key: ${BYOK_URL}`,
               ].join("\n"),
         ],
