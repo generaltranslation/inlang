@@ -6,9 +6,8 @@ import { createInterface } from "node:readline";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
 
-// Pinned because this module parses `gt init --json`'s flags and events and
-// `gt whoami`'s exit code, which a new gt release may change. Bump only after
-// rechecking them.
+// Pinned because this module parses `gt init --json`'s flags and events, which
+// a new gt release may change. Bump only after rechecking both.
 export const GT_CLI = "gt@2.28.3";
 const GT_LOG_TAIL_LINES = 20;
 // gt requires a file pattern even though its file workflow isn't used.
@@ -235,18 +234,6 @@ export async function signInToGt(args: {
 }
 
 /**
- * Whether gt has a sign-in stored on this machine. `gt whoami` has no --json,
- * so only its exit code is read; any failure counts as signed out.
- */
-export async function isSignedInToGt(dir: string): Promise<boolean> {
-  const result = await runProcess("npx", ["--yes", GT_CLI, "whoami"], {
-    cwd: dir,
-    onStdoutLine: () => {},
-  }).catch(() => undefined);
-  return result?.code === 0;
-}
-
-/**
  * Appends `text` to `dir/.env.local`, which only the user can read if it is
  * new, and resolves whether it added a `.gitignore` rule for the file first.
  * It does unless git ignores the file: outside a work tree too, or a later
@@ -257,13 +244,15 @@ export async function appendToEnvLocal(
   text: string,
 ): Promise<boolean> {
   const gitignore = nodePath.join(dir, ".gitignore");
+  const { code } = await git(dir, "check-ignore", "-q", "--", ".env.local");
+  // 0: ignored, 1: not. Otherwise git can't tell, as outside a work tree, and
+  // a rule added before counts.
   const ignored =
-    // Exit code 0: ignored.
-    (await git(dir, "check-ignore", "-q", "--", ".env.local")).code === 0 ||
-    // Outside a work tree, git can't tell: a rule added before.
-    (await fs.readFile(gitignore, "utf8").catch(() => ""))
-      .split(/\r?\n/)
-      .includes(".env.local");
+    code === 0 ||
+    (code !== 1 &&
+      (await fs.readFile(gitignore, "utf8").catch(() => ""))
+        .split(/\r?\n/)
+        .includes(".env.local"));
   if (!ignored) {
     await appendToFile(gitignore, ".env.local\n");
   }
@@ -272,7 +261,7 @@ export async function appendToEnvLocal(
 }
 
 /**
- * Copies the project ID in `dir/.env.local` to gt.config.json, unless that
+ * Copies the project ID of the key in `dir/.env.local` to gt.config.json, unless that
  * names a project or isn't a JSON object, and resolves whether it did.
  * .env.local isn't shared, so a teammate's sign-in would otherwise create
  * another project.
@@ -281,7 +270,7 @@ export async function shareGtProjectId(dir: string): Promise<boolean> {
   const envLocal = await fs
     .readFile(nodePath.join(dir, ".env.local"), "utf8")
     .catch(() => "");
-  const projectId = findVariable(parseEnvFile(envLocal), PROJECT_ID);
+  const projectId = findCredentials(parseEnvFile(envLocal))?.projectId;
   if (!projectId) return false;
   const path = nodePath.join(dir, "gt.config.json");
   const text = await fs.readFile(path, "utf8").catch(() => undefined);

@@ -185,7 +185,9 @@ test("signs in to General Translation in an interactive terminal without credent
     signIn,
   });
   expect(notice.mock.calls).toEqual([
-    ["Machine translation is powered by General Translation. Sign up for free"],
+    [
+      "Machine translation is powered by General Translation. Answer No to use the community translation service instead.",
+    ],
   ]);
   // consola otherwise resolves a cancelled confirm with `initial`, a yes.
   expect(prompt.mock.calls).toEqual([
@@ -195,35 +197,12 @@ test("signs in to General Translation in an interactive terminal without credent
     ],
   ]);
   expect(signIn).toHaveBeenCalledWith({ dir, settings, env });
+  // Nothing runs before the question.
+  expect(npxCalls()).toEqual([]);
   expect((await firstRequest(provider)).headers).toMatchObject({
     Authorization: "Bearer gt-signed-in-key",
     "gt-project-id": "prj_new",
   });
-});
-
-// Windows needs an npx.cmd.
-test.skipIf(process.platform === "win32")(
-  "doesn't ask a user who is signed in to gt to sign up",
-  async () => {
-    const calls = fakeNpx(0);
-    const notice = vi.spyOn(log, "log").mockImplementation(() => undefined);
-    vi.spyOn(log, "prompt").mockResolvedValue(undefined as never);
-    await resolve({ interactive: true }).catch(() => undefined);
-    expect(calls()).toEqual(["--yes gt@2.28.3 whoami"]);
-    expect(notice.mock.calls).toEqual([
-      ["Machine translation is powered by General Translation."],
-    ]);
-  },
-);
-
-test("counts gt as signed out when npx can't be started", async () => {
-  vi.stubEnv("PATH", nodePath.join(projectIn().dir, "no-npx"));
-  const notice = vi.spyOn(log, "log").mockImplementation(() => undefined);
-  vi.spyOn(log, "prompt").mockResolvedValue(undefined as never);
-  await resolve({ interactive: true }).catch(() => undefined);
-  expect(notice.mock.calls).toEqual([
-    ["Machine translation is powered by General Translation. Sign up for free"],
-  ]);
 });
 
 test("fails fast without credentials outside an interactive terminal", async () => {
