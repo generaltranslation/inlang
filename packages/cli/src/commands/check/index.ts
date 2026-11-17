@@ -98,7 +98,7 @@ export async function checkCommandAction(
     );
     if (options.format !== "json" && hasMissingTranslations(report))
       process.stdout.write(
-        `\nTranslate what's missing with inlang machine translate --project ${options.project}\n`,
+        `\nTranslate what's missing with inlang machine translate --project ${shellQuote(options.project)}\n`,
       );
     if (hasFindings(report) && options.fail !== false) {
       if (options.format !== "json")
@@ -112,6 +112,13 @@ export async function checkCommandAction(
     else log.error(error);
     return 1;
   }
+}
+
+/** `arg` as one shell word, so that the hint can be pasted as is. */
+function shellQuote(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg)
+    ? arg
+    : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
 /** Findings that mean a translation is absent or empty. */

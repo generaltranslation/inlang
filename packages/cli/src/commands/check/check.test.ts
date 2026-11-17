@@ -290,6 +290,25 @@ describe("inlang check", { timeout: 60_000 }, () => {
     expect(stdout).toContain(translateHint);
   });
 
+  test("quotes a project path with a space in the hint", async () => {
+    const parent = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-check-"));
+    temporary.push(parent);
+    fs.cpSync(
+      app({ files: messages("pt-BR", (m) => (m.welcome_back = "")) }),
+      nodePath.join(parent, "my app"),
+      { recursive: true },
+    );
+    const { stdout } = await run(parent, [
+      "check",
+      "--project",
+      "my app/project.inlang",
+      "--empty-translations",
+    ]);
+    expect(stdout).toContain(
+      "Translate what's missing with inlang machine translate --project 'my app/project.inlang'\n",
+    );
+  });
+
   test("doesn't point to machine translate for the base locale", async () => {
     const { stdout } = await run(
       app({ files: messages("en-US", (m) => (m.welcome_back = "")) }),
