@@ -113,14 +113,23 @@ export async function resolveMachineTranslateProvider(args: {
         `Sign up and add a card to get $10 of free translation credit. Or bring your own key: ${BYOK_URL}`,
       ].join("\n"),
     );
-    credentials = await (args.signIn ?? signInToGt)({
-      dir,
-      settings: args.settings,
-      env,
-    }).catch((error: Error) => {
-      // Its errors are for the user, so they print without a stack trace.
-      throw new MachineTranslateError(error.message);
+    // consola otherwise resolves a cancelled confirm with `initial`, a yes.
+    const confirmed = await log.prompt("Sign in to General Translation?", {
+      type: "confirm",
+      initial: true,
+      cancel: "undefined",
     });
+    if (confirmed === false) return createCommunityProvider(env);
+    if (confirmed) {
+      credentials = await (args.signIn ?? signInToGt)({
+        dir,
+        settings: args.settings,
+        env,
+      }).catch((error: Error) => {
+        // Its errors are for the user, so they print without a stack trace.
+        throw new MachineTranslateError(error.message);
+      });
+    }
     if (!credentials) {
       throw new MachineTranslateError(
         `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
@@ -164,18 +173,26 @@ function shellQuote(arg: string): string {
     : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
+function createCommunityProvider(env: Env): MachineTranslateProvider {
+  log.warn(
+    [
+      "Using the community-operated translation service at translate.demosjarco.dev. Stability is not guaranteed.",
+      "This service is not owned, operated, or maintained by inlang.",
+      "Provide your own API key for higher reliability and control.",
+      `Set ${PROVIDER_ENV} to "google", "deepl", or "openai" and the matching API key to use your own provider.`,
+      `See ${BYOK_URL}`,
+    ].join("\n"),
+  );
+  // Scoped to the free service only: opt in to Zero Data Retention upstream.
+  const zdr = env[DEMOSJARCO_ZDR_ENV]?.trim().toLowerCase() === "true";
+  return createDemosjarcoTranslateProvider(env[DEMOSJARCO_MODEL_ENV], zdr);
+}
+
 function resolveNamedProvider(
   providerName: Exclude<MachineTranslateProviderName, "gt">,
   env: Env,
 ): MachineTranslateProvider {
-  if (providerName === "demosjarco") {
-    log.warn(
-      `The community translation service is deprecated and will be removed in the next release. Use General Translation, or bring your own key: ${BYOK_URL}`,
-    );
-    // Scoped to the free service only: opt in to Zero Data Retention upstream.
-    const zdr = env[DEMOSJARCO_ZDR_ENV]?.trim().toLowerCase() === "true";
-    return createDemosjarcoTranslateProvider(env[DEMOSJARCO_MODEL_ENV], zdr);
-  }
+  if (providerName === "demosjarco") return createCommunityProvider(env);
 
   if (providerName === "deepl") {
     const apiKey = env[DEEPL_API_KEY_ENV];

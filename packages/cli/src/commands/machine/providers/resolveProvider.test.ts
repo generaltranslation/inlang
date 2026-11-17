@@ -13,6 +13,13 @@ import {
 import type { AnyMachineTranslateProvider } from "./types.js";
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+const COMMUNITY_WARNING = [
+  "Using the community-operated translation service at translate.demosjarco.dev. Stability is not guaranteed.",
+  "This service is not owned, operated, or maintained by inlang.",
+  "Provide your own API key for higher reliability and control.",
+  'Set INLANG_MACHINE_TRANSLATE_PROVIDER to "google", "deepl", or "openai" and the matching API key to use your own provider.',
+  `See ${BYOK_URL}`,
+].join("\n");
 
 type ResolveArgs = Parameters<typeof resolveMachineTranslateProvider>[0];
 
@@ -137,6 +144,7 @@ test("identifies the CLI in the user agent", async () => {
 
 test("signs in to General Translation in an interactive terminal without credentials", async () => {
   const notice = vi.spyOn(log, "log").mockImplementation(() => undefined);
+  const prompt = vi.spyOn(log, "prompt").mockResolvedValue(true);
   const { dir, projectPath } = projectIn();
   const env = { HOME: "/home/user" };
   const signIn = vi.fn(async () => ({
@@ -153,6 +161,13 @@ test("signs in to General Translation in an interactive terminal without credent
     [
       "Machine translation is powered by General Translation.\n" +
         `Sign up and add a card to get $10 of free translation credit. Or bring your own key: ${BYOK_URL}`,
+    ],
+  ]);
+  // consola otherwise resolves a cancelled confirm with `initial`, a yes.
+  expect(prompt.mock.calls).toEqual([
+    [
+      "Sign in to General Translation?",
+      { type: "confirm", initial: true, cancel: "undefined" },
     ],
   ]);
   expect(signIn).toHaveBeenCalledWith({ dir, settings, env });
@@ -194,8 +209,20 @@ test("the gt init command for agents keeps a known project and saves the key nex
   }
 });
 
+test("declining the sign-in uses the community service", async () => {
+  vi.spyOn(log, "log").mockImplementation(() => undefined);
+  vi.spyOn(log, "prompt").mockResolvedValue(false);
+  const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const provider = await resolve({ interactive: true });
+  expect(warn.mock.calls).toEqual([[COMMUNITY_WARNING]]);
+  expect((await firstRequest(provider)).url).toMatch(
+    /^https:\/\/translate\.demosjarco\.dev\//,
+  );
+});
+
 test("a failed sign-in is a MachineTranslateError, which prints without a stack trace", async () => {
   vi.spyOn(log, "log").mockImplementation(() => undefined);
+  vi.spyOn(log, "prompt").mockResolvedValue(true);
   const error = await resolve({
     interactive: true,
     signIn: async () => {
@@ -208,16 +235,12 @@ test("a failed sign-in is a MachineTranslateError, which prints without a stack 
   );
 });
 
-test("uses the deprecated community service only when it is selected, and warns", async () => {
+test("uses the community service when it is selected, and warns", async () => {
   const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
   const provider = await resolve({
     env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "demosjarco" },
   });
-  expect(warn.mock.calls).toEqual([
-    [
-      `The community translation service is deprecated and will be removed in the next release. Use General Translation, or bring your own key: ${BYOK_URL}`,
-    ],
-  ]);
+  expect(warn.mock.calls).toEqual([[COMMUNITY_WARNING]]);
   expect((await firstRequest(provider)).url).toMatch(
     /^https:\/\/translate\.demosjarco\.dev\//,
   );

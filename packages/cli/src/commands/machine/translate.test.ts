@@ -974,9 +974,13 @@ test.each([
       stubIsTTY(process.stdin, stdinTTY),
       stubIsTTY(process.stdout, true),
     ];
-    // declines the sign-in
-    const prompt = vi.spyOn(log, "prompt").mockResolvedValue(false);
+    // Ctrl+C or Esc at the sign-in question, which consola's types leave out
+    const prompt = vi
+      .spyOn(log, "prompt")
+      .mockResolvedValue(undefined as never);
     vi.spyOn(log, "log").mockImplementation(() => undefined);
+    // keeps the run offline if it reaches a translation service by mistake
+    vi.stubGlobal("fetch", vi.fn());
     const { path, cleanup } = await projectOnDisk({
       en: `{"alpha": "Alpha"}`,
       de: `{}`,
