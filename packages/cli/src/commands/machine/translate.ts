@@ -45,11 +45,18 @@ export const translate = new Command()
   });
 
 /**
- * Thrown when a translation failed, before anything was written. The message
- * is for the user as is.
+ * Thrown when a translation failed. The message is for the user as is.
+ * `translated` translations came back before the failure and were added to
+ * the project.
  */
 export class MachineTranslateError extends Error {
   override name = "MachineTranslateError";
+  constructor(
+    message: string,
+    readonly translated = 0,
+  ) {
+    super(message);
+  }
 }
 
 /**
@@ -62,13 +69,18 @@ export async function translateAndSave(args: {
   project: InlangProject;
   path: string;
 }) {
-  const { translated, bundles } = await translateCommandAction(args);
+  const save = () =>
+    saveProjectToDirectory({ fs, path: args.path, project: args.project });
+  const { translated, bundles } = await translateCommandAction(args).catch(
+    async (error) => {
+      if (error instanceof MachineTranslateError && error.translated > 0) {
+        await save();
+      }
+      throw error;
+    },
+  );
   if (translated > 0) {
-    await saveProjectToDirectory({
-      fs,
-      path: args.path,
-      project: args.project,
-    });
+    await save();
   } else if (bundles > 0) {
     log.info("No translations were added, so no files were changed.");
   }
@@ -78,8 +90,10 @@ export async function translateAndSave(args: {
  * Translates missing translations into the project. Returns how many were
  * added.
  *
- * Writes nothing unless every translation succeeded, so a failed run leaves
- * the project as it was.
+ * When a translation fails, it still adds those that came back, so that the
+ * next run doesn't pay for them again, and throws a `MachineTranslateError`
+ * with their number. A bundle gets a locale only with all its translations:
+ * half a plural would match nothing.
  */
 export async function translateCommandAction(args: {
   project: InlangProject;
@@ -153,10 +167,24 @@ export async function translateCommandAction(args: {
     });
     bar?.stop();
 
-    if (!result.ok) throw new MachineTranslateError(result.error);
-
+    let translated = 0;
     for (const plan of plans) {
-      const bundle = plan.apply(result.translations);
+      const failedLocales = new Set(
+        plan.missing
+          .filter((translation) => !result.translations.has(translation))
+          .map((translation) => translation.targetLocale),
+      );
+      const translations = new Map(
+        plan.missing
+          .filter((translation) => !failedLocales.has(translation.targetLocale))
+          .map((translation) => [
+            translation,
+            result.translations.get(translation)!,
+          ]),
+      );
+      if (translations.size === 0) continue;
+      translated += translations.size;
+      const bundle = plan.apply(translations);
       await upsertBundleNested(args.project.db, bundle.data);
       // variants that got a new id to keep the order of the source
       // message; deleted after the write, so that nothing is lost if it
@@ -169,8 +197,16 @@ export async function translateCommandAction(args: {
       }
     }
 
+    if (!result.ok) {
+      throw new MachineTranslateError(
+        translated > 0
+          ? `${result.error}\nSaved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back. Run again to translate the rest.`
+          : result.error,
+        translated,
+      );
+    }
     log.success("Machine translate complete.");
-    return { translated: missing.length, bundles: bundles.length };
+    return { translated, bundles: bundles.length };
   } catch (error) {
     bar?.stop();
     throw error;
