@@ -188,13 +188,13 @@ The translate command has the following options:
 
 **General Translation**
 
-Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks whether to use General Translation for the project. If you say yes, it signs you in, opening General Translation in your browser if you aren't signed in yet; signing up is free. The CLI saves a development API key to `.env.local` next to `project.inlang`, and in a git repository adds `.env.local` to `.gitignore` unless git already ignores it.
+Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks whether to use General Translation for the project. If you say yes, it signs you in, opening General Translation in your browser if you aren't signed in yet; signing up is free. The CLI saves a development API key to `.env.local` next to `project.inlang` and adds `.env.local` to `.gitignore` unless git already ignores it. It also saves the project ID to `gt.config.json`; commit that file so teammates who sign in use the same project instead of creating their own.
 
-If you answer no, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default, and asks again on the next run. To use that service without being asked, set `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`.
+If you answer no, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default. It saves that choice as `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` in `.env.local`, so later runs don't ask; remove that line to be asked again. In CI, set the same variable to use that service.
 
 Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. Sign-in saves `GT_DEV_API_KEY` and `GT_PROJECT_ID`. `GT_API_KEY` works too, and so do framework-prefixed names such as `VITE_GT_DEV_API_KEY` and `VITE_GT_PROJECT_ID`.
 
-Without a terminal, as in CI and most coding agents, or on Linux without a display, as over SSH, the command doesn't ask. Without a key, it fails and prints the steps to get one. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
+Without a terminal, as in CI and most coding agents, through a task runner that captures the output, or on Linux without a display, as over SSH, the command doesn't ask. Without a key, it fails and prints the steps to get one. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
 
 **Bring your own key**
 
