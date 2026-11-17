@@ -67,6 +67,7 @@ describe("createGtTranslateProvider", () => {
           },
         },
       }),
+      signal: expect.any(AbortSignal),
     });
     expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty(
       "gt-project-id",
@@ -232,6 +233,26 @@ describe("createGtTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: "General Translation could not be reached (ENOTFOUND).",
+    });
+  });
+
+  test("gives up on a request that doesn't answer", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new DOMException("The operation timed out.", "TimeoutError"),
+    );
+
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-12",
+      userAgent: "inlang-cli/0.0.12",
+    }).translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: { greeting: { text: "Hello" } },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "General Translation didn't answer within 5 minutes.",
     });
   });
 
