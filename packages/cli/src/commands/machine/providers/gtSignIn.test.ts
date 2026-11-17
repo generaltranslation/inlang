@@ -160,6 +160,17 @@ describe("readGtCredentials", () => {
     });
   });
 
+  test("pairs the key with the project ID of its prefix", async () => {
+    const dir = tree({
+      ".env.local":
+        "VITE_GT_PROJECT_ID=prj_vite\nGT_API_KEY=server-key\nGT_PROJECT_ID=prj_server\n",
+    });
+    expect(await readGtCredentials({ env: {}, dir })).toEqual({
+      apiKey: "server-key",
+      projectId: "prj_server",
+    });
+  });
+
   test("prefers the environment over .env.local", async () => {
     const dir = tree({ ".env.local": ENV_LOCAL });
     expect(
