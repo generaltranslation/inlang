@@ -145,16 +145,15 @@ describe("createGtTranslateProvider", () => {
       targetLocale: "de",
       texts: {
         greeting: { text: "Hello" },
+        save: { text: "Save" },
         cancel: { text: "Cancel" },
         title: { text: "Title" },
-        save: { text: "Save" },
       },
     });
 
     expect(result).toEqual({
       ok: false,
-      error:
-        "3 of 4 translations from en to de failed: no translation was returned",
+      error: "3 of 4 translations from en to de failed: Translation timed out",
     });
   });
 
