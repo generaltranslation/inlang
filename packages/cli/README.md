@@ -198,7 +198,7 @@ Without a terminal, as in CI and most coding agents, or on Linux without a displ
 
 To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
-The community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default, is used only with `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`. It is deprecated and will be removed in the next release.
+If you decline to sign in, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default, and asks again on the next run. To use that service without being asked, set `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`.
 
 **What gets translated**
 

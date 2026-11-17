@@ -19,7 +19,7 @@ Set `INLANG_MACHINE_TRANSLATE_PROVIDER` to choose the translation service:
 | Google Translate | `google` | `INLANG_GOOGLE_TRANSLATE_API_KEY` |
 | DeepL | `deepl` | `INLANG_DEEPL_API_KEY` |
 | OpenAI | `openai` | `INLANG_OPENAI_API_KEY` |
-| Community-operated translation service at translate.demosjarco.dev (deprecated) | `demosjarco` | none |
+| Community-operated translation service at translate.demosjarco.dev | `demosjarco` | none |
 
 When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set, and otherwise General Translation. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI. Set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation even when one of these keys is set.
 
@@ -27,7 +27,7 @@ DeepL and OpenAI use bundle descriptions and plural forms as context; Google Tra
 
 ## Community-operated translation service
 
-The free service at [translate.demosjarco.dev](https://translate.demosjarco.dev) was the default before General Translation. It is deprecated, is used only with `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`, and will be removed in the next release. It is a community-run, third-party service — it is not owned, operated, or maintained by inlang. It requires no API key:
+The free service at [translate.demosjarco.dev](https://translate.demosjarco.dev) was the default before General Translation. The CLI uses it when you decline to sign in to General Translation, or when `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` is set. It is a community-run, third-party service — it is not owned, operated, or maintained by inlang. It requires no API key:
 
 ```bash
 export INLANG_MACHINE_TRANSLATE_PROVIDER="demosjarco"
