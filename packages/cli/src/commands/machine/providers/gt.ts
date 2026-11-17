@@ -4,6 +4,7 @@ import type {
 } from "./types.js";
 
 const GT_TRANSLATE_API_URL = "https://api.gtx.dev/v2/translate";
+const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
 
 export function createGtTranslateProvider(args: {
   apiKey: string;
@@ -40,7 +41,7 @@ export function createGtTranslateProvider(args: {
           body: JSON.stringify({
             sourceLocale,
             targetLocale,
-            metadata: { dataFormat: "STRING" },
+            metadata: {},
             requests,
           }),
         });
@@ -48,7 +49,7 @@ export function createGtTranslateProvider(args: {
         // Never quote the message: it can contain the Authorization header.
         // Network errors carry a code; errors without one are thrown before
         // sending, typically for a header value fetch can't encode.
-        const code = (error as { cause?: { code?: unknown } })?.cause?.code;
+        const code = (error as { cause?: { code?: unknown } }).cause?.code;
         return {
           ok: false,
           error:
@@ -59,26 +60,16 @@ export function createGtTranslateProvider(args: {
       }
 
       if (response.status === 401) {
-        // Unlike the spec's JSON error, the body is plain text with no reason
-        // worth showing.
         return {
           ok: false,
-          code: "unauthorized",
-          error:
-            "General Translation rejected the API key. Get a key from your project at https://dash.generaltranslation.com.",
+          error: `General Translation rejected the API key. Get a key from your project at ${GT_DASHBOARD_URL}.`,
         };
       }
 
       if (response.status === 402) {
-        // The body is either JSON with the reason or an HTML page.
-        const reason = await response.json().then(
-          (json) => json.error,
-          () => undefined,
-        );
         return {
           ok: false,
-          code: "payment-required",
-          error: `General Translation could not bill this request${reason ? `: ${reason}` : "."}`,
+          error: `General Translation could not bill this request. Add a card to get $10 of free translation credit, or check your billing: ${GT_DASHBOARD_URL}`,
         };
       }
 
@@ -93,7 +84,7 @@ export function createGtTranslateProvider(args: {
       const translations: [string, string][] = [];
       const failures: string[] = [];
       for (const key of Object.keys(texts)) {
-        const result = json?.[key];
+        const result = json[key];
         if (
           result?.success === true &&
           typeof result.translation === "string"
