@@ -740,19 +740,42 @@ export function requiredVariants(
 			);
 		})
 	);
-	return combinations.map((values) => toMatches(message.selectors, values));
+	const forms = combinations.map((values) =>
+		toMatches(message.selectors, values)
+	);
+	// A plural category that selects only an exact number of another form
+	// (Arabic "zero", only 0, next to `=0`) is never shown: the exact form wins.
+	return forms.filter(
+		(form) =>
+			!forms.some(
+				(other) =>
+					other !== form &&
+					variantCovers({ matches: form }, other, declarations, message.locale)
+			)
+	);
 }
 
 /**
  * True when a variant is the form for a match combination. An explicit
  * `other` of a plural selector is its catch-all form as well.
+ *
+ * With the `locale`, a plural category that selects only the form's exact
+ * number is that form: Arabic "zero" (only 0) is `=0`, which is how
+ * `@inlang/plugin-i18next` imports Arabic `_zero`. Latvian "zero" (0, 10–20,
+ * 30…) is not.
  */
 export function variantCovers(
 	variant: WithMatches,
 	matches: readonly Match[],
-	declarations: readonly Declaration[] | undefined
+	declarations: readonly Declaration[] | undefined,
+	locale?: string
 ): boolean {
+	const same =
+		locale === undefined
+			? []
+			: exactNumberAsCategory(variant, matches, declarations, locale);
 	return matches.every((match) => {
+		if (same.includes(match.key)) return true;
 		const actual = matchValue(variant, match.key);
 		if (actual === (match.type === "literal-match" ? match.value : "*"))
 			return true;
@@ -762,6 +785,44 @@ export function variantCovers(
 			isPluralSelector(match.key, declarations)
 		);
 	});
+}
+
+/**
+ * The exact-number selector of `matches` and the plural selector of the same
+ * input, when the variant has the catch-all on the first and, on the second,
+ * the category that selects only that number in the locale. Empty otherwise.
+ */
+function exactNumberAsCategory(
+	variant: WithMatches,
+	matches: readonly Match[],
+	declarations: readonly Declaration[] | undefined,
+	locale: string
+): string[] {
+	for (const exact of matches) {
+		if (
+			exact.type !== "literal-match" ||
+			!isNumericKey(exact.value) ||
+			resolveAnnotation(exact.key, declarations) !== undefined ||
+			matchValue(variant, exact.key) !== "*"
+		)
+			continue;
+		const input = resolveInputVariable(exact.key, declarations);
+		for (const plural of matches) {
+			if (
+				plural.type !== "catchall-match" ||
+				resolveInputVariable(plural.key, declarations) !== input
+			)
+				continue;
+			const rules = pluralRules(plural.key, declarations, locale);
+			const category = matchValue(variant, plural.key);
+			if (
+				rules?.singleNumberCategories.includes(category) &&
+				rules.rules.select(Number(exact.value) - rules.offset) === category
+			)
+				return [exact.key, plural.key];
+		}
+	}
+	return [];
 }
 
 /**
@@ -776,7 +837,9 @@ export function missingVariants(
 	const variants = options.variants ?? message.variants ?? [];
 	return requiredVariants(message, declarations, options).filter(
 		(matches) =>
-			!variants.some((variant) => variantCovers(variant, matches, declarations))
+			!variants.some((variant) =>
+				variantCovers(variant, matches, declarations, message.locale)
+			)
 	);
 }
 
