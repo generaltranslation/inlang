@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { BundleNested } from "@inlang/sdk";
-import { machineTranslateBundle } from "./machineTranslateBundle.js";
+import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
 
 test("translated variants get ids in the order of the source variants", async () => {
   const values = Array.from({ length: 20 }, (_, index) => `v${index}`);

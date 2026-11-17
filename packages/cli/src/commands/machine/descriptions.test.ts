@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import type { BundleNested } from "@inlang/sdk";
-import { machineTranslateBundle } from "./machineTranslateBundle.js";
+import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
 import { createDeepLTranslateProvider } from "./providers/deepl.js";
 import { createOpenAITranslateProvider } from "./providers/openai.js";
 

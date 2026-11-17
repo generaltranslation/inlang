@@ -37,7 +37,7 @@ type MachineTranslateArgs = {
 };
 
 /** A translation that a bundle is missing. */
-export type MissingTranslation = {
+type MissingTranslation = {
   sourceVariant: VariantRow;
   targetLocale: string;
   /** The source pattern, serialized for the provider. */
@@ -67,26 +67,6 @@ type TranslatedBundle = {
    */
   replacedVariantIds?: string[];
 };
-
-type MachineTranslateResult = Partial<TranslatedBundle> & {
-  error?: string;
-};
-
-/** Translates what one bundle is missing (see `planBundleTranslation`). */
-export async function machineTranslateBundle(
-  args: MachineTranslateArgs & { provider: AnyMachineTranslateProvider },
-): Promise<MachineTranslateResult> {
-  const plan = planBundleTranslation(args);
-  if ("error" in plan) {
-    return plan;
-  }
-  const result = await translateMissing({
-    provider: args.provider,
-    sourceLocale: args.sourceLocale,
-    missing: plan.missing,
-  });
-  return result.ok ? plan.apply(result.translations) : { error: result.error };
-}
 
 /**
  * Finds the translations the bundle is missing in the target locales: no
