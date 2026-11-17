@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 function tree(files: Record<string, string> = {}): string {
-  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-gt-"));
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-gt-test-"));
   directories.push(root);
   for (const [path, content] of Object.entries(files)) {
     fs.writeFileSync(nodePath.join(root, path), content);
@@ -306,8 +306,11 @@ describe("signInToGt", () => {
     ["gt.config.json", { "gt.config.json": '{"projectId":"prj_1"}' }, {}],
     ["the environment", {}, { VITE_GT_PROJECT_ID: "prj_1" }],
     [
-      ".env.local, before the environment",
-      { ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" },
+      ".env.local, before gt.config.json and the environment",
+      {
+        ".env.local": "VITE_GT_PROJECT_ID=prj_1\n",
+        "gt.config.json": '{"projectId":"prj_other"}',
+      },
       { GT_PROJECT_ID: "prj_env" },
     ],
   ])("makes the key for the project ID in %s", async (_, files, env) => {
