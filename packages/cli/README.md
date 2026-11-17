@@ -190,7 +190,7 @@ The translate command has the following options:
 
 Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks you to sign in and opens General Translation in your browser. Sign up and add a card to get $10 of free translation credit. The CLI saves a development API key to `.env.local` next to `project.inlang`, and in a git repository adds `.env.local` to `.gitignore` unless git already ignores it.
 
-Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. The variable names depend on your framework: `GT_API_KEY` or a prefixed `GT_DEV_API_KEY` such as `VITE_GT_DEV_API_KEY`, and `GT_PROJECT_ID` with the same prefix.
+Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. Sign-in saves `GT_DEV_API_KEY` and `GT_PROJECT_ID`. `GT_API_KEY` works too, and so do framework-prefixed names such as `VITE_GT_DEV_API_KEY` and `VITE_GT_PROJECT_ID`.
 
 Without a terminal, as in CI and most coding agents, or on Linux without a display, as over SSH, the command doesn't ask. Without a key, it fails and prints the steps to get one. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
 
