@@ -215,12 +215,11 @@ describe("readGtCredentials", () => {
   });
 });
 
-/** `signInToGt` with no environment, a yes and no browser. */
+/** `signInToGt` with no environment and no browser. */
 function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
   return signInToGt({
     settings,
     env: {},
-    prompt: fakePrompt(true).prompt,
     openUrl: () => {},
     ...args,
   });
@@ -366,12 +365,12 @@ describe("signInToGt", () => {
       },
       { events: [success], files: { ".env.local": ENV_LOCAL } },
     );
-    const { prompts, prompt } = fakePrompt(true, "org_def456");
+    const { prompts, prompt } = fakePrompt("org_def456");
 
     const credentials = await signIn({ dir, run: gt.run, prompt });
 
     expect(credentials).toEqual({ apiKey: API_KEY, projectId: "prj_1" });
-    expect(prompts[1]![1]).toMatchObject({
+    expect(prompts[0]![1]).toMatchObject({
       type: "select",
       options: [
         { label: "Emails", value: "org_abc123" },
@@ -392,7 +391,7 @@ describe("signInToGt", () => {
       await signIn({
         dir,
         run: gt.run,
-        prompt: fakePrompt(true, undefined).prompt,
+        prompt: fakePrompt(undefined).prompt,
       }),
     ).toBeUndefined();
     expect(gt.calls).toHaveLength(1);
@@ -442,21 +441,6 @@ describe("signInToGt", () => {
     );
   });
 
-  test("asks to confirm, declining on Ctrl+C or Esc", async () => {
-    captureLog();
-    const gt = fakeGt();
-    const { prompts, prompt } = fakePrompt(undefined);
-    expect(await signIn({ dir: tree(), run: gt.run, prompt })).toBeUndefined();
-    // consola otherwise resolves a cancelled confirm with `initial`, a yes.
-    expect(prompts).toEqual([
-      [
-        "Sign in to General Translation?",
-        { type: "confirm", initial: true, cancel: "undefined" },
-      ],
-    ]);
-    expect(gt.calls).toEqual([]);
-  });
-
   test("asks with the CLI's prompt by default", async () => {
     captureLog();
     // Under consola's prompt, which reads `this.options`.
@@ -465,13 +449,15 @@ describe("signInToGt", () => {
         log.options as { prompt: (message: string) => Promise<unknown> },
         "prompt",
       )
-      .mockResolvedValue(false);
-    expect(
-      await signInToGt({ dir: tree(), settings, env: {} }),
-    ).toBeUndefined();
+      .mockResolvedValue(undefined);
+    const gt = fakeGt({
+      events: [needsOrg],
+      files: { "gt.config.json": "{}" },
+    });
+    expect(await signIn({ dir: tree(), run: gt.run })).toBeUndefined();
     expect(prompt).toHaveBeenCalledWith(
-      "Sign in to General Translation?",
-      expect.objectContaining({ type: "confirm" }),
+      "Which General Translation organization should the project belong to?",
+      expect.objectContaining({ type: "select" }),
     );
   });
 });
@@ -514,7 +500,6 @@ const timer = setInterval(() => {
         dir,
         settings,
         env: {},
-        prompt: fakePrompt(true).prompt,
         openUrl: () => {},
       }),
     ).toEqual({ apiKey: "key", projectId: undefined });
@@ -528,7 +513,6 @@ const timer = setInterval(() => {
         dir: tree(),
         settings,
         env: {},
-        prompt: fakePrompt(true).prompt,
       }),
     ).rejects.toThrow("spawn npx ENOENT");
   });
@@ -549,7 +533,6 @@ require("node:fs").writeFileSync(${JSON.stringify(opened)}, JSON.stringify(proce
       settings,
       env: {},
       run: fakeGt(signedIn).run,
-      prompt: fakePrompt(true).prompt,
     });
     await vi.waitFor(() =>
       expect(JSON.parse(fs.readFileSync(opened, "utf8"))).toEqual([
@@ -567,7 +550,6 @@ require("node:fs").writeFileSync(${JSON.stringify(opened)}, JSON.stringify(proce
         settings,
         env: {},
         run: fakeGt(signedIn).run,
-        prompt: fakePrompt(true).prompt,
       }),
     ).toEqual({ apiKey: API_KEY, projectId: "prj_1" });
   });

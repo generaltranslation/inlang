@@ -105,8 +105,8 @@ function parseEnvFile(content: string): Record<string, string> {
  * Signs the user in to General Translation with `gt init --json`, which
  * creates a project (unless `dir`'s gt.config.json, .env files or the
  * environment name one) and makes a development key for it, then appends the
- * key to `dir/.env.local`. Asks first, so call it only in an interactive
- * terminal. Resolves `undefined` if the user declines.
+ * key to `dir/.env.local`. It may ask for an organization, so call it only in
+ * an interactive terminal. Resolves `undefined` if the user cancels that.
  *
  * In a git work tree, `.env.local` gets a `.gitignore` rule unless it is
  * ignored already, and a tracked `.env.local` fails before the sign-in.
@@ -128,13 +128,6 @@ export async function signInToGt(args: {
     prompt = (message, options) => log.prompt(message, options),
     openUrl = openInBrowser,
   } = args;
-  const confirmed = await prompt("Sign in to General Translation?", {
-    type: "confirm",
-    initial: true,
-    cancel: "undefined",
-  });
-  if (!confirmed) return undefined;
-
   const git = (...gitArgs: string[]) =>
     runProcess("git", gitArgs, { cwd: dir, onStdoutLine: () => {} });
   if (
