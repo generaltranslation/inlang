@@ -557,6 +557,23 @@ test("a variant the reference never selects is not a source", () => {
 	).toEqual(["one <- one", "few <- few", "many <- many", "* <- *"]);
 });
 
+test("a select value only a variant the reference never shows uses still has its source", () => {
+	// English never shows `zero · male`, so male counts show its catch-all
+	const english = [
+		variant({ countPlural: "zero", gender: "male" }),
+		variant({ countPlural: "*", gender: "*" }),
+	];
+	expect(
+		sourceVariantFor(
+			variant({ countPlural: "one", gender: "male" }).matches,
+			english,
+			genderPlural,
+			"en",
+			"de"
+		)
+	).toBe(english[1]);
+});
+
 test("words on the count's own selector make it a select, in the reference or the form", () => {
 	const english = [
 		variant({ countPluralExact: "none", countPlural: "*" }),
