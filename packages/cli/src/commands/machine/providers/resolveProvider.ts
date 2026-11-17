@@ -117,6 +117,9 @@ export async function resolveMachineTranslateProvider(args: {
       dir,
       settings: args.settings,
       env,
+    }).catch((error: Error) => {
+      // Its errors are for the user, so they print without a stack trace.
+      throw new MachineTranslateError(error.message);
     });
     if (!credentials) {
       throw new MachineTranslateError(
@@ -136,21 +139,20 @@ async function missingGtKeyError(
   settings: ProjectSettings,
   env: Env,
 ): Promise<MachineTranslateError> {
-  const init = ["npx", ...(await gtInitArgs({ dir, settings, env }))].map(
-    shellQuote,
-  );
-  // gt init saves the key to .env.local in the folder it runs in. The subshell
-  // keeps the caller's working directory: an agent's shell keeps it between
-  // commands, and this command must then run again from where it was.
-  const command =
-    dir === "."
-      ? init.join(" ")
-      : `(${["cd", shellQuote(dir), "&&", ...init].join(" ")})`;
+  const init = ["npx", ...(await gtInitArgs({ dir, settings, env }))]
+    .map(shellQuote)
+    .join(" ");
+  const envLocal = shellQuote(nodePath.resolve(dir, ".env.local"));
+  // gt init adds gt to a package.json in its folder, so it runs in an empty
+  // one, and the .env.local it saves there is appended to the project's. The
+  // subshell keeps the caller's working directory: an agent's shell keeps it
+  // between commands, and this command must then run again from where it was.
+  const command = `(cd "$(mktemp -d)" && ${init} && { echo; cat .env.local; } >> ${envLocal})`;
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
-      `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, and run this command again.`,
+      `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
       `- Or bring your own key: ${BYOK_URL}`,
     ].join("\n"),
   );

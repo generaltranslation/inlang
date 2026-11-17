@@ -169,14 +169,14 @@ test("fails fast without credentials outside an interactive terminal", async () 
       [
         "Machine translation needs a General Translation API key.",
         "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-        `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(cd '${nodePath.dirname(dir)}/bob'\\''s app' && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app')\` to save a development key to .env.local, and run this command again.`,
+        `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(cd "$(mktemp -d)" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app' && { echo; cat .env.local; } >> '${nodePath.dirname(dir)}/bob'\\''s app/.env.local')\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
         `- Or bring your own key: ${BYOK_URL}`,
       ].join("\n"),
     ),
   );
 });
 
-test("the gt init command for agents runs in the working directory when project.inlang is in it, and keeps a known project", async () => {
+test("the gt init command for agents keeps a known project and saves the key next to a relative project.inlang", async () => {
   const { dir } = projectIn();
   const cwd = process.cwd();
   process.chdir(dir);
@@ -187,11 +187,25 @@ test("the gt init command for agents runs in the working directory when project.
         projectPath: "./project.inlang",
       }),
     ).rejects.toThrow(
-      "then run `npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json'` to save",
+      `then run \`(cd "$(mktemp -d)" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --project-id prj_known && { echo; cat .env.local; } >> ${process.cwd()}/.env.local)\` to save`,
     );
   } finally {
     process.chdir(cwd);
   }
+});
+
+test("a failed sign-in is a MachineTranslateError, which prints without a stack trace", async () => {
+  vi.spyOn(log, "log").mockImplementation(() => undefined);
+  const error = await resolve({
+    interactive: true,
+    signIn: async () => {
+      throw new Error("General Translation sign-in failed: quota reached.");
+    },
+  }).catch((error) => error);
+  expect(error).toBeInstanceOf(MachineTranslateError);
+  expect(error.message).toBe(
+    "General Translation sign-in failed: quota reached.",
+  );
 });
 
 test("uses the deprecated community service only when it is selected, and warns", async () => {
