@@ -1,11 +1,11 @@
 import { afterEach, test, expect, vi } from "vitest";
 import {
-  MachineTranslateError,
   translate,
   translateAndSave,
   translateCommandAction,
 } from "./translate.js";
 import { log } from "../../utilities/log.js";
+import { MachineTranslateError } from "./providers/resolveProvider.js";
 import type {
   BatchMachineTranslateProvider,
   TranslateBatchArgs,
@@ -49,28 +49,43 @@ test("skipping the retry waits leaves other timers alone (Lix's close watchdog i
 test("requires INLANG_GOOGLE_TRANSLATE_API_KEY", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
   vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
+  const project = await projectWithTextBundles(["en", "de"], 1);
 
-  await expect(translateCommandAction({ project: {} as any })).rejects.toThrow(
-    "INLANG_GOOGLE_TRANSLATE_API_KEY must be set",
-  );
+  try {
+    await expect(translateCommandAction({ project })).rejects.toThrow(
+      "INLANG_GOOGLE_TRANSLATE_API_KEY must be set",
+    );
+  } finally {
+    await project.close();
+  }
 });
 
 test("requires INLANG_DEEPL_API_KEY when provider is deepl", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "deepl");
   vi.stubEnv("INLANG_DEEPL_API_KEY", "");
+  const project = await projectWithTextBundles(["en", "de"], 1);
 
-  await expect(translateCommandAction({ project: {} as any })).rejects.toThrow(
-    "INLANG_DEEPL_API_KEY must be set",
-  );
+  try {
+    await expect(translateCommandAction({ project })).rejects.toThrow(
+      "INLANG_DEEPL_API_KEY must be set",
+    );
+  } finally {
+    await project.close();
+  }
 });
 
 test("requires INLANG_OPENAI_API_KEY when provider is openai", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "openai");
   vi.stubEnv("INLANG_OPENAI_API_KEY", "");
+  const project = await projectWithTextBundles(["en", "de"], 1);
 
-  await expect(translateCommandAction({ project: {} as any })).rejects.toThrow(
-    "INLANG_OPENAI_API_KEY must be set",
-  );
+  try {
+    await expect(translateCommandAction({ project })).rejects.toThrow(
+      "INLANG_OPENAI_API_KEY must be set",
+    );
+  } finally {
+    await project.close();
+  }
 });
 
 function unavailableResponse() {
@@ -948,6 +963,44 @@ test("translations that drop a placeholder are reported by locale, the others ar
       items: ["en"],
       title: ["de", "en", "fr"],
     });
+  } finally {
+    await project.close();
+  }
+});
+
+test("a run with nothing to translate needs no provider", async () => {
+  // would fail for the missing key if the provider were resolved
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
+  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
+  const project = await projectWithTextBundles(["en"], 1);
+  try {
+    expect(await translateCommandAction({ project })).toEqual({
+      translated: 0,
+      bundles: 1,
+    });
+  } finally {
+    await project.close();
+  }
+});
+
+test("warns that a provider without context ignores bundle descriptions", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 0);
+  await insertBundleNested(project.db, {
+    ...textBundle("hello", "Hello"),
+    description: "A greeting on the home page",
+  });
+  const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({
+      project,
+      provider: { ...provider, supportsContext: false },
+    });
+    expect(warn.mock.calls).toEqual([
+      [
+        "The selected translation provider doesn't use bundle descriptions as context.",
+      ],
+    ]);
   } finally {
     await project.close();
   }

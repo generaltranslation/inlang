@@ -1,85 +1,263 @@
 import { afterEach, test, expect, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
+import type { ProjectSettings } from "@inlang/sdk";
+import { version } from "../../../../package.json";
+import { log } from "../../../utilities/log.js";
 import {
+  MachineTranslateError,
   OPENAI_REASONING_EFFORT_ENV,
   resolveMachineTranslateProvider,
 } from "./resolveProvider.js";
+import type { AnyMachineTranslateProvider } from "./types.js";
 
+const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+
+type ResolveArgs = Parameters<typeof resolveMachineTranslateProvider>[0];
+
+const directories: string[] = [];
 afterEach(() => {
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  unexpectedSignIn.mockClear();
+  for (const directory of directories.splice(0))
+    fs.rmSync(directory, { recursive: true, force: true });
 });
 
-test("uses google when its key is set and no provider is configured", () => {
-  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "google-key");
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "");
+/** A folder with `files`, and the path of a project.inlang in it. */
+function projectIn(files: Record<string, string> = {}, folder = "app") {
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-provider-"));
+  directories.push(root);
+  const dir = nodePath.join(root, folder);
+  fs.mkdirSync(dir);
+  for (const [path, content] of Object.entries(files))
+    fs.writeFileSync(nodePath.join(dir, path), content);
+  return { dir, projectPath: nodePath.join(dir, "project.inlang") };
+}
 
-  const provider = resolveMachineTranslateProvider();
-  expect(provider).toBeDefined();
+const settings = { baseLocale: "en", locales: ["en", "de"] } as ProjectSettings;
+
+const unexpectedSignIn = vi.fn(async () => {
+  throw new Error("signIn must not be called");
 });
 
-test("uses openai when its key is set and no provider is configured", () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "");
-  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
-  vi.stubEnv("INLANG_DEEPL_API_KEY", "");
-  vi.stubEnv("INLANG_OPENAI_API_KEY", "openai-key");
+function resolve(args: Partial<ResolveArgs>) {
+  return resolveMachineTranslateProvider({
+    env: {},
+    projectPath: projectIn().projectPath,
+    settings,
+    interactive: false,
+    signIn: unexpectedSignIn,
+    ...args,
+  });
+}
 
-  const provider = resolveMachineTranslateProvider();
-  expect(provider).toBeDefined();
-});
+/** The URL and headers of the provider's first request. */
+async function firstRequest(provider: AnyMachineTranslateProvider) {
+  const fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(new Response(null, { status: 400 }));
+  const args = { sourceLocale: "en", targetLocale: "de" };
+  if ("translateBatch" in provider)
+    await provider.translateBatch({ ...args, texts: { 0: { text: "Hi" } } });
+  else await provider.translateText({ ...args, text: "Hi" });
+  const [url, init] = fetch.mock.calls[0]!;
+  return {
+    url: String(url),
+    headers: (init?.headers ?? {}) as Record<string, string>,
+  };
+}
 
-test("falls back to the free demosjarco service when no keys are set", () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "");
-  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
-  vi.stubEnv("INLANG_DEEPL_API_KEY", "");
-  vi.stubEnv("INLANG_OPENAI_API_KEY", "");
-
-  const provider = resolveMachineTranslateProvider();
-  expect(provider).toBeDefined();
-});
-
-test("uses the free demosjarco service when explicitly selected", () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
-
-  const provider = resolveMachineTranslateProvider();
-  expect(provider).toBeDefined();
-});
-
-test("requires INLANG_GOOGLE_TRANSLATE_API_KEY for google provider", () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
-  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
-
-  expect(() => resolveMachineTranslateProvider()).toThrow(
-    "INLANG_GOOGLE_TRANSLATE_API_KEY must be set",
+test("uses google when its key is set and no provider is configured", async () => {
+  const provider = await resolve({
+    env: { INLANG_GOOGLE_TRANSLATE_API_KEY: "google-key" },
+  });
+  expect((await firstRequest(provider)).url).toMatch(
+    /^https:\/\/translation\.googleapis\.com\//,
   );
 });
 
-test("requires INLANG_DEEPL_API_KEY for deepl provider", () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "deepl");
-  vi.stubEnv("INLANG_DEEPL_API_KEY", "");
-
-  expect(() => resolveMachineTranslateProvider()).toThrow(
-    "INLANG_DEEPL_API_KEY must be set",
+test("uses openai when its key is set and no provider is configured", async () => {
+  const provider = await resolve({
+    env: { INLANG_OPENAI_API_KEY: "openai-key" },
+  });
+  expect((await firstRequest(provider)).url).toMatch(
+    /^https:\/\/api\.openai\.com\//,
   );
 });
 
-test("requires INLANG_OPENAI_API_KEY for openai provider", () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "openai");
-  vi.stubEnv("INLANG_OPENAI_API_KEY", "");
+test("a bring-your-own key beats a General Translation key in .env.local", async () => {
+  const provider = await resolve({
+    env: { INLANG_DEEPL_API_KEY: "deepl-key" },
+    projectPath: projectIn({ ".env.local": "GT_API_KEY=gt-local-key\n" })
+      .projectPath,
+    interactive: true,
+  });
+  expect((await firstRequest(provider)).url).toMatch(/deepl\.com\//);
+});
 
-  expect(() => resolveMachineTranslateProvider()).toThrow(
-    "INLANG_OPENAI_API_KEY must be set",
+test("uses General Translation with the key from the environment", async () => {
+  const provider = await resolve({
+    env: { GT_API_KEY: "gt-env-key", GT_PROJECT_ID: "prj_env" },
+  });
+  const { url, headers } = await firstRequest(provider);
+  expect(url).toBe("https://api.gtx.dev/v2/translate");
+  expect(headers).toMatchObject({
+    Authorization: "Bearer gt-env-key",
+    "gt-project-id": "prj_env",
+  });
+});
+
+test("uses General Translation with the key in .env.local next to project.inlang", async () => {
+  const { projectPath } = projectIn({
+    ".env.local":
+      "VITE_GT_PROJECT_ID=prj_local\nVITE_GT_DEV_API_KEY=gt-local-key\n",
+  });
+  const provider = await resolve({ projectPath, interactive: true });
+  expect((await firstRequest(provider)).headers).toMatchObject({
+    Authorization: "Bearer gt-local-key",
+    "gt-project-id": "prj_local",
+  });
+});
+
+test("an explicit gt beats a bring-your-own key", async () => {
+  const provider = await resolve({
+    env: {
+      INLANG_MACHINE_TRANSLATE_PROVIDER: "gt",
+      INLANG_GOOGLE_TRANSLATE_API_KEY: "google-key",
+      GT_API_KEY: "gt-env-key",
+    },
+  });
+  expect((await firstRequest(provider)).headers).toMatchObject({
+    Authorization: "Bearer gt-env-key",
+  });
+});
+
+test("identifies the CLI and its caller in the user agent", async () => {
+  const env = { GT_API_KEY: "gt-env-key" };
+  const plain = await resolve({ env });
+  expect((await firstRequest(plain)).headers["User-Agent"]).toBe(
+    `inlang-cli/${version}`,
   );
+  vi.restoreAllMocks();
+  const called = await resolve({
+    env: { ...env, INLANG_CLI_CALLER: "paraglide-js/2.6.0" },
+  });
+  expect((await firstRequest(called)).headers["User-Agent"]).toBe(
+    `inlang-cli/${version} paraglide-js/2.6.0`,
+  );
+});
+
+test("signs in to General Translation in an interactive terminal without credentials", async () => {
+  const { dir, projectPath } = projectIn();
+  const env = { HOME: "/home/user" };
+  const signIn = vi.fn(async () => ({
+    apiKey: "gt-signed-in-key",
+    projectId: "prj_new",
+  }));
+  const provider = await resolve({
+    env,
+    projectPath,
+    interactive: true,
+    signIn,
+  });
+  expect(signIn).toHaveBeenCalledWith({ dir, settings, env });
+  expect((await firstRequest(provider)).headers).toMatchObject({
+    Authorization: "Bearer gt-signed-in-key",
+    "gt-project-id": "prj_new",
+  });
+});
+
+test("a declined sign-in names the ways to get a provider", async () => {
+  await expect(
+    resolve({ interactive: true, signIn: async () => undefined }),
+  ).rejects.toThrowError(
+    new MachineTranslateError(
+      `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+    ),
+  );
+});
+
+test.each([{}, { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" }])(
+  "fails fast without credentials outside an interactive terminal (%o)",
+  async (env) => {
+    const { dir, projectPath } = projectIn({}, "my app");
+    await expect(resolve({ env, projectPath })).rejects.toThrowError(
+      new MachineTranslateError(
+        [
+          "Machine translation needs a General Translation API key.",
+          "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
+          `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`cd '${dir}' && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'my app'\` to save a development key to .env.local, and run this command again.`,
+          `- Or bring your own key: ${BYOK_URL}`,
+        ].join("\n"),
+      ),
+    );
+    expect(unexpectedSignIn).not.toHaveBeenCalled();
+  },
+);
+
+test("the gt init command for agents runs in the working directory when project.inlang is in it, and keeps a known project", async () => {
+  const { dir } = projectIn();
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    await expect(
+      resolve({
+        env: { GT_PROJECT_ID: "prj_known" },
+        projectPath: "./project.inlang",
+      }),
+    ).rejects.toThrow(
+      "then run `npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json'` to save",
+    );
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
+test("uses the deprecated community service only when it is selected, and warns", async () => {
+  const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const provider = await resolve({
+    env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "demosjarco" },
+  });
+  expect(warn.mock.calls).toEqual([
+    [
+      `The community translation service is deprecated and will be removed in the next release. Use General Translation, or bring your own key: ${BYOK_URL}`,
+    ],
+  ]);
+  expect((await firstRequest(provider)).url).toMatch(
+    /^https:\/\/translate\.demosjarco\.dev\//,
+  );
+});
+
+test("requires INLANG_GOOGLE_TRANSLATE_API_KEY for google provider", async () => {
+  await expect(
+    resolve({ env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "google" } }),
+  ).rejects.toThrow("INLANG_GOOGLE_TRANSLATE_API_KEY must be set");
+});
+
+test("requires INLANG_DEEPL_API_KEY for deepl provider", async () => {
+  await expect(
+    resolve({ env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "deepl" } }),
+  ).rejects.toThrow("INLANG_DEEPL_API_KEY must be set");
+});
+
+test("requires INLANG_OPENAI_API_KEY for openai provider", async () => {
+  await expect(
+    resolve({ env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "openai" } }),
+  ).rejects.toThrow("INLANG_OPENAI_API_KEY must be set");
 });
 
 test("uses OpenAI model and reasoning effort from the environment", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "openai");
-  vi.stubEnv("INLANG_OPENAI_API_KEY", "openai-key");
-  vi.stubEnv("INLANG_OPENAI_MODEL", "gpt-custom");
-  vi.stubEnv(OPENAI_REASONING_EFFORT_ENV, "medium");
-
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({
+  const provider = await resolve({
+    env: {
+      INLANG_MACHINE_TRANSLATE_PROVIDER: "openai",
+      INLANG_OPENAI_API_KEY: "openai-key",
+      INLANG_OPENAI_MODEL: "gpt-custom",
+      [OPENAI_REASONING_EFFORT_ENV]: "medium",
+    },
+  });
+  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({
       output: [
         {
           type: "message",
@@ -87,29 +265,29 @@ test("uses OpenAI model and reasoning effort from the environment", async () => 
         },
       ],
     }),
-  });
-  vi.stubGlobal("fetch", fetchMock);
+  );
+  if (!("translateText" in provider)) throw new Error("Expected OpenAI");
 
-  await resolveMachineTranslateProvider().translateText({
+  await provider.translateText({
     text: "Hello World",
     sourceLocale: "en",
     targetLocale: "de",
   });
 
-  const request = fetchMock.mock.calls[0]?.[1];
+  const request = fetch.mock.calls[0]?.[1];
   if (!request) {
     throw new Error("Expected an OpenAI API request");
   }
-  expect(JSON.parse(request.body)).toMatchObject({
+  expect(JSON.parse(String(request.body))).toMatchObject({
     model: "gpt-custom",
     reasoning: { effort: "medium" },
   });
 });
 
-test("rejects unsupported provider values", () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "azure");
-
-  expect(() => resolveMachineTranslateProvider()).toThrow(
+test("rejects unsupported provider values", async () => {
+  await expect(
+    resolve({ env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "azure" } }),
+  ).rejects.toThrow(
     'Unsupported INLANG_MACHINE_TRANSLATE_PROVIDER value: "azure"',
   );
 });

@@ -1,9 +1,17 @@
+import nodePath from "node:path";
+import type { ProjectSettings } from "@inlang/sdk";
+import { version } from "../../../../package.json";
 import { log } from "../../../utilities/log.js";
 import { createDeepLTranslateProvider } from "./deepl.js";
 import { createGoogleTranslateProvider } from "./google.js";
 import { createDemosjarcoTranslateProvider } from "./demosjarco.js";
+import { createGtTranslateProvider } from "./gt.js";
+import { gtInitArgs, readGtCredentials, signInToGt } from "./gtSignIn.js";
 import { createOpenAITranslateProvider } from "./openai.js";
-import type { MachineTranslateProvider } from "./types.js";
+import type {
+  AnyMachineTranslateProvider,
+  MachineTranslateProvider,
+} from "./types.js";
 
 export const PROVIDER_ENV = "INLANG_MACHINE_TRANSLATE_PROVIDER";
 export const GOOGLE_API_KEY_ENV = "INLANG_GOOGLE_TRANSLATE_API_KEY";
@@ -13,25 +21,41 @@ export const OPENAI_MODEL_ENV = "INLANG_OPENAI_MODEL";
 export const OPENAI_REASONING_EFFORT_ENV = "INLANG_OPENAI_REASONING_EFFORT";
 export const DEMOSJARCO_MODEL_ENV = "DEMOSJARCO_TRANSLATE_MODEL";
 export const DEMOSJARCO_ZDR_ENV = "DEMOSJARCO_TRANSLATE_ZDR";
+/** Set by tools that run this CLI, e.g. `paraglide-js/2.6.0`, so General Translation can tell where usage comes from. */
+export const CALLER_ENV = "INLANG_CLI_CALLER";
 
 export type MachineTranslateProviderName =
-  "google" | "deepl" | "openai" | "demosjarco";
+  | "google"
+  | "deepl"
+  | "openai"
+  | "gt"
+  | "demosjarco";
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";
 
 /**
+ * Thrown when a translation failed, before anything was written. The message
+ * is for the user as is.
+ */
+export class MachineTranslateError extends Error {
+  override name = "MachineTranslateError";
+}
+
+type Env = Record<string, string | undefined>;
+
+/**
  * Determines which provider to use.
  *
  * When `INLANG_MACHINE_TRANSLATE_PROVIDER` is set, that provider is used. When
- * it is unset, an already-configured BYOK provider (Google, DeepL or OpenAI) is used if
- * its API key is present; otherwise the CLI falls back to a free, third-party,
- * community-operated translation service at translate.demosjarco.dev that is
- * not owned, operated, or maintained by inlang.
+ * it is unset, an already-configured BYOK provider (Google, DeepL or OpenAI)
+ * is used if its API key is present; otherwise General Translation.
  */
-function resolveMachineTranslateProviderName(): MachineTranslateProviderName {
-  const rawProvider = process.env[PROVIDER_ENV]?.trim();
+function resolveMachineTranslateProviderName(
+  env: Env,
+): MachineTranslateProviderName {
+  const rawProvider = env[PROVIDER_ENV]?.trim();
 
   if (rawProvider && rawProvider.length > 0) {
     const providerName = rawProvider.toLowerCase();
@@ -39,56 +63,113 @@ function resolveMachineTranslateProviderName(): MachineTranslateProviderName {
       providerName !== "google" &&
       providerName !== "deepl" &&
       providerName !== "openai" &&
+      providerName !== "gt" &&
       providerName !== "demosjarco"
     ) {
       throw new Error(
         [
-          `Unsupported ${PROVIDER_ENV} value: "${process.env[PROVIDER_ENV]}".`,
-          "Supported values: google, deepl, openai, demosjarco.",
+          `Unsupported ${PROVIDER_ENV} value: "${env[PROVIDER_ENV]}".`,
+          "Supported values: google, deepl, openai, gt, demosjarco.",
         ].join("\n"),
       );
     }
     return providerName;
   }
 
-  // No provider configured: prefer a BYOK provider whose key is already set,
-  // otherwise fall back to the free, community-operated translation service.
-  if (process.env[GOOGLE_API_KEY_ENV]) {
+  // No provider configured: prefer a BYOK provider whose key is already set.
+  if (env[GOOGLE_API_KEY_ENV]) {
     return "google";
   }
-  if (process.env[DEEPL_API_KEY_ENV]) {
+  if (env[DEEPL_API_KEY_ENV]) {
     return "deepl";
   }
-  if (process.env[OPENAI_API_KEY_ENV]) {
+  if (env[OPENAI_API_KEY_ENV]) {
     return "openai";
   }
-  return "demosjarco";
+  return "gt";
 }
 
-export function resolveMachineTranslateProvider(): MachineTranslateProvider {
-  const providerName = resolveMachineTranslateProviderName();
+export async function resolveMachineTranslateProvider(args: {
+  env: Env;
+  /** The project.inlang path. General Translation credentials are read from, and saved to, the folder that contains it. */
+  projectPath: string;
+  settings: ProjectSettings;
+  /** Whether the user can be asked to sign in. */
+  interactive: boolean;
+  signIn?: typeof signInToGt;
+}): Promise<AnyMachineTranslateProvider> {
+  const { env } = args;
+  const providerName = resolveMachineTranslateProviderName(env);
+  if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
+  const dir = nodePath.dirname(args.projectPath);
+  let credentials = await readGtCredentials({ env, dir });
+  if (!credentials) {
+    if (!args.interactive)
+      throw await missingGtKeyError(dir, args.settings, env);
+    credentials = await (args.signIn ?? signInToGt)({
+      dir,
+      settings: args.settings,
+      env,
+    });
+    if (!credentials) {
+      throw new MachineTranslateError(
+        `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+      );
+    }
+  }
+  const caller = env[CALLER_ENV]?.trim();
+  return createGtTranslateProvider({
+    ...credentials,
+    userAgent: `inlang-cli/${version}${caller ? ` ${caller}` : ""}`,
+  });
+}
+
+/** CI and agents can't sign in here, so they are told how to get a key. */
+async function missingGtKeyError(
+  dir: string,
+  settings: ProjectSettings,
+  env: Env,
+): Promise<MachineTranslateError> {
+  const init = ["npx", ...(await gtInitArgs({ dir, settings, env }))].map(
+    shellQuote,
+  );
+  // gt init saves the key to .env.local in the folder it runs in.
+  const command =
+    dir === "."
+      ? init.join(" ")
+      : ["cd", shellQuote(dir), "&&", ...init].join(" ");
+  return new MachineTranslateError(
+    [
+      "Machine translation needs a General Translation API key.",
+      "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
+      `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`${command}\` to save a development key to .env.local, and run this command again.`,
+      `- Or bring your own key: ${BYOK_URL}`,
+    ].join("\n"),
+  );
+}
+
+function shellQuote(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg)
+    ? arg
+    : `'${arg.replaceAll("'", `'\\''`)}'`;
+}
+
+function resolveNamedProvider(
+  providerName: Exclude<MachineTranslateProviderName, "gt">,
+  env: Env,
+): MachineTranslateProvider {
   if (providerName === "demosjarco") {
     log.warn(
-      [
-        "Using the community-operated translation service at translate.demosjarco.dev. Stability is not guaranteed.",
-        "This service is not owned, operated, or maintained by inlang.",
-        "Provide your own API key for higher reliability and control.",
-        `Set ${PROVIDER_ENV} to "google", "deepl", or "openai" and the matching API key to use your own provider.`,
-        `See ${BYOK_URL}`,
-      ].join("\n"),
+      `The community translation service is deprecated and will be removed in the next release. Use General Translation, or bring your own key: ${BYOK_URL}`,
     );
     // Scoped to the free service only: opt in to Zero Data Retention upstream.
-    const zdr =
-      process.env[DEMOSJARCO_ZDR_ENV]?.trim().toLowerCase() === "true";
-    return createDemosjarcoTranslateProvider(
-      process.env[DEMOSJARCO_MODEL_ENV],
-      zdr,
-    );
+    const zdr = env[DEMOSJARCO_ZDR_ENV]?.trim().toLowerCase() === "true";
+    return createDemosjarcoTranslateProvider(env[DEMOSJARCO_MODEL_ENV], zdr);
   }
 
   if (providerName === "deepl") {
-    const apiKey = process.env[DEEPL_API_KEY_ENV];
+    const apiKey = env[DEEPL_API_KEY_ENV];
     if (!apiKey) {
       throw new Error(
         [
@@ -103,7 +184,7 @@ export function resolveMachineTranslateProvider(): MachineTranslateProvider {
   }
 
   if (providerName === "openai") {
-    const apiKey = process.env[OPENAI_API_KEY_ENV];
+    const apiKey = env[OPENAI_API_KEY_ENV];
     if (!apiKey) {
       throw new Error(
         [
@@ -115,12 +196,12 @@ export function resolveMachineTranslateProvider(): MachineTranslateProvider {
     }
     return createOpenAITranslateProvider(
       apiKey,
-      process.env[OPENAI_MODEL_ENV]?.trim() || undefined,
-      process.env[OPENAI_REASONING_EFFORT_ENV]?.trim() || undefined,
+      env[OPENAI_MODEL_ENV]?.trim() || undefined,
+      env[OPENAI_REASONING_EFFORT_ENV]?.trim() || undefined,
     );
   }
 
-  const apiKey = process.env[GOOGLE_API_KEY_ENV];
+  const apiKey = env[GOOGLE_API_KEY_ENV];
   if (!apiKey) {
     throw new Error(
       [

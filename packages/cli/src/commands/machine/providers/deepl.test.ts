@@ -33,9 +33,7 @@ describe("getDeepLApiUrl", () => {
   });
 
   test("uses pro endpoint for pro API keys", () => {
-    expect(getDeepLApiUrl("abc123")).toBe(
-      "https://api.deepl.com/v2/translate",
-    );
+    expect(getDeepLApiUrl("abc123")).toBe("https://api.deepl.com/v2/translate");
   });
 });
 

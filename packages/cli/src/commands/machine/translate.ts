@@ -16,7 +16,11 @@ import {
   translateMissing,
   type BundleTranslationPlan,
 } from "./machineTranslateBundle.js";
-import { resolveMachineTranslateProvider } from "./providers/resolveProvider.js";
+import {
+  MachineTranslateError,
+  resolveMachineTranslateProvider,
+} from "./providers/resolveProvider.js";
+import { isInteractive } from "../cloud/index.js";
 import type { AnyMachineTranslateProvider } from "./providers/types.js";
 
 export const translate = new Command()
@@ -43,14 +47,6 @@ export const translate = new Command()
       process.exit(exitCode);
     }
   });
-
-/**
- * Thrown when a translation failed, before anything was written. The message
- * is for the user as is.
- */
-export class MachineTranslateError extends Error {
-  override name = "MachineTranslateError";
-}
 
 /**
  * Translates and writes the translation files, but only if something was
@@ -87,7 +83,6 @@ export async function translateCommandAction(args: {
   provider?: AnyMachineTranslateProvider;
 }): Promise<{ translated: number; bundles: number }> {
   const options = translate.opts();
-  const provider = args.provider ?? resolveMachineTranslateProvider();
 
   const bar = options.nobar
     ? undefined
@@ -116,6 +111,100 @@ export async function translateCommandAction(args: {
       return { translated: 0, bundles: 0 };
     }
 
+    const planBundles = (supportsContext: boolean) => {
+      const plans: BundleTranslationPlan[] = [];
+      const errors: string[] = [];
+      /** bundle ids and the plural categories they need, by locale */
+      const skipped = new Map<
+        string,
+        { ids: string[]; categories: Set<string> }
+      >();
+      const unknownPluralRules = new Set<string>();
+      for (const bundle of bundles) {
+        const plan = planBundleTranslation({
+          bundle,
+          sourceLocale: settings.baseLocale,
+          targetLocales,
+          supportsContext,
+        });
+        if ("error" in plan) {
+          errors.push(plan.error);
+          continue;
+        }
+        for (const { locale, categories } of plan.skippedPlurals) {
+          const entry = skipped.get(locale) ?? {
+            ids: [],
+            categories: new Set(),
+          };
+          entry.ids.push(bundle.id);
+          for (const category of categories) entry.categories.add(category);
+          skipped.set(locale, entry);
+        }
+        for (const locale of plan.unknownPluralRules) {
+          unknownPluralRules.add(locale);
+        }
+        // Unchanged bundles aren't written back.
+        if (plan.missing.length > 0) plans.push(plan);
+      }
+      const warnings: string[] = [];
+      if (errors.length > 0) {
+        warnings.push(
+          "Some bundles could not be translated.",
+          errors.join("\n"),
+        );
+      }
+      if (skipped.size > 0) {
+        warnings.push(
+          [
+            "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.",
+            ...[...skipped].map(
+              ([locale, { ids, categories }]) =>
+                `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
+            ),
+          ].join("\n"),
+        );
+      }
+      if (unknownPluralRules.size > 0) {
+        warnings.push(
+          `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
+        );
+      }
+      return {
+        plans,
+        missing: plans.flatMap((plan) => plan.missing),
+        warnings,
+      };
+    };
+
+    // Planned as if the provider uses context, as the default one does.
+    // Without context, a plural that needs forms the source lacks is skipped
+    // instead of expanded and everything else is the same, so with nothing
+    // missing there is nothing to do for any provider and none is resolved:
+    // the run doesn't ask to sign in or fail for want of a key.
+    const assumesContext = args.provider?.supportsContext ?? true;
+    let planned = planBundles(assumesContext);
+    if (planned.missing.length === 0) {
+      for (const warning of planned.warnings) log.warn(warning);
+      log.success("Machine translate complete.");
+      return { translated: 0, bundles: bundles.length };
+    }
+
+    const provider =
+      args.provider ??
+      (await resolveMachineTranslateProvider({
+        env: process.env,
+        projectPath: options.project,
+        settings,
+        interactive: isInteractive({
+          // The sign-in prompt reads stdin.
+          isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+          env: process.env,
+        }),
+      }));
+    if (assumesContext && !provider.supportsContext)
+      planned = planBundles(false);
+    const { plans, missing } = planned;
+    for (const warning of planned.warnings) log.warn(warning);
     if (
       !provider.supportsContext &&
       bundles.some(
@@ -123,46 +212,9 @@ export async function translateCommandAction(args: {
       )
     ) {
       log.warn(
-        "The selected translation provider does not use bundle descriptions. Use OpenAI or DeepL to translate with context.",
+        "The selected translation provider doesn't use bundle descriptions as context.",
       );
     }
-
-    const plans: BundleTranslationPlan[] = [];
-    const errors: string[] = [];
-    /** bundle ids and the plural categories they need, by locale */
-    const skipped = new Map<
-      string,
-      { ids: string[]; categories: Set<string> }
-    >();
-    const unknownPluralRules = new Set<string>();
-    for (const bundle of bundles) {
-      const plan = planBundleTranslation({
-        bundle,
-        sourceLocale: settings.baseLocale,
-        targetLocales,
-        supportsContext: provider.supportsContext,
-      });
-      if ("error" in plan) {
-        errors.push(plan.error);
-        continue;
-      }
-      for (const { locale, categories } of plan.skippedPlurals) {
-        const entry = skipped.get(locale) ?? { ids: [], categories: new Set() };
-        entry.ids.push(bundle.id);
-        for (const category of categories) entry.categories.add(category);
-        skipped.set(locale, entry);
-      }
-      for (const locale of plan.unknownPluralRules) {
-        unknownPluralRules.add(locale);
-      }
-      // Unchanged bundles aren't written back.
-      if (plan.missing.length > 0) plans.push(plan);
-    }
-    if (errors.length > 0) {
-      log.warn("Some bundles could not be translated.");
-      log.warn(errors.join("\n"));
-    }
-    const missing = plans.flatMap((plan) => plan.missing);
 
     bar?.start(missing.length, 0);
     const result = await translateMissing({
@@ -210,22 +262,6 @@ export async function translateCommandAction(args: {
             ([locale, ids]) => `  ${locale}: ${[...ids].join(", ")}`,
           ),
         ].join("\n"),
-      );
-    }
-    if (skipped.size > 0) {
-      log.warn(
-        [
-          "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.",
-          ...[...skipped].map(
-            ([locale, { ids, categories }]) =>
-              `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
-          ),
-        ].join("\n"),
-      );
-    }
-    if (unknownPluralRules.size > 0) {
-      log.warn(
-        `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
       );
     }
     log.success("Machine translate complete.");

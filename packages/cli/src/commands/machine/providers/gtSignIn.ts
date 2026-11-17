@@ -138,37 +138,7 @@ export async function signInToGt(args: {
     );
   }
 
-  const config = await fs
-    .readFile(nodePath.join(dir, "gt.config.json"), "utf8")
-    .catch(() => undefined);
-  // gt runs in an empty folder, so it doesn't see this folder's project ID.
-  // One in .env or .env.local comes first: the key is saved next to it, and
-  // readGtCredentials pairs a key with the project ID from the same source.
-  const projectId =
-    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
-    parseJson(config ?? "")?.projectId ||
-    findVariable(env, PROJECT_ID);
-  const initArgs = [
-    "--yes",
-    GT_CLI,
-    "init",
-    "--json",
-    "--no-react-setup",
-    "--dev-credentials",
-    "--default-locale",
-    settings.baseLocale,
-    "--locales",
-    ...settings.locales.filter((locale) => locale !== settings.baseLocale),
-    "--file-patterns",
-    GT_FILE_PATTERN,
-    ...(projectId
-      ? ["--project-id", projectId]
-      : [
-          "--create-project",
-          "--project-name",
-          nodePath.basename(nodePath.resolve(dir)),
-        ]),
-  ];
+  const initArgs = await gtInitArgs({ dir, settings, env });
   // gt init adds gt to a package.json in its folder and installs it, which
   // can't be turned off, so it runs in an empty one.
   const cwd = await fs.mkdtemp(nodePath.join(os.tmpdir(), "inlang-gt-"));
@@ -254,6 +224,50 @@ async function appendToFile(
   const content = await fs.readFile(file, "utf8").catch(() => "");
   const separator = content && !content.endsWith("\n") ? "\n" : "";
   await fs.appendFile(file, separator + text, options);
+}
+
+/**
+ * `npx`'s arguments to run `gt init` in an empty folder: it signs in, creates a
+ * project unless `dir`'s gt.config.json, .env files or the environment name
+ * one, and saves a development key for it to the folder's .env.local.
+ */
+export async function gtInitArgs(args: {
+  dir: string;
+  settings: ProjectSettings;
+  env: Record<string, string | undefined>;
+}): Promise<string[]> {
+  const { dir, settings, env } = args;
+  const config = await fs
+    .readFile(nodePath.join(dir, "gt.config.json"), "utf8")
+    .catch(() => undefined);
+  // gt runs in an empty folder, so it doesn't see this folder's project ID.
+  // One in .env or .env.local comes first: the key is saved next to it, and
+  // readGtCredentials pairs a key with the project ID from the same source.
+  const projectId =
+    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
+    parseJson(config ?? "")?.projectId ||
+    findVariable(env, PROJECT_ID);
+  return [
+    "--yes",
+    GT_CLI,
+    "init",
+    "--json",
+    "--no-react-setup",
+    "--dev-credentials",
+    "--default-locale",
+    settings.baseLocale,
+    "--locales",
+    ...settings.locales.filter((locale) => locale !== settings.baseLocale),
+    "--file-patterns",
+    GT_FILE_PATTERN,
+    ...(projectId
+      ? ["--project-id", projectId]
+      : [
+          "--create-project",
+          "--project-name",
+          nodePath.basename(nodePath.resolve(dir)),
+        ]),
+  ];
 }
 
 /** gt lists the organizations only as text: `  - Emails (org_abc123)`. */
