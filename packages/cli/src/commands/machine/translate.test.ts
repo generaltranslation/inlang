@@ -31,6 +31,8 @@ import {
   type NewBundleNested,
 } from "@inlang/sdk";
 
+const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -968,28 +970,33 @@ test("translations that drop a placeholder are reported by locale, the others ar
   }
 });
 
+/**
+ * Unsets every variable that selects a provider, including GT keys such as
+ * `VITE_GT_DEV_API_KEY` from the developer's shell, which would otherwise
+ * reach General Translation's API.
+ */
+function clearProviderEnv() {
+  for (const name of Object.keys(process.env)) {
+    if (/^INLANG_|GT_(DEV_)?API_KEY$|GT_PROJECT_ID$/.test(name))
+      vi.stubEnv(name, "");
+  }
+}
+
 test.each([
   { stdinTTY: false, stdoutTTY: true, CI: "" },
   { stdinTTY: true, stdoutTTY: true, CI: "1" },
 ])(
   "the command fails fast without a provider when it can't ask to sign in (%o), and names the folder of --project",
   async ({ stdinTTY, stdoutTTY, CI }) => {
-    for (const name of [
-      "INLANG_MACHINE_TRANSLATE_PROVIDER",
-      "INLANG_GOOGLE_TRANSLATE_API_KEY",
-      "INLANG_DEEPL_API_KEY",
-      "INLANG_OPENAI_API_KEY",
-      "GT_API_KEY",
-      "GT_PROJECT_ID",
-    ])
-      vi.stubEnv(name, "");
+    clearProviderEnv();
     vi.stubEnv("CI", CI);
+    // Linux counts as interactive only with a display.
+    vi.stubEnv("DISPLAY", ":0");
     const restoreTTY = [
       stubIsTTY(process.stdin, stdinTTY),
       stubIsTTY(process.stdout, stdoutTTY),
     ];
-    // a sign-in would be declined, which fails with a different message
-    vi.spyOn(log, "prompt").mockResolvedValue(false);
+    const prompt = vi.spyOn(log, "prompt").mockResolvedValue(false);
     const en = `{"alpha": "Alpha"}`;
     const { path, read, cleanup } = await projectOnDisk({ en, de: `{}` });
     const root = nodePath.dirname(path);
@@ -1001,14 +1008,17 @@ test.each([
       await translate.parseAsync(["--project", path, "--nobar"], {
         from: "user",
       });
-      expect(error).toHaveBeenCalledTimes(1);
-      const [message] = error.mock.calls[0]!;
-      expect(message).toMatch(
-        /^Machine translation needs a General Translation API key\./,
-      );
-      expect(message).toContain(
-        `run \`(cd ${root} && npx --yes gt@2.28.3 init `,
-      );
+      expect(prompt).not.toHaveBeenCalled();
+      expect(error.mock.calls).toEqual([
+        [
+          [
+            "Machine translation needs a General Translation API key.",
+            "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
+            `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`(cd ${root} && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name ${nodePath.basename(root)})\` to save a development key to .env.local, and run this command again.`,
+            `- Or bring your own key: ${BYOK_URL}`,
+          ].join("\n"),
+        ],
+      ]);
       expect(exit).toHaveBeenCalledWith(1);
       expect(read("en")).toBe(en);
       expect(read("de")).toBe(`{}`);
@@ -1022,6 +1032,43 @@ test.each([
     }
   },
 );
+
+test("the command asks to sign in at a terminal, and a declined sign-in writes nothing and exits with 1", async () => {
+  clearProviderEnv();
+  vi.stubEnv("CI", "");
+  // Linux counts as interactive only with a display.
+  vi.stubEnv("DISPLAY", ":0");
+  const restoreTTY = [
+    stubIsTTY(process.stdin, true),
+    stubIsTTY(process.stdout, true),
+  ];
+  const prompt = vi.spyOn(log, "prompt").mockResolvedValue(false);
+  const en = `{"alpha": "Alpha"}`;
+  const { path, read, cleanup } = await projectOnDisk({ en, de: `{}` });
+  const root = nodePath.dirname(path);
+  const error = vi.spyOn(log, "error");
+  const exit = vi
+    .spyOn(process, "exit")
+    .mockImplementation(() => undefined as never);
+  try {
+    await translate.parseAsync(["--project", path, "--nobar"], {
+      from: "user",
+    });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls).toEqual([
+      [
+        `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+      ],
+    ]);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(read("en")).toBe(en);
+    expect(read("de")).toBe(`{}`);
+    expect(fs.readdirSync(root).sort()).toEqual(["messages", "project.inlang"]);
+  } finally {
+    for (const restore of restoreTTY) restore();
+    await cleanup();
+  }
+});
 
 function stubIsTTY(
   stream: NodeJS.ReadStream | NodeJS.WriteStream,
@@ -1053,20 +1100,26 @@ test("a run with nothing to translate needs no provider", async () => {
 test.each([
   {
     supportsContext: false,
+    description: "A greeting on the home page",
     warnings: [
       [
         "The selected translation provider doesn't use bundle descriptions as context.",
       ],
     ],
   },
-  { supportsContext: true, warnings: [] },
+  {
+    supportsContext: true,
+    description: "A greeting on the home page",
+    warnings: [],
+  },
+  { supportsContext: false, description: undefined, warnings: [] },
 ])(
-  "warns only when the provider ignores bundle descriptions (supportsContext: $supportsContext)",
-  async ({ supportsContext, warnings }) => {
+  "warns only when the provider ignores bundle descriptions (supportsContext: $supportsContext, description: $description)",
+  async ({ supportsContext, description, warnings }) => {
     const project = await projectWithTextBundles(["en", "de"], 0);
     await insertBundleNested(project.db, {
       ...textBundle("hello", "Hello"),
-      description: "A greeting on the home page",
+      description,
     });
     const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     const { provider } = fakeBatchProvider();
