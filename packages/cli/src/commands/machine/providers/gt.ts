@@ -4,7 +4,7 @@ import type {
 } from "./types.js";
 
 const GT_TRANSLATE_API_URL = "https://api.gtx.dev/v2/translate";
-const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
+export const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
 
 export function createGtTranslateProvider(args: {
   apiKey: string;

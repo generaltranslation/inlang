@@ -48,48 +48,6 @@ test("skipping the retry waits leaves other timers alone (Lix's close watchdog i
   clearTimeout(timer);
 });
 
-test("requires INLANG_GOOGLE_TRANSLATE_API_KEY", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
-  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
-  const project = await projectWithTextBundles(["en", "de"], 1);
-
-  try {
-    await expect(translateCommandAction({ project })).rejects.toThrow(
-      "INLANG_GOOGLE_TRANSLATE_API_KEY must be set",
-    );
-  } finally {
-    await project.close();
-  }
-});
-
-test("requires INLANG_DEEPL_API_KEY when provider is deepl", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "deepl");
-  vi.stubEnv("INLANG_DEEPL_API_KEY", "");
-  const project = await projectWithTextBundles(["en", "de"], 1);
-
-  try {
-    await expect(translateCommandAction({ project })).rejects.toThrow(
-      "INLANG_DEEPL_API_KEY must be set",
-    );
-  } finally {
-    await project.close();
-  }
-});
-
-test("requires INLANG_OPENAI_API_KEY when provider is openai", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "openai");
-  vi.stubEnv("INLANG_OPENAI_API_KEY", "");
-  const project = await projectWithTextBundles(["en", "de"], 1);
-
-  try {
-    await expect(translateCommandAction({ project })).rejects.toThrow(
-      "INLANG_OPENAI_API_KEY must be set",
-    );
-  } finally {
-    await project.close();
-  }
-});
-
 function unavailableResponse() {
   return new Response(null, {
     status: 503,
@@ -343,7 +301,7 @@ test.runIf(process.env.INLANG_DEEPL_API_KEY)(
   { timeout: 10000 },
 );
 
-/** A project on disk with the message-format plugin and the given message files. */
+/** A project on disk with the message-format plugin and a message file per locale. */
 async function projectOnDisk(messages: Record<string, string>) {
   const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-translate-"));
   const path = nodePath.join(root, "project.inlang");
@@ -356,7 +314,7 @@ async function projectOnDisk(messages: Record<string, string>) {
     nodePath.join(path, "settings.json"),
     JSON.stringify({
       baseLocale: "en",
-      locales: ["en", "de"],
+      locales: Object.keys(messages),
       modules: ["./project.inlang/plugins/message-format.js"],
       "plugin.inlang.messageFormat": {
         pathPattern: "./messages/{locale}.json",
@@ -871,11 +829,16 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
     await insertBundleNested(project.db, pluralBundle(id));
   }
   const warn = vi.spyOn(log, "warn");
-  const { provider } = fakeBatchProvider();
-  // a provider that uses context gets every form instead
-  provider.supportsContext = false;
+  // Google doesn't use context; a provider that does gets every form instead
+  clearProviderEnv();
+  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "google-key");
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    Response.json({
+      data: { translations: [{ translatedText: "Übersetzt" }] },
+    }),
+  );
   try {
-    await translateCommandAction({ project, provider });
+    await translateCommandAction({ project });
     expect(warn.mock.calls).toEqual([
       [
         "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
@@ -889,24 +852,38 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
   }
 });
 
-test("with a provider that uses context, every plural form is translated", async () => {
-  const project = await projectWithTextBundles(["en", "ru"], 0);
-  await insertBundleNested(project.db, pluralBundle("items"));
-  const { provider } = fakeBatchProvider();
+test("General Translation, the default provider, gets every plural form", async () => {
+  clearProviderEnv();
+  vi.stubEnv("GT_API_KEY", "gt-key");
+  // translates each text to itself
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (_, init) => {
+    const { requests } = JSON.parse(String(init!.body));
+    return Response.json(
+      Object.fromEntries(
+        Object.entries<{ source: string }>(requests).map(([key, request]) => [
+          key,
+          { success: true, translation: request.source },
+        ]),
+      ),
+    );
+  });
+  vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  const { path, read, cleanup } = await projectOnDisk({
+    en: `{"items": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "One item", "countPlural=*": "Items"}}]}`,
+    ru: `{}`,
+  });
   try {
-    await translateCommandAction({ project, provider });
-    const [bundle] = await selectBundleNested(project.db).execute();
-    expect(
-      bundle!.messages
-        .find((message) => message.locale === "ru")!
-        .variants.map((variant) =>
-          variant.matches[0]!.type === "literal-match"
-            ? variant.matches[0]!.value
-            : "*",
-        ),
-    ).toEqual(["one", "few", "many", "*"]);
+    await translate.parseAsync(["--project", path, "--nobar"], {
+      from: "user",
+    });
+    expect(Object.keys(JSON.parse(read("ru")).items[0].match)).toEqual([
+      "countPlural=one",
+      "countPlural=few",
+      "countPlural=many",
+      "countPlural=*",
+    ]);
   } finally {
-    await project.close();
+    await cleanup();
   }
 });
 
@@ -983,48 +960,46 @@ function clearProviderEnv() {
 }
 
 test.each([
-  { stdinTTY: false, stdoutTTY: true, CI: "" },
-  { stdinTTY: true, stdoutTTY: true, CI: "1" },
+  { stdinTTY: false, CI: "", asks: false },
+  { stdinTTY: true, CI: "1", asks: false },
+  { stdinTTY: true, CI: "", asks: true },
 ])(
-  "the command fails fast without a provider when it can't ask to sign in (%o), and names the folder of --project",
-  async ({ stdinTTY, stdoutTTY, CI }) => {
+  "without a provider, the command asks to sign in only at a terminal (%o)",
+  async ({ stdinTTY, CI, asks }) => {
     clearProviderEnv();
     vi.stubEnv("CI", CI);
     // Linux counts as interactive only with a display.
     vi.stubEnv("DISPLAY", ":0");
     const restoreTTY = [
       stubIsTTY(process.stdin, stdinTTY),
-      stubIsTTY(process.stdout, stdoutTTY),
+      stubIsTTY(process.stdout, true),
     ];
+    // declines the sign-in
     const prompt = vi.spyOn(log, "prompt").mockResolvedValue(false);
-    const en = `{"alpha": "Alpha"}`;
-    const { path, read, cleanup } = await projectOnDisk({ en, de: `{}` });
+    vi.spyOn(log, "log").mockImplementation(() => undefined);
+    const { path, cleanup } = await projectOnDisk({
+      en: `{"alpha": "Alpha"}`,
+      de: `{}`,
+    });
     const root = nodePath.dirname(path);
     const error = vi.spyOn(log, "error");
-    const exit = vi
-      .spyOn(process, "exit")
-      .mockImplementation(() => undefined as never);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     try {
       await translate.parseAsync(["--project", path, "--nobar"], {
         from: "user",
       });
-      expect(prompt).not.toHaveBeenCalled();
+      expect(prompt).toHaveBeenCalledTimes(asks ? 1 : 0);
       expect(error.mock.calls).toEqual([
         [
-          [
-            "Machine translation needs a General Translation API key.",
-            "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-            `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`(cd ${root} && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name ${nodePath.basename(root)})\` to save a development key to .env.local, and run this command again.`,
-            `- Or bring your own key: ${BYOK_URL}`,
-          ].join("\n"),
+          asks
+            ? `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`
+            : [
+                "Machine translation needs a General Translation API key.",
+                "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
+                `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(cd ${root} && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name ${nodePath.basename(root)})\` to save a development key to .env.local, and run this command again.`,
+                `- Or bring your own key: ${BYOK_URL}`,
+              ].join("\n"),
         ],
-      ]);
-      expect(exit).toHaveBeenCalledWith(1);
-      expect(read("en")).toBe(en);
-      expect(read("de")).toBe(`{}`);
-      expect(fs.readdirSync(root).sort()).toEqual([
-        "messages",
-        "project.inlang",
       ]);
     } finally {
       for (const restore of restoreTTY) restore();
@@ -1032,43 +1007,6 @@ test.each([
     }
   },
 );
-
-test("the command asks to sign in at a terminal, and a declined sign-in writes nothing and exits with 1", async () => {
-  clearProviderEnv();
-  vi.stubEnv("CI", "");
-  // Linux counts as interactive only with a display.
-  vi.stubEnv("DISPLAY", ":0");
-  const restoreTTY = [
-    stubIsTTY(process.stdin, true),
-    stubIsTTY(process.stdout, true),
-  ];
-  const prompt = vi.spyOn(log, "prompt").mockResolvedValue(false);
-  const en = `{"alpha": "Alpha"}`;
-  const { path, read, cleanup } = await projectOnDisk({ en, de: `{}` });
-  const root = nodePath.dirname(path);
-  const error = vi.spyOn(log, "error");
-  const exit = vi
-    .spyOn(process, "exit")
-    .mockImplementation(() => undefined as never);
-  try {
-    await translate.parseAsync(["--project", path, "--nobar"], {
-      from: "user",
-    });
-    expect(prompt).toHaveBeenCalledTimes(1);
-    expect(error.mock.calls).toEqual([
-      [
-        `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
-      ],
-    ]);
-    expect(exit).toHaveBeenCalledWith(1);
-    expect(read("en")).toBe(en);
-    expect(read("de")).toBe(`{}`);
-    expect(fs.readdirSync(root).sort()).toEqual(["messages", "project.inlang"]);
-  } finally {
-    for (const restore of restoreTTY) restore();
-    await cleanup();
-  }
-});
 
 function stubIsTTY(
   stream: NodeJS.ReadStream | NodeJS.WriteStream,

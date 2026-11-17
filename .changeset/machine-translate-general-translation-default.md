@@ -6,4 +6,4 @@ General Translation is the default machine translation provider for `inlang mach
 
 Bring-your-own keys keep working and still take precedence when set. `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` selects General Translation explicitly. The free community translation service is no longer used by default; it is used only with `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`, is deprecated, and will be removed in the next release.
 
-A run with nothing to translate no longer needs a provider. Requests to General Translation identify the CLI version, and the calling tool when `INLANG_CLI_CALLER` is set.
+A run with nothing to translate no longer needs a provider.

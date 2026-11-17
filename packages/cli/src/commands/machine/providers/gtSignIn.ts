@@ -8,7 +8,7 @@ import { log } from "../../../utilities/log.js";
 
 // Pinned because this module parses `gt init --json`'s flags and events, which
 // a new gt release may change. Bump only after rechecking both.
-const GT_CLI = "gt@2.28.3";
+export const GT_CLI = "gt@2.28.3";
 const GT_LOG_TAIL_LINES = 20;
 // gt requires a file pattern even though its file workflow isn't used.
 const GT_FILE_PATTERN = "json=./messages/[locale].json";

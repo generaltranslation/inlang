@@ -181,8 +181,7 @@ export async function translateCommandAction(args: {
     // instead of expanded and everything else is the same, so with nothing
     // missing there is nothing to do for any provider and none is resolved:
     // the run doesn't ask to sign in or fail for want of a key.
-    const assumesContext = args.provider?.supportsContext ?? true;
-    let planned = planBundles(assumesContext);
+    let planned = planBundles(true);
     if (planned.missing.length === 0) {
       for (const warning of planned.warnings) log.warn(warning);
       log.success("Machine translate complete.");
@@ -201,8 +200,7 @@ export async function translateCommandAction(args: {
           env: process.env,
         }),
       }));
-    if (assumesContext && !provider.supportsContext)
-      planned = planBundles(false);
+    if (!provider.supportsContext) planned = planBundles(false);
     const { plans, missing } = planned;
     for (const warning of planned.warnings) log.warn(warning);
     if (

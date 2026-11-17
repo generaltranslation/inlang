@@ -5,8 +5,13 @@ import { log } from "../../../utilities/log.js";
 import { createDeepLTranslateProvider } from "./deepl.js";
 import { createGoogleTranslateProvider } from "./google.js";
 import { createDemosjarcoTranslateProvider } from "./demosjarco.js";
-import { createGtTranslateProvider } from "./gt.js";
-import { gtInitArgs, readGtCredentials, signInToGt } from "./gtSignIn.js";
+import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
+import {
+  GT_CLI,
+  gtInitArgs,
+  readGtCredentials,
+  signInToGt,
+} from "./gtSignIn.js";
 import { createOpenAITranslateProvider } from "./openai.js";
 import type {
   AnyMachineTranslateProvider,
@@ -21,8 +26,6 @@ export const OPENAI_MODEL_ENV = "INLANG_OPENAI_MODEL";
 export const OPENAI_REASONING_EFFORT_ENV = "INLANG_OPENAI_REASONING_EFFORT";
 export const DEMOSJARCO_MODEL_ENV = "DEMOSJARCO_TRANSLATE_MODEL";
 export const DEMOSJARCO_ZDR_ENV = "DEMOSJARCO_TRANSLATE_ZDR";
-/** Set by tools that run this CLI, e.g. `paraglide-js/2.6.0`, so General Translation can tell where usage comes from. */
-export const CALLER_ENV = "INLANG_CLI_CALLER";
 
 export type MachineTranslateProviderName =
   | "google"
@@ -104,6 +107,12 @@ export async function resolveMachineTranslateProvider(args: {
   if (!credentials) {
     if (!args.interactive)
       throw await missingGtKeyError(dir, args.settings, env);
+    log.log(
+      [
+        "Machine translation is powered by General Translation.",
+        `Sign up and add a card to get $10 of free translation credit. Or bring your own key: ${BYOK_URL}`,
+      ].join("\n"),
+    );
     credentials = await (args.signIn ?? signInToGt)({
       dir,
       settings: args.settings,
@@ -115,10 +124,9 @@ export async function resolveMachineTranslateProvider(args: {
       );
     }
   }
-  const caller = env[CALLER_ENV]?.trim();
   return createGtTranslateProvider({
     ...credentials,
-    userAgent: `inlang-cli/${version}${caller ? ` ${caller}` : ""}`,
+    userAgent: `inlang-cli/${version}`,
   });
 }
 
@@ -141,8 +149,8 @@ async function missingGtKeyError(
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",
-      "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-      `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`${command}\` to save a development key to .env.local, and run this command again.`,
+      `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
+      `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, and run this command again.`,
       `- Or bring your own key: ${BYOK_URL}`,
     ].join("\n"),
   );

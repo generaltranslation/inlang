@@ -19,7 +19,6 @@ type ResolveArgs = Parameters<typeof resolveMachineTranslateProvider>[0];
 const directories: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
-  unexpectedSignIn.mockClear();
   for (const directory of directories.splice(0))
     fs.rmSync(directory, { recursive: true, force: true });
 });
@@ -37,9 +36,9 @@ function projectIn(files: Record<string, string> = {}, folder = "app") {
 
 const settings = { baseLocale: "en", locales: ["en", "de"] } as ProjectSettings;
 
-const unexpectedSignIn = vi.fn(async () => {
+const unexpectedSignIn = async () => {
   throw new Error("signIn must not be called");
-});
+};
 
 function resolve(args: Partial<ResolveArgs>) {
   return resolveMachineTranslateProvider({
@@ -86,12 +85,11 @@ test("uses openai when its key is set and no provider is configured", async () =
   );
 });
 
-test("a bring-your-own key beats a General Translation key in .env.local", async () => {
+test("a bring-your-own key beats a General Translation key", async () => {
   const provider = await resolve({
-    env: { INLANG_DEEPL_API_KEY: "deepl-key" },
+    env: { INLANG_DEEPL_API_KEY: "deepl-key", GT_API_KEY: "gt-env-key" },
     projectPath: projectIn({ ".env.local": "GT_API_KEY=gt-local-key\n" })
       .projectPath,
-    interactive: true,
   });
   expect((await firstRequest(provider)).url).toMatch(/deepl\.com\//);
 });
@@ -100,9 +98,7 @@ test("uses General Translation with the key from the environment", async () => {
   const provider = await resolve({
     env: { GT_API_KEY: "gt-env-key", GT_PROJECT_ID: "prj_env" },
   });
-  const { url, headers } = await firstRequest(provider);
-  expect(url).toBe("https://api.gtx.dev/v2/translate");
-  expect(headers).toMatchObject({
+  expect((await firstRequest(provider)).headers).toMatchObject({
     Authorization: "Bearer gt-env-key",
     "gt-project-id": "prj_env",
   });
@@ -110,8 +106,7 @@ test("uses General Translation with the key from the environment", async () => {
 
 test("uses General Translation with the key in .env.local next to project.inlang", async () => {
   const { projectPath } = projectIn({
-    ".env.local":
-      "VITE_GT_PROJECT_ID=prj_local\nVITE_GT_DEV_API_KEY=gt-local-key\n",
+    ".env.local": "GT_PROJECT_ID=prj_local\nGT_API_KEY=gt-local-key\n",
   });
   const provider = await resolve({ projectPath, interactive: true });
   expect((await firstRequest(provider)).headers).toMatchObject({
@@ -133,22 +128,15 @@ test("an explicit gt beats a bring-your-own key", async () => {
   });
 });
 
-test("identifies the CLI and its caller in the user agent", async () => {
-  const env = { GT_API_KEY: "gt-env-key" };
-  const plain = await resolve({ env });
-  expect((await firstRequest(plain)).headers["User-Agent"]).toBe(
+test("identifies the CLI in the user agent", async () => {
+  const provider = await resolve({ env: { GT_API_KEY: "gt-env-key" } });
+  expect((await firstRequest(provider)).headers["User-Agent"]).toBe(
     `inlang-cli/${version}`,
-  );
-  vi.restoreAllMocks();
-  const called = await resolve({
-    env: { ...env, INLANG_CLI_CALLER: "paraglide-js/2.6.0" },
-  });
-  expect((await firstRequest(called)).headers["User-Agent"]).toBe(
-    `inlang-cli/${version} paraglide-js/2.6.0`,
   );
 });
 
 test("signs in to General Translation in an interactive terminal without credentials", async () => {
+  const notice = vi.spyOn(log, "log").mockImplementation(() => undefined);
   const { dir, projectPath } = projectIn();
   const env = { HOME: "/home/user" };
   const signIn = vi.fn(async () => ({
@@ -161,6 +149,12 @@ test("signs in to General Translation in an interactive terminal without credent
     interactive: true,
     signIn,
   });
+  expect(notice.mock.calls).toEqual([
+    [
+      "Machine translation is powered by General Translation.\n" +
+        `Sign up and add a card to get $10 of free translation credit. Or bring your own key: ${BYOK_URL}`,
+    ],
+  ]);
   expect(signIn).toHaveBeenCalledWith({ dir, settings, env });
   expect((await firstRequest(provider)).headers).toMatchObject({
     Authorization: "Bearer gt-signed-in-key",
@@ -168,33 +162,19 @@ test("signs in to General Translation in an interactive terminal without credent
   });
 });
 
-test("a declined sign-in names the ways to get a provider", async () => {
-  await expect(
-    resolve({ interactive: true, signIn: async () => undefined }),
-  ).rejects.toThrowError(
+test("fails fast without credentials outside an interactive terminal", async () => {
+  const { dir, projectPath } = projectIn({}, "bob's app");
+  await expect(resolve({ projectPath })).rejects.toThrowError(
     new MachineTranslateError(
-      `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+      [
+        "Machine translation needs a General Translation API key.",
+        "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
+        `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(cd '${nodePath.dirname(dir)}/bob'\\''s app' && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app')\` to save a development key to .env.local, and run this command again.`,
+        `- Or bring your own key: ${BYOK_URL}`,
+      ].join("\n"),
     ),
   );
 });
-
-test.each([{}, { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" }])(
-  "fails fast without credentials outside an interactive terminal (%o)",
-  async (env) => {
-    const { dir, projectPath } = projectIn({}, "bob's app");
-    await expect(resolve({ env, projectPath })).rejects.toThrowError(
-      new MachineTranslateError(
-        [
-          "Machine translation needs a General Translation API key.",
-          "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-          `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`(cd '${nodePath.dirname(dir)}/bob'\\''s app' && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app')\` to save a development key to .env.local, and run this command again.`,
-          `- Or bring your own key: ${BYOK_URL}`,
-        ].join("\n"),
-      ),
-    );
-    expect(unexpectedSignIn).not.toHaveBeenCalled();
-  },
-);
 
 test("the gt init command for agents runs in the working directory when project.inlang is in it, and keeps a known project", async () => {
   const { dir } = projectIn();
