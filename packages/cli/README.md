@@ -18,7 +18,7 @@ Read the announcement: [inlang check: find missing translations and unused keys 
 
 ## Features
 
-- **Machine Translation** — Translate missing messages automatically via a free, third-party translation service by default, or with your own Google Cloud Translation or DeepL API key
+- **Machine Translation** — Translate missing messages with General Translation by default, or [bring your own key](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok)
 - **Checks** — Find missing translations, missing variables and unused messages before they ship. Exits with `1` on findings, so CI fails. See [`check`](#check)
 - **CI/CD Ready** — Run non-interactively with `--force` for pipelines
 - **Plugin System** — Supports JSON, i18next, next-intl, ICU message format, and more
@@ -74,36 +74,11 @@ Create `messages/en.json`:
 
 **3. Machine translate to other languages**
 
-By default, the CLI uses a free, third-party translation service (not owned, operated, or maintained by inlang), so you can run it without any setup:
-
 ```bash
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-Stability is not guaranteed. Provide your own API key for higher reliability and control. Use Google Translate:
-
-```bash
-export INLANG_MACHINE_TRANSLATE_PROVIDER="google"
-export INLANG_GOOGLE_TRANSLATE_API_KEY="your-google-api-key"
-```
-
-Or use DeepL:
-
-```bash
-export INLANG_MACHINE_TRANSLATE_PROVIDER="deepl"
-export INLANG_DEEPL_API_KEY="your-deepl-api-key"
-```
-
-Or use OpenAI, optionally selecting a model and reasoning effort:
-
-```bash
-export INLANG_MACHINE_TRANSLATE_PROVIDER="openai"
-export INLANG_OPENAI_API_KEY="your-openai-api-key"
-# Optional: defaults to gpt-6-luna
-export INLANG_OPENAI_MODEL="your-model"
-# Optional: supported values depend on the selected model
-export INLANG_OPENAI_REASONING_EFFORT="none"
-```
+The first run asks you to sign in to General Translation. Sign up and add a card to get $10 of free translation credit. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
@@ -195,14 +170,12 @@ The machine command is used to automate localization processes.
 
 The translate command machine translates all resources.
 
-By default, the CLI uses a free, third-party translation service that is not owned, operated, or maintained by inlang. Stability is not guaranteed. For higher reliability and control, set `INLANG_MACHINE_TRANSLATE_PROVIDER` to `google` or `deepl` and bring your own API key. See the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
-
 For many projects, coding agents can produce better translation drafts than generic machine translation because they can use surrounding product and code context. Consider using an agent-driven workflow when translation quality matters more than fully automated CI output.
 
 To initiate machine translation, run the following command:
 
 ```sh
-npx @inlang/cli machine translate
+npx @inlang/cli machine translate --project ./project.inlang
 ```
 
 **Options**
@@ -214,9 +187,29 @@ The translate command has the following options:
 - `--locale <source>`: Specifies the base locale.
 - `--targetLocales <targets...>`: Specifies the target locales as comma seperated list (e.g. sk,zh,pt-BR).
 
-When a bundle has a description, OpenAI and DeepL receive it as translation context. Other providers translate the source text without that guidance. Descriptions are preserved in the project and are never included in translated strings.
+**General Translation**
 
-The translations are performed with the configured provider (`INLANG_MACHINE_TRANSLATE_PROVIDER`). The community-operated translation service at translate.demosjarco.dev (not affiliated with inlang) is used by default; set `INLANG_GOOGLE_TRANSLATE_API_KEY`, `INLANG_DEEPL_API_KEY`, or `INLANG_OPENAI_API_KEY` to use your own provider. You can also set `DEMOSJARCO_TRANSLATE_MODEL` to pin a model for the community-operated service (and `DEMOSJARCO_TRANSLATE_ZDR=true` to request Zero Data Retention from it). If the selected provider is unavailable or throttles requests, the command fails with a non-zero exit code instead of reporting success. OpenAI Responses that are incomplete are not accepted as translations and also cause the command to fail. The translated messages are added to the respective language resources. Finally, the updated resources are written back to the file system.
+Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks you to sign in and opens General Translation in your browser. Sign up and add a card to get $10 of free translation credit. The CLI saves a development API key to `.env.local` next to `project.inlang`.
+
+Later runs read the key from `.env.local` (or `.env`) next to `project.inlang`, or from the environment. The variable names depend on your framework: `GT_API_KEY` or a prefixed `GT_DEV_API_KEY` such as `VITE_GT_DEV_API_KEY`, and `GT_PROJECT_ID` with the same prefix.
+
+- **CI:** set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com). The command never asks to sign in outside an interactive terminal; without a key, it fails right away.
+- **Coding agents:** without a key, the command fails right away and prints the steps: the user signs in with `npx gt login --no-browser`, the agent runs the printed `gt init` command to save a development key to `.env.local`, then runs `machine translate` again.
+- **Out of credit:** the command writes nothing and exits with code 1. Add a card at [dash.generaltranslation.com](https://dash.generaltranslation.com), then run it again.
+
+**Bring your own key**
+
+To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok). A bring-your-own key takes precedence when it is set; set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation anyway.
+
+The community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default, is used only with `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`. It is deprecated and will be removed in the next release.
+
+**What gets translated**
+
+When a bundle has a description, providers that support context, including General Translation, receive it as translation context. Descriptions are preserved in the project and are never included in translated strings.
+
+With a provider that supports context, plurals get every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. Each form is translated from a source form, with the plural category it needs as context. Providers without context skip messages whose target needs forms the source lacks, and list them so you can add them by hand.
+
+If the provider is unavailable, throttles requests or a translation fails, the command writes nothing and exits with code 1. Otherwise the translations are added to the respective language resources and written back to the file system. A translation that drops or changes a variable or markup tag is reverted, and the command lists it so you can translate it by hand or run again.
 
 ## `check`
 

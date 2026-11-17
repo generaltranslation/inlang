@@ -5,7 +5,7 @@ description: Set your own Google Cloud Translation, DeepL API, or OpenAI key for
 
 # Bring Your Own Translation API Key
 
-By default, the `machine translate` command uses a free, third-party translation service that is not owned, operated, or maintained by inlang. For higher reliability and control, you can bring your own Google Cloud Translation, DeepL API, or OpenAI key. Choose a provider with `INLANG_MACHINE_TRANSLATE_PROVIDER` and set the matching API key environment variable before running the command.
+By default, the `machine translate` command uses [General Translation](https://generaltranslation.com). You can bring your own Google Cloud Translation, DeepL API, or OpenAI key instead. Choose a provider with `INLANG_MACHINE_TRANSLATE_PROVIDER` and set the matching API key environment variable before running the command.
 
 For many projects, coding agents can produce better translation drafts than generic machine translation because they can use surrounding product and code context. Consider using an agent-driven workflow when translation quality matters more than fully automated CI output.
 
@@ -13,24 +13,28 @@ For many projects, coding agents can produce better translation drafts than gene
 
 Set `INLANG_MACHINE_TRANSLATE_PROVIDER` to choose the translation service:
 
-| Provider | Env var | API key env var |
-| -------- | ------- | --------------- |
-| Community-operated translation service at translate.demosjarco.dev (default) | `demosjarco` or unset (when no API key is set) | none |
-| Google Translate | `google` | `INLANG_GOOGLE_TRANSLATE_API_KEY` |
-| DeepL | `deepl` | `INLANG_DEEPL_API_KEY` |
-| OpenAI | `openai` | `INLANG_OPENAI_API_KEY` |
+| Provider                                                                        | Env var                                | API key env var                                                                             |
+| ------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| General Translation (default)                                                   | `gt` or unset (when no API key is set) | `GT_API_KEY` and `GT_PROJECT_ID`, or the development key that sign-in saves to `.env.local` |
+| Google Translate                                                                | `google`                               | `INLANG_GOOGLE_TRANSLATE_API_KEY`                                                           |
+| DeepL                                                                           | `deepl`                                | `INLANG_DEEPL_API_KEY`                                                                      |
+| OpenAI                                                                          | `openai`                               | `INLANG_OPENAI_API_KEY`                                                                     |
+| Community-operated translation service at translate.demosjarco.dev (deprecated) | `demosjarco`                           | none                                                                                        |
 
-When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set, and otherwise falls back to the community-operated translation service at translate.demosjarco.dev. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI.
+When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set, and otherwise General Translation. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI. Set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation even when one of these keys is set.
+
+DeepL and OpenAI receive bundle descriptions as translation context, and translate every plural form the target language needs with the plural category as context. Google Translate doesn't use context: it skips messages whose target language needs plural forms the source lacks, and the command lists them so you can add them by hand.
 
 ## Community-operated translation service
 
-The free service at [translate.demosjarco.dev](https://translate.demosjarco.dev) is used by default when no API key is configured. It is a community-run, third-party service — it is not owned, operated, or maintained by inlang. It requires no setup and no API key:
+The free service at [translate.demosjarco.dev](https://translate.demosjarco.dev) was the default before General Translation. It is deprecated, is used only with `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`, and will be removed in the next release. It is a community-run, third-party service — it is not owned, operated, or maintained by inlang. It requires no API key:
 
 ```bash
+export INLANG_MACHINE_TRANSLATE_PROVIDER="demosjarco"
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-Stability is not guaranteed and the service may be unavailable at any time. Provide your own API key for higher reliability and control. If the service is unreachable, throttling requests, or returns a response the CLI can't parse, the command fails with a non-zero exit code and tells you how to switch to your own provider.
+Stability is not guaranteed and the service may be unavailable at any time. If the service is unreachable, throttling requests, or returns a response the CLI can't parse, the command fails with a non-zero exit code and tells you how to switch to your own provider.
 
 You can optionally pin a specific model with `DEMOSJARCO_TRANSLATE_MODEL`. When unset, the service picks its default model.
 
@@ -38,7 +42,7 @@ You can optionally pin a specific model with `DEMOSJARCO_TRANSLATE_MODEL`. When 
 export DEMOSJARCO_TRANSLATE_MODEL="@cf/google/gemma-4-26b-a4b-it"
 ```
 
-You can also opt in to Zero Data Retention (ZDR) with `DEMOSJARCO_TRANSLATE_ZDR`. When set to `true`, the CLI asks the service to process your request without retaining any data. This applies only to the community-operated service and has no effect on the Google, DeepL, or OpenAI providers.
+You can also opt in to Zero Data Retention (ZDR) with `DEMOSJARCO_TRANSLATE_ZDR`. When set to `true`, the CLI asks the service to process your request without retaining any data. This applies only to the community-operated service and has no effect on the other providers.
 
 ```bash
 export DEMOSJARCO_TRANSLATE_ZDR="true"
