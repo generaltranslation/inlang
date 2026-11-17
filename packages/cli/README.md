@@ -78,7 +78,7 @@ Create `messages/en.json`:
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-The first run asks you to sign in to General Translation. Sign up and add a card to get $10 of free translation credit. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
+In a terminal on macOS, Windows, or Linux with a display, the first run asks you to sign in to General Translation; elsewhere, such as on a Linux server over SSH, it prints the steps to get a key. Sign up and add a card to get $10 of free translation credit. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
@@ -189,13 +189,16 @@ The translate command has the following options:
 
 **General Translation**
 
-Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks you to sign in and opens General Translation in your browser. Sign up and add a card to get $10 of free translation credit. The CLI saves a development API key to `.env.local` next to `project.inlang`.
+Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal on macOS, Windows, or Linux with a display, it asks you to sign in and opens General Translation in your browser. Sign up and add a card to get $10 of free translation credit. The CLI saves a development API key to `.env.local` next to `project.inlang`.
 
 Later runs read the key from `.env.local` (or `.env`) next to `project.inlang`, or from the environment. The variable names depend on your framework: `GT_API_KEY` or a prefixed `GT_DEV_API_KEY` such as `VITE_GT_DEV_API_KEY`, and `GT_PROJECT_ID` with the same prefix.
 
-- **CI:** set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com). The command never asks to sign in outside an interactive terminal; without a key, it fails right away.
-- **Coding agents:** without a key, the command fails right away and prints the steps: the user signs in with `npx gt login --no-browser`, the agent runs the printed `gt init` command to save a development key to `.env.local`, then runs `machine translate` again.
-- **Out of credit:** the command writes nothing and exits with code 1. Add a card at [dash.generaltranslation.com](https://dash.generaltranslation.com), then run it again.
+Anywhere else, such as in CI, on a Linux server over SSH or in a coding agent, the command never asks to sign in. Without a key, it fails right away and prints the steps:
+
+- **CI:** set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
+- **SSH and coding agents:** sign in with `npx gt login --no-browser` (an agent asks the user to), run the printed `gt init` command to save a development key to `.env.local`, then run `machine translate` again.
+
+When the free credit runs out, the command writes nothing and exits with code 1. Add a card at [dash.generaltranslation.com](https://dash.generaltranslation.com), then run it again.
 
 **Bring your own key**
 
@@ -207,9 +210,9 @@ The community-operated translation service at translate.demosjarco.dev (not affi
 
 When a bundle has a description, providers that support context, including General Translation, receive it as translation context. Descriptions are preserved in the project and are never included in translated strings.
 
-With a provider that supports context, plurals get every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. Each form is translated from a source form, with the plural category it needs as context. Providers without context skip messages whose target needs forms the source lacks, and list them so you can add them by hand.
+With a provider that supports context, plurals get every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. Forms the source doesn't have, such as `few` and `many` here, are translated from a source form, with the plural category they need as context. Providers without context skip messages whose target needs forms the source lacks, and list them so you can add them by hand.
 
-If the provider is unavailable, throttles requests or a translation fails, the command writes nothing and exits with code 1. Otherwise the translations are added to the respective language resources and written back to the file system. A translation that drops or changes a variable or markup tag is reverted, and the command lists it so you can translate it by hand or run again.
+If the provider is unavailable, throttles requests or a translation fails, the command writes nothing and exits with code 1. Otherwise the translations are added to the respective language resources and written back to the file system. A translation that drops or changes a variable or markup tag is left out, and so is the rest of a message that is new in that language. The command lists them so you can translate them by hand or run again.
 
 ## `check`
 

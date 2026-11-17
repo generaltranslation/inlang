@@ -23,7 +23,7 @@ Set `INLANG_MACHINE_TRANSLATE_PROVIDER` to choose the translation service:
 
 When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set, and otherwise General Translation. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI. Set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation even when one of these keys is set.
 
-DeepL and OpenAI receive bundle descriptions as translation context, and translate every plural form the target language needs with the plural category as context. Google Translate doesn't use context: it skips messages whose target language needs plural forms the source lacks, and the command lists them so you can add them by hand.
+DeepL and OpenAI receive bundle descriptions as translation context, and translate every plural form the target language needs, with the plural category as context for forms the source doesn't have. Google Translate doesn't use context: it skips messages whose target language needs plural forms the source lacks, and the command lists them so you can add them by hand.
 
 ## Community-operated translation service
 
