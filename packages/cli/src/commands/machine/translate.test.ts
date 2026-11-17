@@ -145,7 +145,7 @@ test("fails with a non-zero-triggering error when the fallback service is comple
   );
 });
 
-test("writes no translation when some fail", async () => {
+test("keeps the translations that came back when others fail", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
   skipRetryDelay();
   vi.stubGlobal(
@@ -183,13 +183,20 @@ test("writes no translation when some fail", async () => {
   );
 
   expect(error).toBeInstanceOf(MachineTranslateError);
-  expect((error as Error).message).toBe(SERVICE_UNAVAILABLE_ERROR);
+  expect((error as Error).message).toBe(
+    `${SERVICE_UNAVAILABLE_ERROR}\nSaved the 1 translation that came back. Run again to translate the rest.`,
+  );
+  expect((error as MachineTranslateError).translated).toBe(1);
 
-  // hello→de succeeded, but isn't written either
   const bundles = await selectBundleNested(project.db).execute();
-  for (const bundle of bundles) {
-    expect(bundle.messages.map((message) => message.locale)).toEqual(["en"]);
-  }
+  expect(
+    Object.fromEntries(
+      bundles.map((bundle) => [
+        bundle.id,
+        bundle.messages.map((message) => message.locale).sort(),
+      ]),
+    ),
+  ).toEqual({ hello: ["de", "en"], goodbye: ["en"] });
 });
 
 test.runIf(process.env.INLANG_GOOGLE_TRANSLATE_API_KEY)(
@@ -443,7 +450,7 @@ test("only the translated messages change in the translation files", async () =>
   }
 });
 
-test("writes no file when a translation fails", async () => {
+test("saves the translations that came back when one fails", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
   skipRetryDelay();
   const en = `{"alpha": "Alpha", "zeta": "Zeta"}`;
@@ -470,7 +477,45 @@ test("writes no file when a translation fails", async () => {
       MachineTranslateError,
     );
     expect(read("en")).toBe(en);
-    expect(read("de")).toBe(`{}`);
+    const de = JSON.parse(read("de"));
+    expect(de).toMatchObject({ alpha: "Alpha (de)" });
+    expect(de).not.toHaveProperty("zeta");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a bundle gets a locale only with all its translations", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  skipRetryDelay();
+  const plural = `[{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "One item", "countPlural=*": "Many items"}}]`;
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"items": ${plural}, "alpha": "Alpha"}`,
+    de: `{}`,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      if (query.get("q") === "Many items") return unavailableResponse();
+      return Response.json({
+        data: {
+          translations: [
+            { translatedText: `${query.get("q")} (${query.get("target")})` },
+          ],
+        },
+      });
+    }),
+  );
+  try {
+    await expect(translateAndSave({ project, path })).rejects.toThrow(
+      "Saved the 1 translation that came back.",
+    );
+    // "One item (de)" came back too, but without the catch-all it would
+    // match nothing
+    const de = JSON.parse(read("de"));
+    expect(de).toMatchObject({ alpha: "Alpha (de)" });
+    expect(de).not.toHaveProperty("items");
   } finally {
     await cleanup();
   }
@@ -671,12 +716,10 @@ test("at most 4 requests are in flight and none starts after a failure", async (
     // the first failure is reported
     const error = await run;
     expect(error).toBeInstanceOf(MachineTranslateError);
-    expect((error as Error).message).toBe("First failure.");
+    expect((error as Error).message).toBe(
+      "First failure.\nSaved the 3 translations that came back. Run again to translate the rest.",
+    );
     expect(pending).toHaveLength(5);
-    const bundles = await selectBundleNested(project.db).execute();
-    for (const bundle of bundles) {
-      expect(bundle.messages.map((message) => message.locale)).toEqual(["en"]);
-    }
   } finally {
     await project.close();
   }
