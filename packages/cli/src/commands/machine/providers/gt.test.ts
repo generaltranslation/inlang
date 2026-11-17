@@ -256,6 +256,31 @@ describe("createGtTranslateProvider", () => {
     });
   });
 
+  test("gives up on an answer that doesn't finish", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      status: 201,
+      ok: true,
+      json: () =>
+        Promise.reject(
+          new DOMException("The operation timed out.", "TimeoutError"),
+        ),
+    } as Response);
+
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-13",
+      userAgent: "inlang-cli/0.0.13",
+    }).translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: { greeting: { text: "Hello" } },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "General Translation didn't answer within 5 minutes.",
+    });
+  });
+
   test("reports a key with a newline without quoting it", async () => {
     const apiKey = "gtx-dev-key-newline\nGT_PROJECT_ID=prj_newline";
     // The message Node's fetch throws for this header value.
