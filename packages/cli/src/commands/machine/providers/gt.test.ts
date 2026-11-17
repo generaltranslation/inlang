@@ -120,7 +120,7 @@ describe("createGtTranslateProvider", () => {
     },
   );
 
-  test("names how many texts failed and the first reason", async () => {
+  test("names how many texts failed and the first reason, and returns the others", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(
         {
@@ -154,6 +154,8 @@ describe("createGtTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: "3 of 4 translations from en to de failed: Translation timed out",
+      // not the translation of a text that failed
+      translatedTexts: { greeting: "Hallo" },
     });
   });
 
