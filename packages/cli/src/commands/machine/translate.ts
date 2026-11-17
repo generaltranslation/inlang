@@ -52,14 +52,23 @@ export const translate = new Command()
  * Translates and writes the translation files, but only if something was
  * translated: saving still rewrites settings.json, and plugins that don't
  * keep unchanged entries reformat their files, which must not change files
- * in git.
+ * in git. Reports success only once the files are written.
  */
 export async function translateAndSave(args: {
   project: InlangProject;
   path: string;
 }) {
   const save = () =>
-    saveProjectToDirectory({ fs, path: args.path, project: args.project });
+    saveProjectToDirectory({
+      fs,
+      path: args.path,
+      project: args.project,
+    }).catch((error: unknown) => {
+      // as a message: a plugin's stack trace can hold its whole source
+      throw new MachineTranslateError(
+        `The translations couldn't be saved: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   const { translated, bundles } = await translateCommandAction(args).catch(
     async (error) => {
       if (error instanceof MachineTranslateError && error.translated > 0) {
@@ -73,6 +82,7 @@ export async function translateAndSave(args: {
   } else if (bundles > 0) {
     log.info("No translations were added, so no files were changed.");
   }
+  if (bundles > 0) log.success("Machine translate complete.");
 }
 
 /**
@@ -211,7 +221,6 @@ export async function translateCommandAction(args: {
     // A provider without context finds nothing when only plural forms it
     // can't add are missing.
     if (!provider || missing.length === 0) {
-      log.success("Machine translate complete.");
       return { translated: 0, bundles: bundles.length };
     }
     if (
@@ -290,7 +299,6 @@ export async function translateCommandAction(args: {
       }
       throw new MachineTranslateError(lines.join("\n"), translated);
     }
-    log.success("Machine translate complete.");
     return { translated, bundles: bundles.length };
   } catch (error) {
     bar?.stop();
