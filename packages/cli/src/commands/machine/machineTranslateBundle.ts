@@ -14,7 +14,6 @@ import {
   selectorGroups,
   sourceVariantFor,
   variantCovers,
-  Text,
   type BundleNested,
   type Declaration,
   type MarkupEnd,
@@ -206,7 +205,9 @@ export function planBundleTranslation(
       ));
       // an empty form is missing, like one the target doesn't have
       missingVariants(target, declarations, {
-        variants: target.variants.filter((variant) => !isEmpty(variant)),
+        variants: target.variants.filter(
+          (variant) => !isEmptyPattern(variant.pattern),
+        ),
         referenceVariants: sourceMessage.variants,
       })
         .filter(
@@ -237,7 +238,13 @@ export function planBundleTranslation(
         declarations,
       });
 
-      if (existingVariant && !isEmpty(existingVariant)) {
+      // A blank variant is missing, as `inlang check` reports it, unless its
+      // source is blank too: then a translation can't fill it.
+      if (
+        existingVariant &&
+        (!isEmptyPattern(existingVariant.pattern) ||
+          isEmptyPattern(sourceVariant.pattern))
+      ) {
         continue;
       }
 
@@ -444,16 +451,6 @@ function placeholderName(part: VariantRow["pattern"][number]): string {
   }
 }
 
-/** True when a variant has no text: its translation is missing. */
-function isEmpty(variant: VariantRow): boolean {
-  return (
-    variant.pattern.length === 0 ||
-    (variant.pattern.length === 1 &&
-      variant.pattern[0]?.type === "text" &&
-      (variant.pattern[0] as Text).value === "")
-  );
-}
-
 /**
  * The plural categories a missing form needs that no source variant of its
  * branch has. A branch is the form's values of the other selectors, or their
@@ -566,7 +563,7 @@ function missingForms(args: {
     );
     // an empty `other` can be shown instead of a filled `*` (a literal key is
     // preferred, or stored first), so it is still missing
-    const empty = covering.filter(isEmpty);
+    const empty = covering.filter((variant) => isEmptyPattern(variant.pattern));
     if (covering.length > 0 && empty.length === 0) continue;
     const sourceVariant = sourceVariantFor(
       form,
@@ -575,7 +572,12 @@ function missingForms(args: {
       args.sourceLocale,
       target.locale,
     );
-    if (!sourceVariant) continue;
+    // a blank source can't fill a blank variant
+    if (
+      !sourceVariant ||
+      (empty.length > 0 && isEmptyPattern(sourceVariant.pattern))
+    )
+      continue;
     const plurals = groups.flatMap((group) => {
       if (!group.isPlural) return [];
       const category = categoryOf({ matches: form }, group.selector);

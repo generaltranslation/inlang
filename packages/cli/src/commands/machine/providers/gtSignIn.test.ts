@@ -254,6 +254,14 @@ describe("appendToEnvLocal", () => {
     );
   });
 
+  test("adds the rule again outside a git work tree when a later line undoes it", async () => {
+    const dir = tree({ ".gitignore": ".env.local\n!.env.local\n" });
+    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
+    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
+      ".env.local\n!.env.local\n.env.local\n",
+    );
+  });
+
   test("trusts git that .env.local isn't ignored, whatever .gitignore lists", async () => {
     const dir = gitTree({ ".gitignore": ".env.local\n!.env.local\n" });
     expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
