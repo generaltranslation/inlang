@@ -161,6 +161,7 @@ describe("inlang check", { timeout: 60_000 }, () => {
     );
     expect(stdout).not.toContain("missing-translation");
     expect(stdout).not.toContain("Unsupported source format");
+    expect(stdout).not.toContain("machine translate");
     expect(stdout).toContain("2 findings\n  unused-message  2\n");
   });
 
