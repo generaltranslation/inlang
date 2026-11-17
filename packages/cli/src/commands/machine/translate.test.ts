@@ -723,7 +723,9 @@ test.each([
   {
     answer: "leaves out a text",
     translatedText: () => undefined,
-    error: 'No translation was returned for "Text 0".',
+    // the other two texts came back
+    error:
+      'No translation was returned for "Text 0".\nSaved the 2 translations that came back. Run again to translate the rest.',
   },
   {
     answer: "has a placeholder that isn't valid",
