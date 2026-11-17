@@ -13,17 +13,17 @@ For many projects, coding agents can produce better translation drafts than gene
 
 Set `INLANG_MACHINE_TRANSLATE_PROVIDER` to choose the translation service:
 
-| Provider                                                                        | Env var                                | API key env var                                                                             |
-| ------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------- |
-| General Translation (default)                                                   | `gt` or unset (when no API key is set) | `GT_API_KEY` and `GT_PROJECT_ID`, or the development key that sign-in saves to `.env.local` |
-| Google Translate                                                                | `google`                               | `INLANG_GOOGLE_TRANSLATE_API_KEY`                                                           |
-| DeepL                                                                           | `deepl`                                | `INLANG_DEEPL_API_KEY`                                                                      |
-| OpenAI                                                                          | `openai`                               | `INLANG_OPENAI_API_KEY`                                                                     |
-| Community-operated translation service at translate.demosjarco.dev (deprecated) | `demosjarco`                           | none                                                                                        |
+| Provider | Env var | API key env var |
+| -------- | ------- | --------------- |
+| General Translation (default) | `gt` or unset (when no API key is set) | `GT_API_KEY` and `GT_PROJECT_ID`, or the development key that sign-in saves to `.env.local` |
+| Google Translate | `google` | `INLANG_GOOGLE_TRANSLATE_API_KEY` |
+| DeepL | `deepl` | `INLANG_DEEPL_API_KEY` |
+| OpenAI | `openai` | `INLANG_OPENAI_API_KEY` |
+| Community-operated translation service at translate.demosjarco.dev (deprecated) | `demosjarco` | none |
 
 When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set, and otherwise General Translation. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI. Set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation even when one of these keys is set.
 
-DeepL and OpenAI receive bundle descriptions as translation context, and translate every plural form the target language needs, with the plural category as context for forms the source doesn't have. Google Translate doesn't use context: it skips messages whose target language needs plural forms the source lacks, and the command lists them so you can add them by hand.
+DeepL and OpenAI use bundle descriptions and plural forms as context; Google Translate doesn't.
 
 ## Community-operated translation service
 

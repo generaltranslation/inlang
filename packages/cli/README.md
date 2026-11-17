@@ -20,7 +20,7 @@ Read the announcement: [inlang check: find missing translations and unused keys 
 
 - **Machine Translation** — Translate missing messages with General Translation by default, or [bring your own key](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok)
 - **Checks** — Find missing translations, missing variables and unused messages before they ship. Exits with `1` on findings, so CI fails. See [`check`](#check)
-- **CI/CD Ready** — Run non-interactively with `--force` for pipelines
+- **CI/CD Ready** — Run non-interactively in pipelines
 - **Plugin System** — Supports JSON, i18next, next-intl, ICU message format, and more
 
 # Getting Started
@@ -78,7 +78,7 @@ Create `messages/en.json`:
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-In a terminal on macOS, Windows, or Linux with a display, the first run asks you to sign in to General Translation; elsewhere, such as on a Linux server over SSH, it prints the steps to get a key. Sign up and add a card to get $10 of free translation credit. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
+In a terminal, the first run asks you to sign in to General Translation. Without one, as in CI and most coding agents, or on Linux without a display, as over SSH, it prints the steps to get a key. Sign up and add a card to get $10 of free translation credit. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
@@ -122,7 +122,7 @@ If one of the commands can't be found, you probably use an outdated CLI version.
 | --------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **CLI Version** | `npx @inlang/cli@latest [command]`            | Get the latest version of the inlang CLI.                                                                                                                           |
 | **Check**       | `npx @inlang/cli check [options]`             | Check translations for missing, empty or inconsistent messages, and source code for unused messages. Exits with 1 on findings, for CI.                              |
-| **Machine**     | `npx @inlang/cli machine translate [options]` | Automate translation processes. Options include `-f, --force`, `--project <path>`, `--locale <source>` and `--targetLocales <targets...>`                           |
+| **Machine**     | `npx @inlang/cli machine translate [options]` | Automate translation processes. Options include `--project <path>`, `--locale <source>` and `--targetLocales <targets...>`                                          |
 | **Cloud**       | `npx @inlang/cli cloud`                       | See what's coming in inlang Cloud and tell us what your team needs.                                                                                                 |
 | **Plugin**      | `npx @inlang/cli plugin [command]`            | Interact with Inlang plugins, including initialization and building. `build [options]` build an inlang module. Options include `--type`, `--entry`, and `--outdir`. |
 
@@ -182,27 +182,21 @@ npx @inlang/cli machine translate --project ./project.inlang
 
 The translate command has the following options:
 
-- `-f, --force`: If this option is set, the command will not prompt confirmation. This is useful for CI/CD build pipelines. **We advise you to only use `machine translate` in build pipelines to avoid out-of-context/wrong translations.**
-- `--project <path>`: Specifies the path to the project root. The default project root is the current working directory.
+- `--project <path>`: Path to the inlang project (required).
 - `--locale <source>`: Specifies the base locale.
 - `--targetLocales <targets...>`: Specifies the target locales as comma seperated list (e.g. sk,zh,pt-BR).
 
 **General Translation**
 
-Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal on macOS, Windows, or Linux with a display, it asks you to sign in and opens General Translation in your browser. Sign up and add a card to get $10 of free translation credit. The CLI saves a development API key to `.env.local` next to `project.inlang`.
+Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks you to sign in and opens General Translation in your browser. Sign up and add a card to get $10 of free translation credit. The CLI saves a development API key to `.env.local` next to `project.inlang`.
 
-Later runs read the key from `.env.local` (or `.env`) next to `project.inlang`, or from the environment. The variable names depend on your framework: `GT_API_KEY` or a prefixed `GT_DEV_API_KEY` such as `VITE_GT_DEV_API_KEY`, and `GT_PROJECT_ID` with the same prefix.
+Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. The variable names depend on your framework: `GT_API_KEY` or a prefixed `GT_DEV_API_KEY` such as `VITE_GT_DEV_API_KEY`, and `GT_PROJECT_ID` with the same prefix.
 
-Anywhere else, such as in CI, on a Linux server over SSH or in a coding agent, the command never asks to sign in. Without a key, it fails right away and prints the steps:
-
-- **CI:** set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
-- **SSH and coding agents:** sign in with `npx gt login --no-browser` (an agent asks the user to), run the printed `gt init` command to save a development key to `.env.local`, then run `machine translate` again.
-
-When the free credit runs out, the command writes nothing and exits with code 1. Add a card at [dash.generaltranslation.com](https://dash.generaltranslation.com), then run it again.
+Without a terminal, as in CI and most coding agents, or on Linux without a display, as over SSH, the command doesn't ask. Without a key, it fails and prints the steps to get one. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
 
 **Bring your own key**
 
-To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok). A bring-your-own key takes precedence when it is set; set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation anyway.
+To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
 The community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default, is used only with `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco`. It is deprecated and will be removed in the next release.
 
@@ -210,9 +204,9 @@ The community-operated translation service at translate.demosjarco.dev (not affi
 
 When a bundle has a description, providers that support context, including General Translation, receive it as translation context. Descriptions are preserved in the project and are never included in translated strings.
 
-With a provider that supports context, plurals get every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. Forms the source doesn't have, such as `few` and `many` here, are translated from a source form, with the plural category they need as context. Providers without context skip messages whose target needs forms the source lacks, and list them so you can add them by hand.
+With a provider that supports context, a plural gets every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. Otherwise, with a provider without context or when a translation's selectors differ from the source's, messages whose target needs forms the source lacks are skipped and listed so you can add them by hand.
 
-If the provider is unavailable, throttles requests or a translation fails, the command writes nothing and exits with code 1. Otherwise the translations are added to the respective language resources and written back to the file system. A translation that drops or changes a variable or markup tag is left out, and so is the rest of a message that is new in that language. The command lists them so you can translate them by hand or run again.
+If the provider is unavailable, throttles requests or a translation fails, the command writes nothing and exits with code 1. A translation that drops or changes a variable or markup tag is left out, and so is every translation of a message new in that language. The command lists them.
 
 ## `check`
 
