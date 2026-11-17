@@ -485,6 +485,40 @@ test("saves the translations that came back when one fails", async () => {
   }
 });
 
+test("a failed save fails the run, without claiming success", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"alpha": "Alpha"}`,
+    de: `{}`,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      return Response.json({
+        data: {
+          translations: [
+            { translatedText: `${query.get("q")} (${query.get("target")})` },
+          ],
+        },
+      });
+    }),
+  );
+  const success = vi.spyOn(log, "success");
+  const de = nodePath.join(path, "../messages/de.json");
+  fs.chmodSync(de, 0o444);
+  try {
+    await expect(translateAndSave({ project, path })).rejects.toThrow(
+      /^The translations couldn't be saved: .*EACCES/,
+    );
+    expect(success).not.toHaveBeenCalled();
+    expect(read("de")).toBe(`{}`);
+  } finally {
+    fs.chmodSync(de, 0o644);
+    await cleanup();
+  }
+});
+
 test("a bundle gets a locale only with all its translations", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
   skipRetryDelay();
@@ -684,6 +718,45 @@ test("batch translations go to the variants their keys name", async () => {
   }
 });
 
+test("a blank translation is missing unless its source is blank too", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 0);
+  const withGerman = (id: string, en: string, de: string): NewBundleNested => {
+    const bundle = textBundle(id, en);
+    return {
+      ...bundle,
+      messages: [
+        ...bundle.messages,
+        {
+          id: `${id}_de`,
+          bundle_id: id,
+          locale: "de",
+          variants: [
+            {
+              id: `${id}_de`,
+              message_id: `${id}_de`,
+              pattern: [{ type: "text", value: de }],
+            },
+          ],
+        },
+      ],
+    };
+  };
+  // `inlang check` reports both as empty translations
+  await insertBundleNested(project.db, withGerman("blank", "Hello", " \n "));
+  await insertBundleNested(project.db, withGerman("both", " ", ""));
+  const { provider, calls } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(
+      calls.flatMap((call) =>
+        Object.values(call.texts).map(({ text }) => text),
+      ),
+    ).toEqual(["Hello"]);
+  } finally {
+    await project.close();
+  }
+});
+
 test("at most 4 requests are in flight and none starts after a failure", async () => {
   const project = await projectWithTextBundles(["en", "de"], 7);
   /** Settles a request in flight, successfully or not. */
@@ -752,9 +825,19 @@ test.each([
       'No translation was returned for "Text 0".\nSaved the 2 translations that came back. Run again to translate the rest.',
   },
   {
+    answer: "has a placeholder that isn't one",
+    translatedText: () => '<span class="notranslate">null</span>',
+    // the other two texts came back
+    error:
+      "SyntaxError: Not a placeholder: null\nSaved the 2 translations that came back. Run again to translate the rest.",
+  },
+  {
     answer: "has a placeholder that isn't valid",
     translatedText: () => '<span class="notranslate">{broken</span>',
-    error: expect.stringMatching(/^SyntaxError: /),
+    // the other two texts came back
+    error: expect.stringMatching(
+      /^SyntaxError: .*\nSaved the 2 translations that came back\./s,
+    ),
   },
 ])(
   "a batch answer that $answer fails the run",

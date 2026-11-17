@@ -2,7 +2,7 @@
 // order of the source message
 import { v7 as randomUUID } from "uuid";
 import {
-  Text,
+  isEmptyPattern,
   type BundleNested,
   type NewBundleNested,
   type VariantRow,
@@ -106,14 +106,12 @@ export function planBundleTranslation(
         targetMessage &&
         findMatchingVariant(targetMessage.variants, sourceVariant.matches);
 
+      // A blank variant is missing, as `inlang check` reports it, unless its
+      // source is blank too: then a translation can't fill it.
       if (
         existingVariant &&
-        !(
-          existingVariant.pattern.length === 0 ||
-          (existingVariant.pattern.length === 1 &&
-            existingVariant.pattern[0]?.type === "text" &&
-            (existingVariant.pattern[0] as Text).value === "")
-        )
+        (!isEmptyPattern(existingVariant.pattern) ||
+          isEmptyPattern(sourceVariant.pattern))
       ) {
         continue;
       }
@@ -268,20 +266,23 @@ export async function translateMissing(args: {
             ]),
           ),
         });
-        // The texts that did come back are kept, as with any failure.
-        let notReturned: string | undefined;
+        // The texts that did come back are kept, as with any failure, even
+        // when one of them is missing or isn't a valid pattern.
+        let textError: string | undefined;
         for (const [index, translation] of chunk.entries()) {
           const text = result.translatedTexts?.[String(index)];
-          if (text === undefined) notReturned ??= translation.text;
-          else translations.set(translation, deserializePattern(text));
+          if (text === undefined) {
+            textError ??= `No translation was returned for "${translation.text}".`;
+            continue;
+          }
+          try {
+            translations.set(translation, deserializePattern(text));
+          } catch (error) {
+            textError ??= String(error);
+          }
         }
         if (!result.ok) return result;
-        if (notReturned !== undefined) {
-          return {
-            ok: false,
-            error: `No translation was returned for "${notReturned}".`,
-          };
-        }
+        if (textError !== undefined) return { ok: false, error: textError };
         args.onProgress?.(chunk.length);
         return result;
       });
