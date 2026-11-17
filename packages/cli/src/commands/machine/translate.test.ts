@@ -804,6 +804,44 @@ async function insertOrphanBundle(project: InlangProject) {
   });
 }
 
+test("a failed batch keeps the texts it did translate", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 3);
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: false,
+    error: "1 of 3 translations failed: model refused",
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts)
+        .filter(([, { text }]) => text !== "Text 0")
+        .map(([key, { text }]) => [key, `${text} (de)`]),
+    ),
+  }));
+  try {
+    const thrown = await translateCommandAction({ project, provider }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(MachineTranslateError);
+    expect((thrown as Error).message).toBe(
+      "1 of 3 translations failed: model refused\nSaved the 2 translations that came back. Run again to translate the rest.",
+    );
+    const bundles = await selectBundleNested(project.db).execute();
+    expect(
+      Object.fromEntries(
+        bundles.map((bundle) => [
+          bundle.id,
+          bundle.messages.map((message) => message.locale).sort(),
+        ]),
+      ),
+    ).toEqual({
+      bundle0: ["en"],
+      bundle1: ["de", "en"],
+      bundle2: ["de", "en"],
+    });
+  } finally {
+    await project.close();
+  }
+});
+
 test("a bundle without a source message is reported when a translation fails", async () => {
   const project = await projectWithTextBundles(["en", "de"], 1);
   await insertOrphanBundle(project);
