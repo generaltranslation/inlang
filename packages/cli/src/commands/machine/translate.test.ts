@@ -1020,16 +1020,37 @@ function stubIsTTY(
   };
 }
 
-test("a run with nothing to translate needs no provider", async () => {
+test("a run with nothing to translate needs no provider and reports what it skipped", async () => {
   // would fail for the missing key if the provider were resolved
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
   vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
-  const project = await projectWithTextBundles(["en"], 1);
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  // a Russian plural of an English text, skipped instead of expanded
+  const items = textBundle("items", "Items");
+  const {
+    declarations,
+    messages: [plural],
+  } = pluralBundle("plural");
+  await insertBundleNested(project.db, {
+    ...items,
+    declarations,
+    messages: [
+      ...items.messages,
+      { ...plural!, bundle_id: "items", locale: "ru" },
+    ],
+  });
+  const warn = vi.spyOn(log, "warn");
   try {
     expect(await translateCommandAction({ project })).toEqual({
       translated: 0,
       bundles: 1,
     });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
+          "  ru (few, many): items",
+      ],
+    ]);
   } finally {
     await project.close();
   }

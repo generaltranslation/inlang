@@ -178,9 +178,10 @@ export async function translateCommandAction(args: {
 
     // Planned as if the provider uses context, as the default one does.
     // Without context, a plural that needs forms the source lacks is skipped
-    // instead of expanded and everything else is the same, so with nothing
-    // missing there is nothing to do for any provider and none is resolved:
-    // the run doesn't ask to sign in or fail for want of a key.
+    // instead of expanded, and the only forms added beyond these are ones the
+    // target never selects. So with nothing missing there is nothing worth
+    // translating and no provider is resolved: the run doesn't ask to sign
+    // in or fail for want of a key.
     let planned = planBundles(true);
     if (planned.missing.length === 0) {
       for (const warning of planned.warnings) log.warn(warning);
