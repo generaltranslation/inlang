@@ -16,9 +16,7 @@ const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
 const COMMUNITY_WARNING = [
   "Using the community-operated translation service at translate.demosjarco.dev. Stability is not guaranteed.",
   "This service is not owned, operated, or maintained by inlang.",
-  "Provide your own API key for higher reliability and control.",
-  'Set INLANG_MACHINE_TRANSLATE_PROVIDER to "google", "deepl", or "openai" and the matching API key to use your own provider.',
-  `See ${BYOK_URL}`,
+  `Provide your own API key for higher reliability and control: ${BYOK_URL}`,
 ].join("\n");
 
 type ResolveArgs = Parameters<typeof resolveMachineTranslateProvider>[0];
