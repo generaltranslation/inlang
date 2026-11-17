@@ -95,11 +95,11 @@ const signedIn: GtRun = {
 };
 
 /** Answers prompts in order and records them. */
-function fakePrompt(...answers: unknown[]) {
+function fakePrompt(answer: unknown) {
   const prompts: Array<Parameters<NonNullable<SignInArgs["prompt"]>>> = [];
   const prompt: NonNullable<SignInArgs["prompt"]> = async (...args) => {
     prompts.push(args);
-    return answers[prompts.length - 1];
+    return answer;
   };
   return { prompts, prompt };
 }
