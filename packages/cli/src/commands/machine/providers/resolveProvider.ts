@@ -8,9 +8,12 @@ import { createDemosjarcoTranslateProvider } from "./demosjarco.js";
 import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
 import {
   GT_CLI,
+  appendToEnvLocal,
   gtInitArgs,
   isSignedInToGt,
+  readEnvFiles,
   readGtCredentials,
+  shareGtProjectId,
   signInToGt,
 } from "./gtSignIn.js";
 import { createOpenAITranslateProvider } from "./openai.js";
@@ -92,7 +95,7 @@ function resolveMachineTranslateProviderName(
 
 export async function resolveMachineTranslateProvider(args: {
   env: Env;
-  /** The project.inlang path. General Translation credentials are read from, and saved to, the folder that contains it. */
+  /** The project.inlang path. General Translation credentials, and the choice made by answering No, are read from and saved to the folder that contains it. */
   projectPath: string;
   settings: ProjectSettings;
   /** Whether the user can be asked to sign in. */
@@ -100,7 +103,15 @@ export async function resolveMachineTranslateProvider(args: {
   signIn?: typeof signInToGt;
 }): Promise<AnyMachineTranslateProvider> {
   const { env } = args;
-  const providerName = resolveMachineTranslateProviderName(env);
+  // Answering No saves the choice to .env.local; the environment beats it.
+  const saved =
+    PROVIDER_ENV in env
+      ? {}
+      : await readEnvFiles(nodePath.dirname(args.projectPath));
+  const providerName = resolveMachineTranslateProviderName({
+    [PROVIDER_ENV]: saved[PROVIDER_ENV],
+    ...env,
+  });
   if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
   const dir = nodePath.dirname(args.projectPath);
@@ -121,7 +132,20 @@ export async function resolveMachineTranslateProvider(args: {
         cancel: "undefined",
       },
     );
-    if (confirmed === false) return createCommunityProvider(env);
+    if (confirmed === false) {
+      const provider = createCommunityProvider(env);
+      const addedIgnoreRule = await appendToEnvLocal(
+        dir,
+        `${PROVIDER_ENV}=demosjarco\n`,
+      );
+      log.info(
+        [
+          `Saved your choice to .env.local. To be asked again, remove ${PROVIDER_ENV} from it.`,
+          ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
+        ].join("\n"),
+      );
+      return provider;
+    }
     if (confirmed) {
       credentials = await (args.signIn ?? signInToGt)({
         dir,
@@ -137,6 +161,11 @@ export async function resolveMachineTranslateProvider(args: {
         `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
       );
     }
+  }
+  if (await shareGtProjectId(dir)) {
+    log.info(
+      "Saved the General Translation project ID to gt.config.json. Commit it so teammates use the same project.",
+    );
   }
   return createGtTranslateProvider({
     ...credentials,
@@ -162,8 +191,10 @@ async function missingGtKeyError(
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",
+      "- In a terminal: run this command directly, not through a task runner that captures its output, to sign in.",
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
       `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
+      `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,
       `- Or bring your own key: ${BYOK_URL}`,
     ].join("\n"),
   );

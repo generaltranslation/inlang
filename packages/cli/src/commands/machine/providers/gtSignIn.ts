@@ -77,7 +77,9 @@ function findCredentials(
   return { apiKey, projectId: findVariable(variables, PROJECT_ID) };
 }
 
-async function readEnvFiles(dir: string): Promise<Record<string, string>> {
+export async function readEnvFiles(
+  dir: string,
+): Promise<Record<string, string>> {
   const variables: Record<string, string> = {};
   for (const file of [".env", ".env.local"]) {
     const content = await fs
@@ -130,12 +132,9 @@ export async function signInToGt(args: {
     prompt = (message, options) => log.prompt(message, options),
     openUrl = openInBrowser,
   } = args;
-  const git = (...gitArgs: string[]) =>
-    runProcess("git", gitArgs, { cwd: dir, onStdoutLine: () => {} })
-      // Without git, the folder is no work tree.
-      .catch(() => ({ code: null }));
   if (
-    (await git("ls-files", "--error-unmatch", "--", ".env.local")).code === 0
+    (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")).code ===
+    0
   ) {
     throw new Error(
       "Can't save the General Translation key: .env.local is tracked by git. Untrack it with `git rm --cached .env.local`, then run again.",
@@ -204,17 +203,9 @@ export async function signInToGt(args: {
         "gt init finished without saving a General Translation key to .env.local.",
       );
     }
-    // Exit code 0: ignored. Outside a work tree the rule is added too, or a
-    // later `git init` would commit the key.
-    const ignored =
-      (await git("check-ignore", "-q", "--", ".env.local")).code === 0;
-    if (!ignored) {
-      await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
-    }
-    await appendToFile(
-      nodePath.join(dir, ".env.local"),
+    const addedIgnoreRule = await appendToEnvLocal(
+      dir,
       await fs.readFile(nodePath.join(cwd, ".env.local"), "utf8"),
-      { mode: 0o600 },
     );
     log.success(
       [
@@ -223,7 +214,7 @@ export async function signInToGt(args: {
         )
           ? `Created the General Translation project "${gtProjectName(dir)}" and saved a development key for it to .env.local.`
           : "Saved a General Translation development key to .env.local.",
-        ...(ignored ? [] : ["Added .env.local to .gitignore."]),
+        ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
       ].join("\n"),
     );
     return credentials;
@@ -242,6 +233,64 @@ export async function isSignedInToGt(dir: string): Promise<boolean> {
     onStdoutLine: () => {},
   }).catch(() => undefined);
   return result?.code === 0;
+}
+
+/**
+ * Appends `text` to `dir/.env.local`, which only the user can read if it is
+ * new, and resolves whether it added a `.gitignore` rule for the file first.
+ * It does unless git ignores the file: outside a work tree too, or a later
+ * `git init` would commit it.
+ */
+export async function appendToEnvLocal(
+  dir: string,
+  text: string,
+): Promise<boolean> {
+  // Exit code 0: ignored.
+  const ignored =
+    (await git(dir, "check-ignore", "-q", "--", ".env.local")).code === 0;
+  if (!ignored) {
+    await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
+  }
+  await appendToFile(nodePath.join(dir, ".env.local"), text, { mode: 0o600 });
+  return !ignored;
+}
+
+/**
+ * Copies the project ID in `dir/.env.local` to gt.config.json, unless that
+ * names a project or isn't a JSON object, and resolves whether it did.
+ * .env.local isn't shared, so a teammate's sign-in would otherwise create
+ * another project.
+ */
+export async function shareGtProjectId(dir: string): Promise<boolean> {
+  const envLocal = await fs
+    .readFile(nodePath.join(dir, ".env.local"), "utf8")
+    .catch(() => "");
+  const projectId = findVariable(parseEnvFile(envLocal), PROJECT_ID);
+  if (!projectId) return false;
+  const path = nodePath.join(dir, "gt.config.json");
+  const text = await fs.readFile(path, "utf8").catch(() => undefined);
+  const config = text === undefined ? {} : parseJson(text);
+  if (
+    typeof config !== "object" ||
+    config === null ||
+    Array.isArray(config) ||
+    config.projectId
+  ) {
+    return false;
+  }
+  await fs.writeFile(
+    path,
+    `${JSON.stringify({ ...config, projectId }, null, 2)}\n`,
+  );
+  return true;
+}
+
+function git(dir: string, ...args: string[]) {
+  return (
+    runProcess("git", args, { cwd: dir, onStdoutLine: () => {} })
+      // Without git, the folder is no work tree.
+      .catch(() => ({ code: null }))
+  );
 }
 
 /** Appends `text` to `file` on a new line, creating the file if needed. */

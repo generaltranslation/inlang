@@ -183,27 +183,29 @@ export async function translateCommandAction(args: {
     // translating and no provider is resolved: the run doesn't ask to sign
     // in or fail for want of a key.
     let planned = planBundles(true);
-    if (planned.missing.length === 0) {
-      for (const warning of planned.warnings) log.warn(warning);
+    const provider =
+      planned.missing.length === 0
+        ? undefined
+        : (args.provider ??
+          (await resolveMachineTranslateProvider({
+            env: process.env,
+            projectPath: options.project,
+            settings,
+            interactive: isInteractive({
+              // The sign-in prompt reads stdin.
+              isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+              env: process.env,
+            }),
+          })));
+    if (provider && !provider.supportsContext) planned = planBundles(false);
+    const { plans, missing } = planned;
+    for (const warning of planned.warnings) log.warn(warning);
+    // A provider without context finds nothing when only plural forms it
+    // can't add are missing.
+    if (!provider || missing.length === 0) {
       log.success("Machine translate complete.");
       return { translated: 0, bundles: bundles.length };
     }
-
-    const provider =
-      args.provider ??
-      (await resolveMachineTranslateProvider({
-        env: process.env,
-        projectPath: options.project,
-        settings,
-        interactive: isInteractive({
-          // The sign-in prompt reads stdin.
-          isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-          env: process.env,
-        }),
-      }));
-    if (!provider.supportsContext) planned = planBundles(false);
-    const { plans, missing } = planned;
-    for (const warning of planned.warnings) log.warn(warning);
     if (
       !provider.supportsContext &&
       bundles.some(

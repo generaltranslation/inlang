@@ -5,7 +5,7 @@ import os from "node:os";
 import nodePath from "node:path";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
-import { readGtCredentials, signInToGt } from "./gtSignIn.js";
+import { readGtCredentials, shareGtProjectId, signInToGt } from "./gtSignIn.js";
 
 type SignInArgs = Parameters<typeof signInToGt>[0];
 
@@ -228,6 +228,37 @@ function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
     ...args,
   });
 }
+
+describe("shareGtProjectId", () => {
+  test("adds the project ID to a gt.config.json without one", async () => {
+    const dir = tree({
+      ".env.local": ENV_LOCAL,
+      "gt.config.json": '{"defaultLocale":"en"}',
+    });
+    expect(await shareGtProjectId(dir)).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")),
+    ).toEqual({ defaultLocale: "en", projectId: "prj_1" });
+  });
+
+  test.each([
+    ["names a project", '{"projectId":"prj_other"}'],
+    ["isn't a JSON object", "[]"],
+    ["isn't JSON", "{"],
+  ])("leaves a gt.config.json that %s alone", async (_, config) => {
+    const dir = tree({ ".env.local": ENV_LOCAL, "gt.config.json": config });
+    expect(await shareGtProjectId(dir)).toBe(false);
+    expect(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")).toBe(
+      config,
+    );
+  });
+
+  test("shares no project ID from .env, which may be shared already", async () => {
+    const dir = tree({ ".env": ENV_LOCAL });
+    expect(await shareGtProjectId(dir)).toBe(false);
+    expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
+  });
+});
 
 describe("signInToGt", () => {
   test("runs gt init with the project's locales in an empty folder", async () => {

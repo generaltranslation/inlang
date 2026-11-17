@@ -21,6 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { createRequire } from "node:module";
+import progressBar from "cli-progress";
 import {
   insertBundleNested,
   loadProjectFromDirectory,
@@ -1001,8 +1002,10 @@ test.each([
             ? `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`
             : [
                 "Machine translation needs a General Translation API key.",
+                "- In a terminal: run this command directly, not through a task runner that captures its output, to sign in.",
                 "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
                 `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name ${nodePath.basename(root)} && { echo; cat .env.local; } >> ${root}/.env.local)\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
+                "- Or use the community-operated service: set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
                 `- Or bring your own key: ${BYOK_URL}`,
               ].join("\n"),
         ],
@@ -1051,6 +1054,38 @@ test("a run with nothing to translate needs no provider and reports what it skip
       translated: 0,
       bundles: 1,
     });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
+          "  ru (few, many): items",
+      ],
+    ]);
+  } finally {
+    await project.close();
+  }
+});
+
+test("a provider without context that finds nothing to translate starts no translation", async () => {
+  // Russian needs forms the English plural lacks: missing with context,
+  // skipped without.
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(project.db, {
+    ...pluralBundle("items"),
+    description: "How many items are in the cart",
+  });
+  const start = vi.spyOn(progressBar.SingleBar.prototype, "start");
+  const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const { provider, calls } = fakeBatchProvider();
+  try {
+    expect(
+      await translateCommandAction({
+        project,
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).toEqual({ translated: 0, bundles: 1 });
+    expect(start).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    // Only the skipped plural, not that descriptions aren't used.
     expect(warn.mock.calls).toEqual([
       [
         "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
