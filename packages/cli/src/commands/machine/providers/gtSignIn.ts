@@ -244,11 +244,12 @@ export async function signInToGt(args: {
     );
     log.success(
       [
-        result.completedSteps?.some((step) =>
+        ...(result.completedSteps?.some((step) =>
           step.startsWith("created project "),
         )
-          ? `Created the General Translation project "${projectName}" and saved a development key for it to .env.local.`
-          : "Saved a General Translation development key to .env.local.",
+          ? ["Created the General Translation project."]
+          : []),
+        "Saved the API key to .env.local.",
         ...(ignored ? [] : ["Added .env.local to .gitignore."]),
       ].join("\n"),
     );
