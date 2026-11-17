@@ -757,3 +757,85 @@ export function missingVariants(
 			!variants.some((variant) => variantCovers(variant, matches, declarations))
 	);
 }
+
+/**
+ * The reference variant a form of a translation (one of its
+ * {@link requiredVariants}) is translated from. The form has the reference's
+ * selectors.
+ *
+ * - Exact numbers (ICU `=0`) must match.
+ * - A plural category the reference has no variant for is translated from
+ *   its explicit `other`, or else its catch-all: Russian `few` from English
+ *   `*`. The runtime selects `other` for every number of no other category,
+ *   so the translation's catch-all comes from `other` too.
+ * - So is a category that is one number in the reference but more in the
+ *   translation: English `one` ("One file") for Russian `one` (1, 21, 31…).
+ * - The category is taken from the same branch of the other selectors:
+ *   `few · female` from `* · female`, `one · male` from `* · male` (the
+ *   runtime may show `one · *` there, but its text lacks the gender). Only when
+ *   that branch has no variant for the category does the select value fall
+ *   back to the reference's catch-all, which the runtime then shows: `few ·
+ *   male` from `* · *` when only `one · male` exists.
+ * - Variants the reference never selects in `referenceLocale` (English
+ *   `zero`) are skipped.
+ *
+ * Undefined when the reference has no such variant, such as for an exact
+ * number or a select value only the translation uses.
+ */
+export function sourceVariantFor<V extends WithMatches>(
+	target: readonly Match[],
+	reference: readonly V[],
+	declarations: readonly Declaration[] | undefined,
+	referenceLocale: string,
+	targetLocale: string
+): V | undefined {
+	const form = { matches: target };
+	const shown = reference.filter(
+		(variant) => !isUnreachableVariant(variant, declarations, referenceLocale)
+	);
+	// the selects first, so a select falls back only when no plural key of its branch matches
+	const groups = selectorGroups(
+		{
+			locale: referenceLocale,
+			selectors: target.map(({ key }) => ({
+				type: "variable-reference",
+				name: key,
+			})),
+		},
+		declarations,
+		{ variants: [form], referenceVariants: shown }
+	).sort((a, b) => Number(a.isPlural) - Number(b.isPlural));
+	// per group, the reference keys that stand in for the form's key, best first
+	let candidates: string[][] = [[]];
+	for (const group of groups) {
+		const key = group.keyOf(form);
+		// the reference's text for one number may spell it out ("One file")
+		const spelledOut =
+			isSingleNumberCategory(
+				group.selector,
+				declarations,
+				referenceLocale,
+				key
+			) &&
+			!isSingleNumberCategory(group.selector, declarations, targetLocale, key);
+		const keys = !group.isPlural
+			? shown.some((variant) => group.keyOf(variant) === key)
+				? [key, "*"]
+				: [key]
+			: isNumericKey(key)
+				? [key]
+				: key === "*" || spelledOut
+					? ["other", "*"]
+					: [key, "other", "*"];
+		candidates = candidates.flatMap((candidate) =>
+			keys.map((value) => [...candidate, value])
+		);
+	}
+	for (const keys of candidates) {
+		const variant = shown.find((variant) =>
+			groups.every((group, index) => group.keyOf(variant) === keys[index])
+		);
+		if (variant) return variant;
+	}
+	return undefined;
+}

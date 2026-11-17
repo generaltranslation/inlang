@@ -5,6 +5,7 @@ import {
 	isPluralSelector,
 	matchValue,
 	missingVariants,
+	pluralExamples,
 	pluralRules,
 	selectorGroups,
 } from "@inlang/sdk/browser";
@@ -12,7 +13,6 @@ import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { tokens } from "../../styling/tokens.js";
 import type { Match } from "../../helper/declarations.js";
-import { pluralExamples } from "../../helper/pluralExamples.js";
 import { languageName } from "../../helper/languageName.js";
 import patternToString from "../../helper/patternToString.js";
 import "../pattern-view/inlang-pattern-view.js";
