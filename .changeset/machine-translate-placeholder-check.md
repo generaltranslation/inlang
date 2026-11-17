@@ -2,4 +2,4 @@
 "@inlang/cli": patch
 ---
 
-`inlang machine translate` no longer writes a translation that dropped or changed a variable or markup tag of the source, such as a translated `{count}` or a missing `<link>`, and doesn't create a new message that would have one. It reports them by locale with their bundle ids.
+`inlang machine translate` no longer writes a translation that came back empty, or with a variable or markup tag of the source dropped, added or changed, such as a translated `{count}`, another `currency` option or a missing `</link>`, and doesn't create a new message that would have one. It saves the other translations, lists the rejected ones by locale with their bundle ids and why, and exits with 1.

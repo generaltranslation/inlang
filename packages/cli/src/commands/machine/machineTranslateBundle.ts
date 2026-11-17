@@ -1,8 +1,9 @@
 // uuid v7: variants are ordered by id, so the translated variants keep the
 // order of the source message
+import { isDeepStrictEqual } from "node:util";
 import { v7 as randomUUID } from "uuid";
 import {
-  checkTranslation,
+  isEmptyPattern,
   isPluralSelector,
   matchValue,
   missingVariants,
@@ -13,6 +14,8 @@ import {
   Text,
   type BundleNested,
   type Declaration,
+  type MarkupEnd,
+  type MarkupStart,
   type NewBundleNested,
   type VariantRow,
 } from "@inlang/sdk";
@@ -78,9 +81,8 @@ export type BundleTranslationPlan = PluralReport & {
   missing: MissingTranslation[];
   /**
    * Adds the translation of each of `missing` that `translations` has to a
-   * copy of the bundle, except those that dropped or changed a placeholder
-   * (see `brokenPlaceholders`), and every translation of a new message that
-   * has one of them.
+   * copy of the bundle, except those it rejects (see `rejectionReasons`),
+   * and every translation of a new message that has one of them.
    */
   apply: (
     translations: Map<MissingTranslation, VariantRow["pattern"]>,
@@ -96,11 +98,11 @@ type TranslatedBundle = {
    */
   replacedVariantIds?: string[];
   /**
-   * Translations left out because they dropped or changed a variable or
-   * markup of the source, with those placeholders (`{count}`, `<b>`), and
-   * the other translations of a new message that had one of them.
+   * Translations left out, with why (see `rejectionReasons`), and the other
+   * translations of a new message that has one of them, with no reason of
+   * their own.
    */
-  reverted: Array<{ locale: string; placeholders: string[] }>;
+  rejected: Array<{ locale: string; reasons: string[] }>;
 };
 
 /**
@@ -207,111 +209,24 @@ export function planBundleTranslation(
     }
   }
 
-  /**
-   * Adds `translations` to a copy of the bundle, except those in `skip`, and
-   * returns the variants it wrote by id.
-   */
-  const write = (
-    translations: Map<MissingTranslation, VariantRow["pattern"]>,
-    skip?: Set<MissingTranslation>,
-  ) => {
-    const copy = structuredClone(args.bundle);
-    const sourceMessage = copy.messages.find(
-      (message) => message.locale === args.sourceLocale,
-    )!;
-    /** variants added to messages that existed, by message */
-    const addedVariants = new Map<
-      BundleNested["messages"][number],
-      Set<VariantRow>
-    >();
-    const written = new Map<VariantRow, MissingTranslation>();
-
-    for (const translation of missing) {
-      const pattern = translations.get(translation);
-      if (!pattern || skip?.has(translation)) continue;
-      const { sourceVariant, targetLocale } = translation;
-      const targetMessage = copy.messages.find(
-        (message) => message.locale === targetLocale,
-      );
-
-      if (targetMessage) {
-        const existingVariant = findMatchingVariant({
-          variants: targetMessage.variants,
-          matches: sourceVariant.matches,
-          sourceVariants: sourceMessage.variants,
-          declarations: copy.declarations,
-        });
-
-        // only an empty variant is missing a translation
-        if (existingVariant) {
-          existingVariant.pattern = pattern;
-          written.set(existingVariant, translation);
-        } else {
-          const variant = {
-            id: randomUUID(),
-            message_id: targetMessage.id,
-            matches: sourceVariant.matches,
-            pattern,
-          } satisfies VariantRow;
-          targetMessage.variants.push(variant);
-          written.set(variant, translation);
-          const added = addedVariants.get(targetMessage) ?? new Set();
-          added.add(variant);
-          addedVariants.set(targetMessage, added);
-        }
-      } else {
-        const newMessageId = randomUUID();
-        const variant = {
-          id: randomUUID(),
-          message_id: newMessageId,
-          matches: sourceVariant.matches,
-          pattern,
-        } satisfies VariantRow;
-        copy.messages.push({
-          ...sourceMessage,
-          id: newMessageId,
-          locale: targetLocale,
-          variants: [variant],
-        });
-        written.set(variant, translation);
-      }
-    }
-
-    const replacedVariantIds: string[] = [];
-    for (const [message, added] of addedVariants) {
-      replacedVariantIds.push(
-        ...orderLikeSource(
-          message,
-          sourceMessage.variants,
-          added,
-          copy.declarations,
-        ),
-      );
-    }
-    return {
-      bundle:
-        replacedVariantIds.length > 0
-          ? { data: copy, replacedVariantIds }
-          : { data: copy },
-      // by id once ordered: ordering gives variants new ids
-      written: new Map(
-        [...written].map(([variant, translation]) => [variant.id, translation]),
-      ),
-    };
-  };
-
   return {
     ...report,
     missing,
     apply: (translations) => {
-      const first = write(translations);
-      const broken = brokenPlaceholders(first.bundle.data, first.written);
+      const reasons = new Map<MissingTranslation, string[]>();
+      for (const [translation, pattern] of translations) {
+        const found = rejectionReasons(
+          pattern,
+          translation.sourceVariant.pattern,
+        );
+        if (found.length > 0) reasons.set(translation, found);
+      }
       // a new message missing a form can match nothing and show the bundle
       // id, while for a missing message the runtime falls back to another
       // locale
-      const brokenNewMessages = new Set(
-        [...broken.keys()]
-          .map((id) => first.written.get(id)!.targetLocale)
+      const rejectedNewMessages = new Set(
+        [...reasons.keys()]
+          .map((translation) => translation.targetLocale)
           .filter(
             (locale) =>
               !args.bundle.messages.some(
@@ -319,24 +234,89 @@ export function planBundleTranslation(
               ),
           ),
       );
-      const reverted = [...first.written].filter(
-        ([id, translation]) =>
-          broken.has(id) || brokenNewMessages.has(translation.targetLocale),
+      const rejected = missing.filter(
+        (translation) =>
+          translations.has(translation) &&
+          (reasons.has(translation) ||
+            rejectedNewMessages.has(translation.targetLocale)),
       );
-      if (reverted.length === 0) {
-        return { ...first.bundle, reverted: [] };
+
+      const copy = structuredClone(args.bundle);
+      const sourceMessage = copy.messages.find(
+        (message) => message.locale === args.sourceLocale,
+      )!;
+      /** variants added to messages that existed, by message */
+      const addedVariants = new Map<
+        BundleNested["messages"][number],
+        Set<VariantRow>
+      >();
+
+      for (const translation of missing) {
+        const pattern = translations.get(translation);
+        if (!pattern || rejected.includes(translation)) continue;
+        const { sourceVariant, targetLocale } = translation;
+        const targetMessage = copy.messages.find(
+          (message) => message.locale === targetLocale,
+        );
+
+        if (targetMessage) {
+          const existingVariant = findMatchingVariant({
+            variants: targetMessage.variants,
+            matches: sourceVariant.matches,
+            sourceVariants: sourceMessage.variants,
+            declarations: copy.declarations,
+          });
+
+          // only an empty variant is missing a translation
+          if (existingVariant) {
+            existingVariant.pattern = pattern;
+          } else {
+            const variant = {
+              id: randomUUID(),
+              message_id: targetMessage.id,
+              matches: sourceVariant.matches,
+              pattern,
+            } satisfies VariantRow;
+            targetMessage.variants.push(variant);
+            const added = addedVariants.get(targetMessage) ?? new Set();
+            added.add(variant);
+            addedVariants.set(targetMessage, added);
+          }
+        } else {
+          const newMessageId = randomUUID();
+          copy.messages.push({
+            ...sourceMessage,
+            id: newMessageId,
+            locale: targetLocale,
+            variants: [
+              {
+                id: randomUUID(),
+                message_id: newMessageId,
+                matches: sourceVariant.matches,
+                pattern,
+              } satisfies VariantRow,
+            ],
+          });
+        }
       }
-      // checks are per variant, so leaving a translation out changes no
-      // other's
-      const second = write(
-        translations,
-        new Set(reverted.map(([, translation]) => translation)),
-      );
+
+      const replacedVariantIds: string[] = [];
+      for (const [message, added] of addedVariants) {
+        replacedVariantIds.push(
+          ...orderLikeSource(
+            message,
+            sourceMessage.variants,
+            added,
+            copy.declarations,
+          ),
+        );
+      }
       return {
-        ...second.bundle,
-        reverted: reverted.map(([id, translation]) => ({
+        data: copy,
+        ...(replacedVariantIds.length > 0 ? { replacedVariantIds } : {}),
+        rejected: rejected.map((translation) => ({
           locale: translation.targetLocale,
-          placeholders: broken.get(id) ?? [],
+          reasons: reasons.get(translation) ?? [],
         })),
       };
     },
@@ -344,38 +324,81 @@ export function planBundleTranslation(
 }
 
 /**
- * The placeholders (`{count}`, `<b>`) each translated variant dropped or
- * changed, by variant id, compared with only the source variant it was
- * translated from: an issue that source variant has too (an English `one`
- * without `{count}`, checked as French `one` for 0 and 1) doesn't count.
+ * Why a translation can't be written, compared with the variant it was
+ * translated from: `empty`, or the placeholders (`{count}`, `</b>`) it
+ * dropped, added or changed, and its markup that doesn't nest where the
+ * source's does. Placeholders may move: word order differs between languages.
+ * A provider gets each placeholder as JSON, which a model can change: another
+ * `currency` option, a lost `</b>`.
  */
-function brokenPlaceholders(
-  bundle: BundleNested,
-  /** variant ids, with the translation each holds */
-  translated: Map<string, MissingTranslation>,
-): Map<string, string[]> {
-  const broken = new Map<string, string[]>();
-  for (const message of bundle.messages) {
-    for (const variant of message.variants) {
-      const translation = translated.get(variant.id);
-      if (!translation) continue;
-      const placeholders = checkTranslation({
-        // in the target's locale: the SDK ignores variants a locale never
-        // shows, and Latvian shows the `zero` English never does
-        reference: { ...message, variants: [translation.sourceVariant] },
-        target: { ...message, variants: [variant] },
-        declarations: bundle.declarations,
-      }).flatMap((issue) =>
-        issue.type === "missing-variable" || issue.type === "unknown-variable"
-          ? [`{${issue.name}}`]
-          : issue.type === "missing-markup"
-            ? [`<${issue.name}>`]
-            : [],
-      );
-      if (placeholders.length > 0) broken.set(variant.id, placeholders);
+function rejectionReasons(
+  pattern: VariantRow["pattern"],
+  source: VariantRow["pattern"],
+): string[] {
+  if (isEmptyPattern(pattern) && !isEmptyPattern(source)) return ["empty"];
+  const placeholders = pattern.filter((part) => part.type !== "text");
+  const sourcePlaceholders = source.filter((part) => part.type !== "text");
+  const changed = [
+    ...without(sourcePlaceholders, placeholders),
+    ...without(placeholders, sourcePlaceholders),
+  ];
+  // a changed placeholder says enough, while markup that only moved can
+  // still nest wrongly
+  const wrong =
+    changed.length > 0 ? changed : without(unnested(pattern), unnested(source));
+  return [...new Set(wrong.map(placeholderName))];
+}
+
+/**
+ * `parts` without one equal part, whatever its key order, for each part of
+ * `others`.
+ */
+function without(
+  parts: VariantRow["pattern"],
+  others: VariantRow["pattern"],
+): VariantRow["pattern"] {
+  const left = [...others];
+  return parts.filter((part) => {
+    const index = left.findIndex((other) => isDeepStrictEqual(part, other));
+    if (index !== -1) left.splice(index, 1);
+    return index === -1;
+  });
+}
+
+/**
+ * The markup of a pattern that doesn't nest: each end that doesn't close the
+ * latest open start, which must have its name, and the starts left open.
+ */
+function unnested(pattern: VariantRow["pattern"]): VariantRow["pattern"] {
+  const open: MarkupStart[] = [];
+  const stray: MarkupEnd[] = [];
+  for (const part of pattern) {
+    if (part.type === "markup-start") {
+      open.push(part);
+    } else if (part.type === "markup-end") {
+      if (open.at(-1)?.name === part.name) open.pop();
+      else stray.push(part);
     }
   }
-  return broken;
+  return [...stray, ...open];
+}
+
+/** A placeholder as the user writes it: `{count}`, `<b>`, `</b>`, `<br/>`. */
+function placeholderName(part: VariantRow["pattern"][number]): string {
+  switch (part.type) {
+    case "expression":
+      return part.arg.type === "variable-reference"
+        ? `{${part.arg.name}}`
+        : `{|${part.arg.value}|}`;
+    case "markup-start":
+      return `<${part.name}>`;
+    case "markup-end":
+      return `</${part.name}>`;
+    case "markup-standalone":
+      return `<${part.name}/>`;
+    case "text":
+      return part.value;
+  }
 }
 
 /** True when a variant has no text: its translation is missing. */
