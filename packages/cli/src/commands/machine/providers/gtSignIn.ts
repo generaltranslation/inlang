@@ -45,7 +45,8 @@ type InitResult = {
  * paired with a project ID from a file.
  *
  * `gt init` names the variables after the framework: `GT_API_KEY` for
- * Next.js, `<prefix>GT_DEV_API_KEY` (e.g. `VITE_`) otherwise.
+ * Next.js, `<prefix>GT_DEV_API_KEY` (e.g. `VITE_`) otherwise, and the project
+ * ID `<prefix>GT_PROJECT_ID` with the key's prefix.
  */
 export async function readGtCredentials(args: {
   env: Record<string, string | undefined>;
@@ -56,7 +57,8 @@ export async function readGtCredentials(args: {
   );
 }
 
-const API_KEY = /^GT_API_KEY$|(^|_)GT_DEV_API_KEY$/;
+/** The key's prefix is group 1. */
+const API_KEY = /^(?:GT_API_KEY|((?:\w*_)?)GT_DEV_API_KEY)$/;
 const PROJECT_ID = /(^|_)GT_PROJECT_ID$/;
 
 function findVariable(
@@ -71,9 +73,17 @@ function findVariable(
 function findCredentials(
   variables: Record<string, string | undefined>,
 ): GtCredentials | undefined {
-  const apiKey = findVariable(variables, API_KEY);
-  if (!apiKey) return undefined;
-  return { apiKey, projectId: findVariable(variables, PROJECT_ID) };
+  for (const [name, apiKey] of Object.entries(variables)) {
+    const match = API_KEY.exec(name);
+    if (!match || !apiKey) continue;
+    // A project ID of another prefix belongs to another key, such as the
+    // server's `GT_PROJECT_ID` next to a client's `VITE_GT_DEV_API_KEY`.
+    return {
+      apiKey,
+      projectId: variables[`${match[1] ?? ""}GT_PROJECT_ID`] || undefined,
+    };
+  }
+  return undefined;
 }
 
 async function readEnvFiles(dir: string): Promise<Record<string, string>> {
