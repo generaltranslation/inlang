@@ -89,18 +89,17 @@ export async function checkCommandAction(
       locales,
       source: options.source,
     });
-    if (options.format === "json") process.stdout.write(formatJson(report));
-    else {
+    process.stdout.write(
+      options.format === "json"
+        ? formatJson(report)
+        : formatText(report, {
+            color: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
+          }),
+    );
+    if (options.format !== "json" && hasMissingTranslations(report))
       process.stdout.write(
-        formatText(report, {
-          color: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
-        }),
+        `\nTranslate what's missing with inlang machine translate --project ${options.project}\n`,
       );
-      if (hasMissingTranslations(report))
-        process.stdout.write(
-          `\nTranslate what's missing with \`npx @inlang/cli machine translate --project ${options.project}\`.\n`,
-        );
-    }
     if (hasFindings(report) && options.fail !== false) {
       if (options.format !== "json")
         log.info("Add --no-fail to exit with 0 despite findings.");

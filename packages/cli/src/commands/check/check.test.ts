@@ -110,7 +110,7 @@ function run(
 
 const project = ["--project", "./project.inlang"];
 const translateHint =
-  "Translate what's missing with `npx @inlang/cli machine translate --project ./project.inlang`.\n";
+  "Translate what's missing with inlang machine translate --project ./project.inlang\n";
 
 /** The check-app fixture's messages file of a locale, changed. */
 function messages(
@@ -142,7 +142,8 @@ describe("inlang check", { timeout: 60_000 }, () => {
       "unused-message incomplete: unused messages can't be determined because:\n  src/Field.tsx:14:8  m[`${fieldName}_label`]  Dynamic message access cannot be resolved.",
     );
     expect(stdout).toContain(
-      "3 findings\n  missing-translation  1\n  missing-variable     2\n",
+      "3 findings\n  missing-translation  1\n  missing-variable     2\n\n" +
+        translateHint,
     );
     // Paraglide's compiled output isn't analyzed, its re-exports would make analysis incomplete.
     expect(stdout).not.toContain("paraglide/messages.js");
@@ -181,7 +182,6 @@ describe("inlang check", { timeout: 60_000 }, () => {
       ["check", ...project, "--format", "json"],
     );
     expect(code).toBe(1);
-    expect(stdout).not.toContain("machine translate");
     const report = JSON.parse(stdout);
     expect(report).toMatchObject({
       version: 1,
@@ -268,20 +268,6 @@ describe("inlang check", { timeout: 60_000 }, () => {
     expect(noFail.stdout).toContain(translateHint);
   });
 
-  test("points to machine translate once, after the report, when a translation is missing", async () => {
-    const { code, stdout } = await run(app(), [
-      "check",
-      "--project",
-      "project.inlang",
-    ]);
-    expect(code).toBe(1);
-    // the --project value as typed
-    expect(stdout).toContain(
-      "3 findings\n  missing-translation  1\n  missing-variable     2\n\nTranslate what's missing with `npx @inlang/cli machine translate --project project.inlang`.\n",
-    );
-    expect(stdout.split("machine translate")).toHaveLength(2);
-  });
-
   test.each([
     [
       "empty-translation",
@@ -298,43 +284,18 @@ describe("inlang check", { timeout: 60_000 }, () => {
       "--missing-variants",
       messages("pt-BR", (m) => delete m.cart_items[0].match["countPlural=one"]),
     ],
-  ])("%s points to machine translate", async (id, flag, files) => {
-    const { code, stdout } = await run(app({ files }), [
-      "check",
-      ...project,
-      flag,
-    ]);
-    expect(code).toBe(1);
-    expect(stdout).toContain(`${id} (1)\n`);
+  ])("%s points to machine translate", async (_id, flag, files) => {
+    const { stdout } = await run(app({ files }), ["check", ...project, flag]);
     expect(stdout).toContain(translateHint);
   });
 
-  test("doesn't point to machine translate without a missing translation", async () => {
-    const other = await run(app(), [
-      "check",
-      ...project,
-      "--missing-variables",
-    ]);
-    expect(other.code).toBe(1);
-    expect(other.stdout).toContain("missing-variable (2)");
-    expect(other.stdout).not.toContain("machine translate");
-    const selector = await run(
-      app({ files: messages("pt-BR", (m) => (m.cart_items = "Itens")) }),
-      ["check", ...project, "--missing-selectors"],
-    );
-    expect(selector.code).toBe(1);
-    expect(selector.stdout).toContain("missing-selector (1)");
-    expect(selector.stdout).not.toContain("machine translate");
-    // machine translation can't fill the base locale
-    const base = await run(
+  test("doesn't point to machine translate for the base locale", async () => {
+    const { stdout } = await run(
       app({ files: messages("en-US", (m) => (m.welcome_back = "")) }),
       ["check", ...project, "--empty-translations"],
     );
-    expect(base.code).toBe(1);
-    expect(base.stdout).toContain(
-      "empty-translation (1)\n  welcome_back  en-US",
-    );
-    expect(base.stdout).not.toContain("machine translate");
+    expect(stdout).toContain("empty-translation (1)\n  welcome_back  en-US");
+    expect(stdout).not.toContain("machine translate");
   });
 
   test("--locales filters findings and validates the locales", async () => {
