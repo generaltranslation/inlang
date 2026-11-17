@@ -262,6 +262,19 @@ describe("appendToEnvLocal", () => {
     );
   });
 
+  test.each([" .env.local\n", "\\.env.local\n"])(
+    "outside a git work tree, adds the rule when the last line only looks like it (%j)",
+    async (gitignore) => {
+      const dir = tree({ ".gitignore": gitignore });
+      expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
+    },
+  );
+
+  test("outside a git work tree, a last rule with trailing spaces holds", async () => {
+    const dir = tree({ ".gitignore": ".env.local  \n" });
+    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(false);
+  });
+
   test("trusts git that .env.local isn't ignored, whatever .gitignore lists", async () => {
     const dir = gitTree({ ".gitignore": ".env.local\n!.env.local\n" });
     expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
