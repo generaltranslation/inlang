@@ -540,8 +540,8 @@ function missingForms(args: {
     const covering = target.variants.filter((variant) =>
       variantCovers(variant, form, declarations),
     );
-    // the runtime shows the first variant that matches, so an empty `other`
-    // before a filled `*` would show nothing
+    // an empty `other` can be shown instead of a filled `*` (a literal key is
+    // preferred, or stored first), so it is still missing
     const empty = covering.filter(isEmpty);
     if (covering.length > 0 && empty.length === 0) continue;
     const sourceVariant = sourceVariantFor(

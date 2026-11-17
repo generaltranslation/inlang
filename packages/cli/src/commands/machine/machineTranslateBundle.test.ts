@@ -358,8 +358,9 @@ async function translate(
 
 /**
  * Fails if a variant with a new id (added, or moved by `orderLikeSource`)
- * can never show: the runtime selects the first variant whose every key is
- * the input's or a catch-all.
+ * can never show: a consumer that reads variants in stored order (Paraglide
+ * before 2.27) selects the first variant whose every key is the input's or a
+ * catch-all.
  */
 function expectReachable(before: BundleNested, after: NewBundleNested) {
   const ids = new Set(
