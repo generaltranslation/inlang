@@ -45,8 +45,8 @@ export const translate = new Command()
   });
 
 /**
- * Thrown when a translation failed. The message is for the user as is.
- * `translated` translations came back before the failure and were added to
+ * Thrown when a translation failed or was rejected. The message is for the
+ * user as is. `translated` translations came back intact and were added to
  * the project.
  */
 export class MachineTranslateError extends Error {
@@ -93,8 +93,9 @@ export async function translateAndSave(args: {
  * When a translation fails, it still adds those that came back, so that the
  * next run doesn't pay for them again, and throws a `MachineTranslateError`
  * with their number. A bundle gets a locale only with all its translations:
- * half a plural would match nothing. A translation that dropped or changed a
- * placeholder isn't added (see `planBundleTranslation`) and is reported.
+ * half a plural would match nothing. A translation that came back empty or
+ * with a placeholder dropped or changed isn't added (see
+ * `planBundleTranslation`), and the run throws too.
  */
 export async function translateCommandAction(args: {
   project: InlangProject;
@@ -187,9 +188,8 @@ export async function translateCommandAction(args: {
     });
     bar?.stop();
 
-    /** bundle ids with reverted translations, by locale */
-    const revertedIds = new Map<string, Set<string>>();
-    const revertedPlaceholders = new Set<string>();
+    /** why translations were rejected, by bundle id, by locale */
+    const rejected = new Map<string, Map<string, Set<string>>>();
     let translated = 0;
     for (const plan of plans) {
       const failedLocales = new Set(
@@ -218,27 +218,15 @@ export async function translateCommandAction(args: {
           .where("id", "in", bundle.replacedVariantIds)
           .execute();
       }
-      for (const { locale, placeholders } of bundle.reverted) {
-        revertedIds.set(
-          locale,
-          (revertedIds.get(locale) ?? new Set()).add(bundle.data.id!),
-        );
-        for (const placeholder of placeholders) {
-          revertedPlaceholders.add(placeholder);
-        }
+      for (const { locale, reasons } of bundle.rejected) {
+        const byId = rejected.get(locale) ?? new Map<string, Set<string>>();
+        const bundleReasons = byId.get(bundle.data.id!) ?? new Set();
+        for (const reason of reasons) bundleReasons.add(reason);
+        rejected.set(locale, byId.set(bundle.data.id!, bundleReasons));
         translated--;
       }
     }
-    if (revertedIds.size > 0) {
-      log.warn(
-        [
-          `Some translations were reverted: they dropped or changed a placeholder (${[...revertedPlaceholders].join(", ")}). Translate them by hand, or run again.`,
-          ...[...revertedIds].map(
-            ([locale, ids]) => `  ${locale}: ${[...ids].join(", ")}`,
-          ),
-        ].join("\n"),
-      );
-    }
+
     if (skipped.size > 0) {
       log.warn(
         [
@@ -255,13 +243,23 @@ export async function translateCommandAction(args: {
         `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
       );
     }
-    if (!result.ok) {
-      throw new MachineTranslateError(
-        translated > 0
-          ? `${result.error}\nSaved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back. Run again to translate the rest.`
-          : result.error,
-        translated,
-      );
+    if (!result.ok || rejected.size > 0) {
+      const lines = result.ok ? [] : [result.error];
+      if (rejected.size > 0) {
+        lines.push(
+          "Some translations came back empty or with a placeholder dropped or changed, so they weren't saved:",
+          ...[...rejected].map(
+            ([locale, byId]) =>
+              `  ${locale}: ${[...byId].map(([id, reasons]) => `${id} (${[...reasons].join(", ")})`).join(", ")}`,
+          ),
+        );
+      }
+      if (translated > 0) {
+        lines.push(
+          `Saved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back${rejected.size > 0 ? " intact" : ""}. Run again to translate the rest.`,
+        );
+      }
+      throw new MachineTranslateError(lines.join("\n"), translated);
     }
     log.success("Machine translate complete.");
     return { translated, bundles: bundles.length };
