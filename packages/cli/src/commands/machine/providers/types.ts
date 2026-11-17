@@ -22,10 +22,10 @@ export type TranslateBatchArgs = {
   texts: Record<string, { text: string; context?: string }>;
 };
 
-/** Fails as a whole if any text of the batch failed. */
+/** Fails if any text of the batch failed, with the texts it did translate. */
 export type TranslateBatchResult =
   | { ok: true; translatedTexts: Record<string, string> }
-  | TranslateFailure;
+  | (TranslateFailure & { translatedTexts?: Record<string, string> });
 
 export type MachineTranslateProvider = {
   /** Whether this provider uses translator guidance. */
