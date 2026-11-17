@@ -253,7 +253,8 @@ export async function appendToEnvLocal(
     .filter((line) => line.trim())
     .at(-1);
   const ignored =
-    code === 0 || (code !== 1 && lastLine?.trim() === ".env.local");
+    // git ignores trailing spaces, but leading ones are part of the pattern
+    code === 0 || (code !== 1 && lastLine?.trimEnd() === ".env.local");
   if (!ignored) {
     await appendToFile(gitignore, ".env.local\n");
   }
