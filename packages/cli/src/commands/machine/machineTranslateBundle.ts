@@ -84,9 +84,10 @@ type PluralReport = {
 export type BundleTranslationPlan = PluralReport & {
   missing: MissingTranslation[];
   /**
-   * Adds a translation for each of `missing` to a copy of the bundle, except
-   * those that dropped or changed a placeholder (see `brokenPlaceholders`),
-   * and every translation of a new message that has one of them.
+   * Adds the translation of each of `missing` that `translations` has to a
+   * copy of the bundle, except those that dropped or changed a placeholder
+   * (see `brokenPlaceholders`), and every translation of a new message that
+   * has one of them.
    */
   apply: (
     translations: Map<MissingTranslation, VariantRow["pattern"]>,
@@ -271,8 +272,8 @@ export function planBundleTranslation(
     const written = new Map<VariantRow, MissingTranslation>();
 
     for (const translation of missing) {
-      if (skip?.has(translation)) continue;
-      const pattern = translations.get(translation)!;
+      const pattern = translations.get(translation);
+      if (!pattern || skip?.has(translation)) continue;
       const { matches, targetLocale } = translation;
       const targetMessage = copy.messages.find(
         (message) => message.locale === targetLocale,
@@ -626,7 +627,8 @@ function categoryOf(variant: Pick<VariantRow, "matches">, selector: string) {
  * one request per text.
  *
  * Stops starting requests at the first failure, returned or thrown, and
- * returns it once the requests in flight have settled.
+ * returns it once the requests in flight have settled, with the translations
+ * that came back.
  */
 export async function translateMissing(args: {
   provider: AnyMachineTranslateProvider;
@@ -635,8 +637,9 @@ export async function translateMissing(args: {
   /** Called with the number of texts each successful request translated. */
   onProgress?: (translated: number) => void;
 }): Promise<
-  | { ok: true; translations: Map<MissingTranslation, VariantRow["pattern"]> }
-  | TranslateFailure
+  ({ ok: true } | TranslateFailure) & {
+    translations: Map<MissingTranslation, VariantRow["pattern"]>;
+  }
 > {
   const { provider, sourceLocale } = args;
   const batched = "translateBatch" in provider;
@@ -716,7 +719,7 @@ export async function translateMissing(args: {
   await Promise.all(
     Array.from({ length: MAX_CONCURRENT_REQUESTS }, () => worker()),
   );
-  return failure ?? { ok: true, translations };
+  return { ...(failure ?? { ok: true }), translations };
 }
 
 const UUID_V7 =
