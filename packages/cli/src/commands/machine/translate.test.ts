@@ -855,6 +855,8 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
   }
   const warn = vi.spyOn(log, "warn");
   const { provider } = fakeBatchProvider();
+  // a provider that uses context gets every form instead
+  provider.supportsContext = false;
   try {
     await translateCommandAction({ project, provider });
     expect(warn.mock.calls).toEqual([
@@ -865,6 +867,27 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
     ]);
+  } finally {
+    await project.close();
+  }
+});
+
+test("with a provider that uses context, every plural form is translated", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    const [bundle] = await selectBundleNested(project.db).execute();
+    expect(
+      bundle!.messages
+        .find((message) => message.locale === "ru")!
+        .variants.map((variant) =>
+          variant.matches[0]!.type === "literal-match"
+            ? variant.matches[0]!.value
+            : "*",
+        ),
+    ).toEqual(["one", "few", "many", "*"]);
   } finally {
     await project.close();
   }

@@ -23,17 +23,17 @@ const escapeEnd = "</span>";
  * other, unless a source variant has that variant's own matches: a source with
  * both `other` and `*` keeps both.
  */
-export function findMatchingVariant({
+export function findMatchingVariant<V extends Pick<VariantRow, "matches">>({
   variants,
   matches,
   sourceVariants,
   declarations,
 }: {
-  variants: VariantRow[];
+  variants: V[];
   matches: VariantRow["matches"];
   sourceVariants: VariantRow[];
   declarations: Declaration[] | undefined;
-}): VariantRow | undefined {
+}): V | undefined {
   const valueOf = (list: VariantRow["matches"], key: string) => {
     const match = list.find((value) => value.key === key);
     return match && (match.type === "literal-match" ? match.value : "*");

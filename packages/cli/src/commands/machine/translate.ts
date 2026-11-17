@@ -140,6 +140,7 @@ export async function translateCommandAction(args: {
         bundle,
         sourceLocale: settings.baseLocale,
         targetLocales,
+        supportsContext: provider.supportsContext,
       });
       if ("error" in plan) {
         errors.push(plan.error);
