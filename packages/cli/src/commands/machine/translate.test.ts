@@ -728,6 +728,13 @@ test.each([
       'No translation was returned for "Text 0".\nSaved the 2 translations that came back. Run again to translate the rest.',
   },
   {
+    answer: "has a placeholder that isn't one",
+    translatedText: () => '<span class="notranslate">null</span>',
+    // the other two texts came back
+    error:
+      "SyntaxError: Not a placeholder: null\nSaved the 2 translations that came back. Run again to translate the rest.",
+  },
+  {
     answer: "has a placeholder that isn't valid",
     translatedText: () => '<span class="notranslate">{broken</span>',
     // the other two texts came back
@@ -1021,7 +1028,7 @@ test("rejected translations are reported by bundle and locale, the others are sa
     );
     expect(thrown).toBeInstanceOf(MachineTranslateError);
     expect((thrown as Error).message).toBe(
-      "Some translations came back empty or with a placeholder dropped or changed, so they weren't saved:\n" +
+      "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:\n" +
         "  de: cart ({name}), items ({name})\n" +
         "  fr: title (empty)\n" +
         "Saved the 4 translations that came back intact. Run again to translate the rest.",
@@ -1184,7 +1191,7 @@ test("a failed request and rejected translations are reported in one error", asy
     );
     expect((thrown as Error).message).toBe(
       "1 of 3 translations failed: model refused\n" +
-        "Some translations came back empty or with a placeholder dropped or changed, so they weren't saved:\n" +
+        "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:\n" +
         "  de: items ({name})\n" +
         "Saved the 1 translation that came back intact. Run again to translate the rest.",
     );
