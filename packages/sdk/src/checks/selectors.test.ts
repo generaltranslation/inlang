@@ -557,6 +557,22 @@ test("a variant the reference never selects is not a source", () => {
 	).toEqual(["one <- one", "few <- few", "many <- many", "* <- *"]);
 });
 
+test("an exact number's variant the reference never shows is not a source", () => {
+	// English 0 is `other`, so English never shows `0 · zero`
+	const english = [
+		variant({ countPluralExact: "0", countPlural: "zero" }),
+		variant({ countPluralExact: "0", countPlural: "*" }),
+		variant({ countPluralExact: "*", countPlural: "*" }),
+	];
+	const form = variant({ countPluralExact: "0", countPlural: "*" }).matches;
+	expect(sourceVariantFor(form, english, icuExact, "en", "de")).toBe(
+		english[1]
+	);
+	expect(
+		sourceVariantFor(form, [english[0]!, english[2]!], icuExact, "en", "de")
+	).toBeUndefined();
+});
+
 test("a select value only a variant the reference never shows uses still has its source", () => {
 	// English never shows `zero · male`, so male counts show its catch-all
 	const english = [
