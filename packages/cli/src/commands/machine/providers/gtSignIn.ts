@@ -34,6 +34,7 @@ type Prompt = (
 type InitResult = {
   type: "result";
   outcome: "success" | "failed";
+  completedSteps?: string[];
   error?: string;
   missingOptions?: string[];
 };
@@ -109,8 +110,8 @@ function parseEnvFile(content: string): Record<string, string> {
  * key to `dir/.env.local`. It may ask for an organization, so call it only in
  * an interactive terminal. Resolves `undefined` if the user cancels that.
  *
- * In a git work tree, `.env.local` gets a `.gitignore` rule unless it is
- * ignored already, and a tracked `.env.local` fails before the sign-in.
+ * `.env.local` gets a `.gitignore` rule unless git ignores it already, and a
+ * tracked `.env.local` fails before the sign-in.
  */
 export async function signInToGt(args: {
   dir: string;
@@ -130,7 +131,9 @@ export async function signInToGt(args: {
     openUrl = openInBrowser,
   } = args;
   const git = (...gitArgs: string[]) =>
-    runProcess("git", gitArgs, { cwd: dir, onStdoutLine: () => {} });
+    runProcess("git", gitArgs, { cwd: dir, onStdoutLine: () => {} })
+      // Without git, the folder is no work tree.
+      .catch(() => ({ code: null }));
   if (
     (await git("ls-files", "--error-unmatch", "--", ".env.local")).code === 0
   ) {
@@ -201,14 +204,27 @@ export async function signInToGt(args: {
         "gt init finished without saving a General Translation key to .env.local.",
       );
     }
-    // Exit code 1: in a git work tree and not ignored.
-    if ((await git("check-ignore", "-q", "--", ".env.local")).code === 1) {
+    // Exit code 0: ignored. Outside a work tree the rule is added too, or a
+    // later `git init` would commit the key.
+    const ignored =
+      (await git("check-ignore", "-q", "--", ".env.local")).code === 0;
+    if (!ignored) {
       await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
     }
     await appendToFile(
       nodePath.join(dir, ".env.local"),
       await fs.readFile(nodePath.join(cwd, ".env.local"), "utf8"),
       { mode: 0o600 },
+    );
+    log.success(
+      [
+        result.completedSteps?.some((step) =>
+          step.startsWith("created project "),
+        )
+          ? `Created the General Translation project "${gtProjectName(dir)}" and saved a development key for it to .env.local.`
+          : "Saved a General Translation development key to .env.local.",
+        ...(ignored ? [] : ["Added .env.local to .gitignore."]),
+      ].join("\n"),
     );
     return credentials;
   } finally {
@@ -275,12 +291,13 @@ export async function gtInitArgs(args: {
     GT_FILE_PATTERN,
     ...(projectId
       ? ["--project-id", projectId]
-      : [
-          "--create-project",
-          "--project-name",
-          nodePath.basename(nodePath.resolve(dir)),
-        ]),
+      : ["--create-project", "--project-name", gtProjectName(dir)]),
   ];
+}
+
+/** The name of a project that gt init creates for `dir`: the folder's. */
+function gtProjectName(dir: string): string {
+  return nodePath.basename(nodePath.resolve(dir));
 }
 
 /** gt lists the organizations only as text: `  - Emails (org_abc123)`. */
