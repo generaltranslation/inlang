@@ -335,11 +335,8 @@ export default class InlangMessageForms extends LitElement {
 				examples: group.plural
 					? pluralExamples(this._locale, group.plural.type, {
 							exclude: group.keys.filter(isNumericKey),
-							offset: pluralRules(
-								group.selector,
-								this.declarations,
-								this._locale
-							)?.offset,
+							offset: pluralRules(group.selector, this.declarations, this._locale)
+								?.offset,
 						})
 					: {},
 			})

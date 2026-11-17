@@ -8,8 +8,7 @@ const DECIMALS = [1.5, 0.5, 2.5, 0.1, 1.1, 2.1, 0.2];
 const BUDGET = 3;
 
 /**
- * Example numbers for each plural category of a locale, for UI hints and
- * translation context ("few: 2–4, 22…").
+ * Example numbers for each plural category of a locale, for UI hints.
  *
  * Integers 0…200 (plus a few large numbers) are grouped into consecutive
  * runs and compressed into ranges. At most three numbers are shown (a range
