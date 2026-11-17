@@ -2,15 +2,13 @@
 // order of the source message
 import { v7 as randomUUID } from "uuid";
 import {
-  checkBundle,
+  checkTranslation,
   isPluralSelector,
-  markupNames,
   matchValue,
   missingVariants,
   pluralRules,
   resolveAnnotation,
   selectorGroups,
-  variableNames,
   variantCovers,
   Text,
   type BundleNested,
@@ -306,12 +304,7 @@ export function planBundleTranslation(
     missing,
     apply: (translations) => {
       const first = write(translations);
-      const broken = brokenPlaceholders({
-        bundle: first.bundle.data,
-        translated: first.written,
-        locales: args.targetLocales,
-        referenceLocale: args.sourceLocale,
-      });
+      const broken = brokenPlaceholders(first.bundle.data, first.written);
       // a new message missing a form can match nothing and show the bundle
       // id, while for a missing message the runtime falls back to another
       // locale
@@ -350,42 +343,36 @@ export function planBundleTranslation(
 }
 
 /**
- * The placeholders (`{count}`, `<b>`) that translated variants dropped or
- * changed, by variant id. The provider gets them as `notranslate` spans and
- * may translate or lose one, so the variant would print a wrong or no value.
- *
- * An issue counts only if the source form doesn't share it: the checks are
- * per variant and see its pattern only through its names, so hand-written
- * content and what the source lacks itself (an English `one` without
- * `{count}`, for French `one`, 0 and 1) revert nothing. The SDK compares by
- * plural form: a German `one` may spell out its number.
+ * The placeholders (`{count}`, `<b>`) each translated variant dropped or
+ * changed, by variant id, compared with only the source variant it was
+ * translated from: an issue that source variant has too (an English `one`
+ * without `{count}`, checked as French `one` for 0 and 1) doesn't count.
  */
-function brokenPlaceholders(args: {
-  bundle: BundleNested;
+function brokenPlaceholders(
+  bundle: BundleNested,
   /** variant ids, with the translation each holds */
-  translated: Map<string, MissingTranslation>;
-  locales: string[];
-  referenceLocale: string;
-}): Map<string, string[]> {
+  translated: Map<string, MissingTranslation>,
+): Map<string, string[]> {
   const broken = new Map<string, string[]>();
-  for (const diagnostic of checkBundle({
-    bundle: args.bundle,
-    locales: args.locales,
-    referenceLocale: args.referenceLocale,
-    checks: ["missing-variable", "unknown-variable", "missing-markup"],
-  })) {
-    if (!("variantId" in diagnostic && "name" in diagnostic)) continue;
-    const translation = args.translated.get(diagnostic.variantId);
-    if (!translation) continue;
-    const markup = diagnostic.checkId === "missing-markup";
-    const inSource = (markup ? markupNames : variableNames)(
-      translation.sourceVariant.pattern,
-    ).includes(diagnostic.name);
-    if (inSource === (diagnostic.checkId === "unknown-variable")) continue;
-    broken.set(diagnostic.variantId, [
-      ...(broken.get(diagnostic.variantId) ?? []),
-      markup ? `<${diagnostic.name}>` : `{${diagnostic.name}}`,
-    ]);
+  for (const message of bundle.messages) {
+    for (const variant of message.variants) {
+      const translation = translated.get(variant.id);
+      if (!translation) continue;
+      const placeholders = checkTranslation({
+        // in the target's locale: the SDK ignores variants a locale never
+        // shows, and Latvian shows the `zero` English never does
+        reference: { ...message, variants: [translation.sourceVariant] },
+        target: { ...message, variants: [variant] },
+        declarations: bundle.declarations,
+      }).flatMap((issue) =>
+        issue.type === "missing-variable" || issue.type === "unknown-variable"
+          ? [`{${issue.name}}`]
+          : issue.type === "missing-markup"
+            ? [`<${issue.name}>`]
+            : [],
+      );
+      if (placeholders.length > 0) broken.set(variant.id, placeholders);
+    }
   }
   return broken;
 }

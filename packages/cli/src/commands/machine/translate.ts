@@ -174,11 +174,10 @@ export async function translateCommandAction(args: {
 
     if (!result.ok) throw new MachineTranslateError(result.error);
 
-    /** reverted translations by locale */
-    const reverted = new Map<
-      string,
-      Array<{ bundleId: string; placeholders: string[] }>
-    >();
+    /** bundle ids with reverted translations, by locale */
+    const revertedIds = new Map<string, Set<string>>();
+    const revertedPlaceholders = new Set<string>();
+    let revertedCount = 0;
     for (const plan of plans) {
       const bundle = plan.apply(result.translations);
       await upsertBundleNested(args.project.db, bundle.data);
@@ -192,25 +191,23 @@ export async function translateCommandAction(args: {
           .execute();
       }
       for (const { locale, placeholders } of bundle.reverted) {
-        reverted.set(locale, [
-          ...(reverted.get(locale) ?? []),
-          { bundleId: bundle.data.id!, placeholders },
-        ]);
+        revertedIds.set(
+          locale,
+          (revertedIds.get(locale) ?? new Set()).add(bundle.data.id!),
+        );
+        for (const placeholder of placeholders) {
+          revertedPlaceholders.add(placeholder);
+        }
+        revertedCount++;
       }
     }
-    for (const [locale, translations] of reverted) {
-      const count = translations.length;
-      const placeholders = new Set(
-        translations.flatMap((translation) => translation.placeholders),
-      );
-      const bundleIds = new Set(
-        translations.map((translation) => translation.bundleId),
-      );
-      const noun = count === 1 ? "translation" : "translations";
+    if (revertedCount > 0) {
       log.warn(
         [
-          `Reverted ${count} ${noun} in ${locale} for a dropped or changed placeholder (${[...placeholders].join(", ")}). Translate by hand, or run again.`,
-          `  ${[...bundleIds].join(", ")}`,
+          `Some translations were reverted: they dropped or changed a placeholder (${[...revertedPlaceholders].join(", ")}). Translate them by hand, or run again.`,
+          ...[...revertedIds].map(
+            ([locale, ids]) => `  ${locale}: ${[...ids].join(", ")}`,
+          ),
         ].join("\n"),
       );
     }
@@ -232,7 +229,7 @@ export async function translateCommandAction(args: {
     }
     log.success("Machine translate complete.");
     return {
-      translated: missing.length - [...reverted.values()].flat().length,
+      translated: missing.length - revertedCount,
       bundles: bundles.length,
     };
   } catch (error) {

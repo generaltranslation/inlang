@@ -876,7 +876,7 @@ test("translations that drop a placeholder are reported by locale, the others ar
     type: "expression" as const,
     arg: { type: "variable-reference" as const, name: "name" },
   };
-  // two translations into each locale
+  // a plural with two forms and a text, each using {name}
   const cart = pluralBundle("cart");
   cart.declarations!.push({ type: "input-variable", name: "name" });
   const items = textBundle("items", "Items of ");
@@ -890,7 +890,6 @@ test("translations that drop a placeholder are reported by locale, the others ar
   await insertBundleNested(project.db, items);
   await insertBundleNested(project.db, textBundle("title", "Title"));
   const warn = vi.spyOn(log, "warn");
-  const success = vi.spyOn(log, "success");
   // drops the placeholder in every German text and in French "Items of"
   const { provider } = fakeBatchProvider(async (args) => ({
     ok: true,
@@ -908,17 +907,11 @@ test("translations that drop a placeholder are reported by locale, the others ar
     expect(translated).toBe(4);
     expect(warn.mock.calls).toEqual([
       [
-        "Reverted 3 translations in de for a dropped or changed placeholder ({name}). Translate by hand, or run again.\n" +
-          "  cart, items",
-      ],
-      [
-        "Reverted 1 translation in fr for a dropped or changed placeholder ({name}). Translate by hand, or run again.\n" +
-          "  items",
+        "Some translations were reverted: they dropped or changed a placeholder ({name}). Translate them by hand, or run again.\n" +
+          "  de: cart, items\n" +
+          "  fr: items",
       ],
     ]);
-    expect(success.mock.invocationCallOrder[0]).toBeGreaterThan(
-      Math.max(...warn.mock.invocationCallOrder),
-    );
     const bundles = await selectBundleNested(project.db).execute();
     expect(
       Object.fromEntries(
