@@ -968,6 +968,73 @@ test("translations that drop a placeholder are reported by locale, the others ar
   }
 });
 
+test.each([
+  { stdinTTY: false, stdoutTTY: true, CI: "" },
+  { stdinTTY: true, stdoutTTY: true, CI: "1" },
+])(
+  "the command fails fast without a provider when it can't ask to sign in (%o), and names the folder of --project",
+  async ({ stdinTTY, stdoutTTY, CI }) => {
+    for (const name of [
+      "INLANG_MACHINE_TRANSLATE_PROVIDER",
+      "INLANG_GOOGLE_TRANSLATE_API_KEY",
+      "INLANG_DEEPL_API_KEY",
+      "INLANG_OPENAI_API_KEY",
+      "GT_API_KEY",
+      "GT_PROJECT_ID",
+    ])
+      vi.stubEnv(name, "");
+    vi.stubEnv("CI", CI);
+    const restoreTTY = [
+      stubIsTTY(process.stdin, stdinTTY),
+      stubIsTTY(process.stdout, stdoutTTY),
+    ];
+    // a sign-in would be declined, which fails with a different message
+    vi.spyOn(log, "prompt").mockResolvedValue(false);
+    const en = `{"alpha": "Alpha"}`;
+    const { path, read, cleanup } = await projectOnDisk({ en, de: `{}` });
+    const root = nodePath.dirname(path);
+    const error = vi.spyOn(log, "error");
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    try {
+      await translate.parseAsync(["--project", path, "--nobar"], {
+        from: "user",
+      });
+      expect(error).toHaveBeenCalledTimes(1);
+      const [message] = error.mock.calls[0]!;
+      expect(message).toMatch(
+        /^Machine translation needs a General Translation API key\./,
+      );
+      expect(message).toContain(
+        `run \`(cd ${root} && npx --yes gt@2.28.3 init `,
+      );
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(read("en")).toBe(en);
+      expect(read("de")).toBe(`{}`);
+      expect(fs.readdirSync(root).sort()).toEqual([
+        "messages",
+        "project.inlang",
+      ]);
+    } finally {
+      for (const restore of restoreTTY) restore();
+      await cleanup();
+    }
+  },
+);
+
+function stubIsTTY(
+  stream: NodeJS.ReadStream | NodeJS.WriteStream,
+  value: boolean,
+) {
+  const original = Object.getOwnPropertyDescriptor(stream, "isTTY");
+  Object.defineProperty(stream, "isTTY", { value, configurable: true });
+  return () => {
+    if (original) Object.defineProperty(stream, "isTTY", original);
+    else delete (stream as { isTTY?: boolean }).isTTY;
+  };
+}
+
 test("a run with nothing to translate needs no provider", async () => {
   // would fail for the missing key if the provider were resolved
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
@@ -983,25 +1050,34 @@ test("a run with nothing to translate needs no provider", async () => {
   }
 });
 
-test("warns that a provider without context ignores bundle descriptions", async () => {
-  const project = await projectWithTextBundles(["en", "de"], 0);
-  await insertBundleNested(project.db, {
-    ...textBundle("hello", "Hello"),
-    description: "A greeting on the home page",
-  });
-  const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-  const { provider } = fakeBatchProvider();
-  try {
-    await translateCommandAction({
-      project,
-      provider: { ...provider, supportsContext: false },
-    });
-    expect(warn.mock.calls).toEqual([
+test.each([
+  {
+    supportsContext: false,
+    warnings: [
       [
         "The selected translation provider doesn't use bundle descriptions as context.",
       ],
-    ]);
-  } finally {
-    await project.close();
-  }
-});
+    ],
+  },
+  { supportsContext: true, warnings: [] },
+])(
+  "warns only when the provider ignores bundle descriptions (supportsContext: $supportsContext)",
+  async ({ supportsContext, warnings }) => {
+    const project = await projectWithTextBundles(["en", "de"], 0);
+    await insertBundleNested(project.db, {
+      ...textBundle("hello", "Hello"),
+      description: "A greeting on the home page",
+    });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const { provider } = fakeBatchProvider();
+    try {
+      await translateCommandAction({
+        project,
+        provider: { ...provider, supportsContext },
+      });
+      expect(warn.mock.calls).toEqual(warnings);
+    } finally {
+      await project.close();
+    }
+  },
+);

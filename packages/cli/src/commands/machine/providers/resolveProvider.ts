@@ -35,10 +35,7 @@ const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";
 
-/**
- * Thrown when a translation failed, before anything was written. The message
- * is for the user as is.
- */
+/** An error whose message is for the user as is: the command prints it without a stack trace. */
 export class MachineTranslateError extends Error {
   override name = "MachineTranslateError";
 }
@@ -134,11 +131,13 @@ async function missingGtKeyError(
   const init = ["npx", ...(await gtInitArgs({ dir, settings, env }))].map(
     shellQuote,
   );
-  // gt init saves the key to .env.local in the folder it runs in.
+  // gt init saves the key to .env.local in the folder it runs in. The subshell
+  // keeps the caller's working directory: an agent's shell keeps it between
+  // commands, and this command must then run again from where it was.
   const command =
     dir === "."
       ? init.join(" ")
-      : ["cd", shellQuote(dir), "&&", ...init].join(" ");
+      : `(${["cd", shellQuote(dir), "&&", ...init].join(" ")})`;
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",

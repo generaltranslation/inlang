@@ -181,13 +181,13 @@ test("a declined sign-in names the ways to get a provider", async () => {
 test.each([{}, { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" }])(
   "fails fast without credentials outside an interactive terminal (%o)",
   async (env) => {
-    const { dir, projectPath } = projectIn({}, "my app");
+    const { dir, projectPath } = projectIn({}, "bob's app");
     await expect(resolve({ env, projectPath })).rejects.toThrowError(
       new MachineTranslateError(
         [
           "Machine translation needs a General Translation API key.",
           "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-          `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`cd '${dir}' && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'my app'\` to save a development key to .env.local, and run this command again.`,
+          `- Agents: have the user sign in with \`npx gt login --no-browser\`, then run \`(cd '${nodePath.dirname(dir)}/bob'\\''s app' && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app')\` to save a development key to .env.local, and run this command again.`,
           `- Or bring your own key: ${BYOK_URL}`,
         ].join("\n"),
       ),
