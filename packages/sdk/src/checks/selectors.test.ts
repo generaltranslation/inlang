@@ -314,18 +314,20 @@ const sources = (
 			form,
 			reference,
 			declarations,
-			referenceLocale
+			referenceLocale,
+			translation.locale
 		);
 		return `${values([form])} <- ${source ? values([source.matches]) : "none"}`;
 	});
 
-test("a plural category the reference lacks is translated from its catch-all", () => {
+test("a plural category the reference lacks, or has for one number only, is translated from its catch-all", () => {
 	const english = [
 		variant({ countPlural: "one" }),
 		variant({ countPlural: "*" }),
 	];
+	// English `one` is 1, Russian `one` 1, 21, 31…
 	expect(sources(message("ru", ["countPlural"]), plural, english)).toEqual([
-		"one <- one",
+		"one <- *",
 		"few <- *",
 		"many <- *",
 		"* <- *",
@@ -338,7 +340,7 @@ test("an explicit other stands in for the catch-all, and comes first", () => {
 			variant({ countPlural: "one" }),
 			variant({ countPlural: "other" }),
 		])
-	).toEqual(["one <- one", "few <- other", "many <- other", "* <- other"]);
+	).toEqual(["one <- other", "few <- other", "many <- other", "* <- other"]);
 	// the runtime selects `other` for 2, so `*` is never shown in English
 	expect(
 		sources(message("ru", ["countPlural"]), plural, [
@@ -346,10 +348,11 @@ test("an explicit other stands in for the catch-all, and comes first", () => {
 			variant({ countPlural: "other" }),
 			variant({ countPlural: "*" }),
 		])
-	).toEqual(["one <- one", "few <- other", "many <- other", "* <- other"]);
+	).toEqual(["one <- other", "few <- other", "many <- other", "* <- other"]);
 });
 
 test("a category is taken from the same branch of the other selectors", () => {
+	// Polish `one` is 1, as in English
 	const english = [
 		variant({ countPlural: "one", gender: "female" }),
 		variant({ countPlural: "*", gender: "female" }),
@@ -358,7 +361,7 @@ test("a category is taken from the same branch of the other selectors", () => {
 		variant({ countPlural: "*", gender: "*" }),
 	];
 	expect(
-		sources(message("ru", ["countPlural", "gender"]), genderPlural, english)
+		sources(message("pl", ["countPlural", "gender"]), genderPlural, english)
 	).toEqual([
 		"one · female <- one · female",
 		"one · male <- * · male",
@@ -383,7 +386,7 @@ test("a select value falls back to the catch-all only when its branch lacks the 
 		variant({ countPlural: "*", gender: "*" }),
 	];
 	expect(
-		sources(message("ru", ["countPlural", "gender"]), genderPlural, english)
+		sources(message("pl", ["countPlural", "gender"]), genderPlural, english)
 	).toEqual([
 		"one · male <- one · male",
 		"one · * <- one · *",
@@ -424,7 +427,8 @@ test("the earlier of two plural selectors keeps its category first", () => {
 			variant({ countPlural: "few", nPlural: "few" }).matches,
 			english,
 			twoPlurals,
-			"en"
+			"en",
+			"ru"
 		)
 	).toBe(english[1]);
 });
@@ -437,7 +441,7 @@ test("a variant the reference never selects is not a source", () => {
 			plural,
 			["zero", "one", "*"].map((countPlural) => variant({ countPlural }))
 		)
-	).toEqual(["zero <- *", "one <- one", "* <- *"]);
+	).toEqual(["zero <- *", "one <- *", "* <- *"]);
 	// Russian selects `few` and `many`, so they are sources for Polish
 	expect(
 		sources(
@@ -463,7 +467,8 @@ test("words on the count's own selector make it a select, in the reference or th
 			variant({ countPluralExact: "0", countPlural: "*" }).matches,
 			english,
 			icuExact,
-			"en"
+			"en",
+			"ru"
 		)
 	).toBe(english[2]);
 	// a word only the translation uses has no source
@@ -472,14 +477,15 @@ test("words on the count's own selector make it a select, in the reference or th
 			variant({ countPluralExact: "none", countPlural: "*" }).matches,
 			icuEnglish.variants,
 			icuExact,
-			"en"
+			"en",
+			"ru"
 		)
 	).toBeUndefined();
 });
 
 test("exact numbers and select values are never substituted", () => {
 	expect(
-		sources({ ...icuEnglish, locale: "ru" }, icuExact, icuEnglish.variants)
+		sources({ ...icuEnglish, locale: "pl" }, icuExact, icuEnglish.variants)
 	).toEqual([
 		"0 · * <- 0 · *",
 		"* · one <- * · one",
@@ -500,7 +506,8 @@ test("exact numbers and select values are never substituted", () => {
 			variant({ countPluralExact: "1", countPlural: "*" }).matches,
 			icuEnglish.variants,
 			icuExact,
-			"en"
+			"en",
+			"ru"
 		)
 	).toBeUndefined();
 });

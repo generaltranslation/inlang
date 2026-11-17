@@ -768,6 +768,8 @@ export function missingVariants(
  *   its explicit `other`, or else its catch-all: Russian `few` from English
  *   `*`. The runtime selects `other` for every number of no other category,
  *   so the translation's catch-all comes from `other` too.
+ * - So is a category that is one number in the reference but more in the
+ *   translation: English `one` ("One file") for Russian `one` (1, 21, 31…).
  * - The category is taken from the same branch of the other selectors:
  *   `few · female` from `* · female`, `one · male` from `* · male` (the
  *   runtime may show `one · *` there, but its text lacks the gender). Only when
@@ -784,7 +786,8 @@ export function sourceVariantFor<V extends WithMatches>(
 	target: readonly Match[],
 	reference: readonly V[],
 	declarations: readonly Declaration[] | undefined,
-	referenceLocale: string
+	referenceLocale: string,
+	targetLocale: string
 ): V | undefined {
 	const form = { matches: target };
 	const shown = reference.filter(
@@ -806,13 +809,22 @@ export function sourceVariantFor<V extends WithMatches>(
 	let candidates: string[][] = [[]];
 	for (const group of groups) {
 		const key = group.keyOf(form);
+		// the reference's text for one number may spell it out ("One file")
+		const spelledOut =
+			isSingleNumberCategory(
+				group.selector,
+				declarations,
+				referenceLocale,
+				key
+			) &&
+			!isSingleNumberCategory(group.selector, declarations, targetLocale, key);
 		const keys = !group.isPlural
 			? shown.some((variant) => group.keyOf(variant) === key)
 				? [key, "*"]
 				: [key]
 			: isNumericKey(key)
 				? [key]
-				: key === "*"
+				: key === "*" || spelledOut
 					? ["other", "*"]
 					: [key, "other", "*"];
 		candidates = candidates.flatMap((candidate) =>
