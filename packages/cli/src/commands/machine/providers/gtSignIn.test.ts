@@ -262,7 +262,12 @@ describe("appendToEnvLocal", () => {
     );
   });
 
-  test.each([" .env.local\n", "\\.env.local\n"])(
+  test.each([
+    " .env.local\n",
+    "\\.env.local\n",
+    ".env.local\t\n",
+    ".env.local\u00a0\n",
+  ])(
     "outside a git work tree, adds the rule when the last line only looks like it (%j)",
     async (gitignore) => {
       const dir = tree({ ".gitignore": gitignore });
