@@ -2,7 +2,7 @@
 // order of the source message
 import { v7 as randomUUID } from "uuid";
 import {
-  Text,
+  isEmptyPattern,
   type BundleNested,
   type NewBundleNested,
   type VariantRow,
@@ -106,14 +106,12 @@ export function planBundleTranslation(
         targetMessage &&
         findMatchingVariant(targetMessage.variants, sourceVariant.matches);
 
+      // A blank variant is missing, as `inlang check` reports it, unless its
+      // source is blank too: then a translation can't fill it.
       if (
         existingVariant &&
-        !(
-          existingVariant.pattern.length === 0 ||
-          (existingVariant.pattern.length === 1 &&
-            existingVariant.pattern[0]?.type === "text" &&
-            (existingVariant.pattern[0] as Text).value === "")
-        )
+        (!isEmptyPattern(existingVariant.pattern) ||
+          isEmptyPattern(sourceVariant.pattern))
       ) {
         continue;
       }
