@@ -354,11 +354,13 @@ test("doesn't rewrite translation files when nothing was translated", async () =
   const { project, path, read, cleanup } = await projectOnDisk({ en, de });
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
+  const success = vi.spyOn(log, "success");
   try {
     await translateAndSave({ project, path });
     expect(fetch).not.toHaveBeenCalled();
     expect(read("en")).toBe(en);
     expect(read("de")).toBe(de);
+    expect(success).toHaveBeenCalledTimes(1);
   } finally {
     await cleanup();
   }
