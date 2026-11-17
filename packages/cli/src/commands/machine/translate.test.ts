@@ -684,6 +684,45 @@ test("batch translations go to the variants their keys name", async () => {
   }
 });
 
+test("a blank translation is missing unless its source is blank too", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 0);
+  const withGerman = (id: string, en: string, de: string): NewBundleNested => {
+    const bundle = textBundle(id, en);
+    return {
+      ...bundle,
+      messages: [
+        ...bundle.messages,
+        {
+          id: `${id}_de`,
+          bundle_id: id,
+          locale: "de",
+          variants: [
+            {
+              id: `${id}_de`,
+              message_id: `${id}_de`,
+              pattern: [{ type: "text", value: de }],
+            },
+          ],
+        },
+      ],
+    };
+  };
+  // `inlang check` reports both as empty translations
+  await insertBundleNested(project.db, withGerman("blank", "Hello", " \n "));
+  await insertBundleNested(project.db, withGerman("both", " ", ""));
+  const { provider, calls } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(
+      calls.flatMap((call) =>
+        Object.values(call.texts).map(({ text }) => text),
+      ),
+    ).toEqual(["Hello"]);
+  } finally {
+    await project.close();
+  }
+});
+
 test("at most 4 requests are in flight and none starts after a failure", async () => {
   const project = await projectWithTextBundles(["en", "de"], 7);
   /** Settles a request in flight, successfully or not. */

@@ -11,7 +11,6 @@ import {
   resolveAnnotation,
   selectorGroups,
   variantCovers,
-  Text,
   type BundleNested,
   type Declaration,
   type MarkupEnd,
@@ -159,7 +158,9 @@ export function planBundleTranslation(
       ));
       // an empty form is missing, like one the target doesn't have
       missingVariants(target, declarations, {
-        variants: target.variants.filter((variant) => !isEmpty(variant)),
+        variants: target.variants.filter(
+          (variant) => !isEmptyPattern(variant.pattern),
+        ),
         referenceVariants: sourceMessage.variants,
       })
         .filter(
@@ -190,7 +191,13 @@ export function planBundleTranslation(
         declarations,
       });
 
-      if (existingVariant && !isEmpty(existingVariant)) {
+      // A blank variant is missing, as `inlang check` reports it, unless its
+      // source is blank too: then a translation can't fill it.
+      if (
+        existingVariant &&
+        (!isEmptyPattern(existingVariant.pattern) ||
+          isEmptyPattern(sourceVariant.pattern))
+      ) {
         continue;
       }
 
@@ -399,16 +406,6 @@ function placeholderName(part: VariantRow["pattern"][number]): string {
     case "text":
       return part.value;
   }
-}
-
-/** True when a variant has no text: its translation is missing. */
-function isEmpty(variant: VariantRow): boolean {
-  return (
-    variant.pattern.length === 0 ||
-    (variant.pattern.length === 1 &&
-      variant.pattern[0]?.type === "text" &&
-      (variant.pattern[0] as Text).value === "")
-  );
 }
 
 /**
