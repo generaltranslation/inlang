@@ -268,20 +268,23 @@ export async function translateMissing(args: {
             ]),
           ),
         });
-        // The texts that did come back are kept, as with any failure.
-        let notReturned: string | undefined;
+        // The texts that did come back are kept, as with any failure, even
+        // when one of them is missing or isn't a valid pattern.
+        let textError: string | undefined;
         for (const [index, translation] of chunk.entries()) {
           const text = result.translatedTexts?.[String(index)];
-          if (text === undefined) notReturned ??= translation.text;
-          else translations.set(translation, deserializePattern(text));
+          if (text === undefined) {
+            textError ??= `No translation was returned for "${translation.text}".`;
+            continue;
+          }
+          try {
+            translations.set(translation, deserializePattern(text));
+          } catch (error) {
+            textError ??= String(error);
+          }
         }
         if (!result.ok) return result;
-        if (notReturned !== undefined) {
-          return {
-            ok: false,
-            error: `No translation was returned for "${notReturned}".`,
-          };
-        }
+        if (textError !== undefined) return { ok: false, error: textError };
         args.onProgress?.(chunk.length);
         return result;
       });
