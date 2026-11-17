@@ -160,6 +160,17 @@ describe("readGtCredentials", () => {
     });
   });
 
+  test("pairs the key with the project ID of its prefix", async () => {
+    const dir = tree({
+      ".env.local":
+        "VITE_GT_PROJECT_ID=prj_vite\nGT_API_KEY=server-key\nGT_PROJECT_ID=prj_server\n",
+    });
+    expect(await readGtCredentials({ env: {}, dir })).toEqual({
+      apiKey: "server-key",
+      projectId: "prj_server",
+    });
+  });
+
   test("prefers the environment over .env.local", async () => {
     const dir = tree({ ".env.local": ENV_LOCAL });
     expect(
@@ -242,9 +253,31 @@ describe("appendToEnvLocal", () => {
       "dist\r\n.env.local\r\n",
     );
   });
+
+  test("trusts git that .env.local isn't ignored, whatever .gitignore lists", async () => {
+    const dir = gitTree({ ".gitignore": ".env.local\n!.env.local\n" });
+    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
+    expect(
+      execFileSync("git", ["check-ignore", "--", ".env.local"], {
+        cwd: dir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe(".env.local");
+  });
 });
 
 describe("shareGtProjectId", () => {
+  test("shares the project ID of the key, not another prefix's", async () => {
+    const dir = tree({
+      ".env.local":
+        "VITE_GT_PROJECT_ID=prj_vite\nGT_API_KEY=key\nGT_PROJECT_ID=prj_1\n",
+    });
+    expect(await shareGtProjectId(dir)).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")),
+    ).toEqual({ projectId: "prj_1" });
+  });
+
   test("adds the project ID to a gt.config.json without one", async () => {
     const dir = tree({
       ".env.local": ENV_LOCAL,

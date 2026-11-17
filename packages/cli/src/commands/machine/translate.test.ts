@@ -730,7 +730,10 @@ test.each([
   {
     answer: "has a placeholder that isn't valid",
     translatedText: () => '<span class="notranslate">{broken</span>',
-    error: expect.stringMatching(/^SyntaxError: /),
+    // the other two texts came back
+    error: expect.stringMatching(
+      /^SyntaxError: .*\nSaved the 2 translations that came back\./s,
+    ),
   },
 ])(
   "a batch answer that $answer fails the run",
@@ -971,12 +974,18 @@ test("General Translation, the default provider, gets every plural form", async 
   }
 });
 
-test("translations that drop a placeholder are reported by locale, the others are written", async () => {
+/** `{name}` as a placeholder of a pattern. */
+const name = {
+  type: "expression" as const,
+  arg: { type: "variable-reference" as const, name: "name" },
+};
+
+/** Removes the placeholders the provider gets as `notranslate` spans. */
+const dropPlaceholders = (text: string) =>
+  text.replace(/<span class="notranslate">[^<]*<\/span>/g, "");
+
+test("rejected translations are reported by bundle and locale, the others are saved, and the run fails", async () => {
   const project = await projectWithTextBundles(["en", "de", "fr"], 0);
-  const name = {
-    type: "expression" as const,
-    arg: { type: "variable-reference" as const, name: "name" },
-  };
   // a plural with two forms and a text, each using {name}
   const cart = pluralBundle("cart");
   cart.declarations!.push({ type: "input-variable", name: "name" });
@@ -990,29 +999,35 @@ test("translations that drop a placeholder are reported by locale, the others ar
   await insertBundleNested(project.db, cart);
   await insertBundleNested(project.db, items);
   await insertBundleNested(project.db, textBundle("title", "Title"));
-  const warn = vi.spyOn(log, "warn");
-  // drops the placeholder in every German text and in French "Items of"
+  const success = vi.spyOn(log, "success");
+  // drops the placeholders in German, and French "Title" comes back empty
   const { provider } = fakeBatchProvider(async (args) => ({
     ok: true,
     translatedTexts: Object.fromEntries(
       Object.entries(args.texts).map(([key, { text }]) => [
         key,
-        args.targetLocale === "de" || text.startsWith("Items of")
-          ? text.replace(/<span class="notranslate">.*?<\/span>/g, "")
-          : `${text} (${args.targetLocale})`,
+        args.targetLocale === "de"
+          ? dropPlaceholders(text)
+          : text === "Title"
+            ? ""
+            : `${text} (${args.targetLocale})`,
       ]),
     ),
   }));
   try {
-    const { translated } = await translateCommandAction({ project, provider });
-    expect(translated).toBe(4);
-    expect(warn.mock.calls).toEqual([
-      [
-        "Some translations were reverted: they dropped or changed a placeholder ({name}). Translate them by hand, or run again.\n" +
-          "  de: cart, items\n" +
-          "  fr: items",
-      ],
-    ]);
+    const thrown = await translateCommandAction({ project, provider }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(MachineTranslateError);
+    expect((thrown as Error).message).toBe(
+      "Some translations came back empty or with a placeholder dropped or changed, so they weren't saved:\n" +
+        "  de: cart ({name}), items ({name})\n" +
+        "  fr: title (empty)\n" +
+        "Saved the 4 translations that came back intact. Run again to translate the rest.",
+    );
+    expect((thrown as MachineTranslateError).translated).toBe(4);
+    expect(success).not.toHaveBeenCalled();
     const bundles = await selectBundleNested(project.db).execute();
     expect(
       Object.fromEntries(
@@ -1023,8 +1038,8 @@ test("translations that drop a placeholder are reported by locale, the others ar
       ),
     ).toEqual({
       cart: ["en", "fr"],
-      items: ["en"],
-      title: ["de", "en", "fr"],
+      items: ["en", "fr"],
+      title: ["de", "en"],
     });
   } finally {
     await project.close();
@@ -1148,6 +1163,37 @@ test("a run with nothing to translate needs no provider and reports what it skip
   }
 });
 
+test("a failed request and rejected translations are reported in one error", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 2);
+  const items = textBundle("items", "Items of ");
+  items.messages[0]!.variants[0]!.pattern!.push(name);
+  await insertBundleNested(project.db, items);
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: false,
+    error: "1 of 3 translations failed: model refused",
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts)
+        .filter(([, { text }]) => text !== "Text 0")
+        .map(([key, { text }]) => [key, `${dropPlaceholders(text)} (de)`]),
+    ),
+  }));
+  try {
+    const thrown = await translateCommandAction({ project, provider }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect((thrown as Error).message).toBe(
+      "1 of 3 translations failed: model refused\n" +
+        "Some translations came back empty or with a placeholder dropped or changed, so they weren't saved:\n" +
+        "  de: items ({name})\n" +
+        "Saved the 1 translation that came back intact. Run again to translate the rest.",
+    );
+    expect((thrown as MachineTranslateError).translated).toBe(1);
+  } finally {
+    await project.close();
+  }
+});
+
 test("a provider without context that finds nothing to translate starts no translation", async () => {
   // Russian needs forms the English plural lacks: missing with context,
   // skipped without.
@@ -1217,3 +1263,34 @@ test.each([
     }
   },
 );
+
+test("the valid translations of a run with rejected ones are written to the files", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"alpha": "Alpha", "hello": "Hello {name}"}`,
+    de: `{}`,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      return Response.json({
+        data: {
+          translations: [
+            { translatedText: `${dropPlaceholders(query.get("q")!)} (de)` },
+          ],
+        },
+      });
+    }),
+  );
+  try {
+    await expect(translateAndSave({ project, path })).rejects.toThrow(
+      "  de: hello ({name})",
+    );
+    const de = JSON.parse(read("de"));
+    expect(de).toMatchObject({ alpha: "Alpha (de)" });
+    expect(de).not.toHaveProperty("hello");
+  } finally {
+    await cleanup();
+  }
+});

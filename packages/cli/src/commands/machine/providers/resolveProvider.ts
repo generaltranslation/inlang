@@ -10,7 +10,6 @@ import {
   GT_CLI,
   appendToEnvLocal,
   gtInitArgs,
-  isSignedInToGt,
   readEnvFiles,
   readGtCredentials,
   shareGtProjectId,
@@ -133,9 +132,8 @@ export async function resolveMachineTranslateProvider(args: {
   if (!credentials) {
     if (!args.interactive)
       throw await missingGtKeyError(dir, args.settings, env);
-    const notice = "Machine translation is powered by General Translation.";
     log.log(
-      (await isSignedInToGt(dir)) ? notice : `${notice} Sign up for free`,
+      "Machine translation is powered by General Translation. Answer No to use the community translation service instead.",
     );
     // consola otherwise resolves a cancelled confirm with `initial`, a yes.
     const confirmed = await log.prompt(
