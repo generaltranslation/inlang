@@ -43,8 +43,8 @@ const DEEPL_DOCS_URL =
 
 /**
  * An error whose message is for the user as is: the command prints it
- * without a stack trace. When a translation failed, `translated`
- * translations came back before the failure and were added to the project.
+ * without a stack trace. When translations failed or were rejected,
+ * `translated` translations came back intact and were added to the project.
  */
 export class MachineTranslateError extends Error {
   override name = "MachineTranslateError";
