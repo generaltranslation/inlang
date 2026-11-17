@@ -688,14 +688,14 @@ export async function translateMissing(args: {
             ]),
           ),
         });
-        if (!result.ok) return result;
         // The texts that did come back are kept, as with any failure.
         let notReturned: string | undefined;
         for (const [index, translation] of chunk.entries()) {
-          const text = result.translatedTexts[String(index)];
+          const text = result.translatedTexts?.[String(index)];
           if (text === undefined) notReturned ??= translation.text;
           else translations.set(translation, deserializePattern(text));
         }
+        if (!result.ok) return result;
         if (notReturned !== undefined) {
           return {
             ok: false,
