@@ -39,6 +39,30 @@ const icuExact: Declaration[] = [
 	},
 ];
 
+/** What `@inlang/plugin-i18next` imports for keys with cardinal and ordinal forms. */
+const typedPlural: Declaration[] = [
+	{ type: "input-variable", name: "count" },
+	{ type: "input-variable", name: "pluralType" },
+	{
+		type: "local-variable",
+		name: "countPlural",
+		value: {
+			type: "expression",
+			arg: { type: "variable-reference", name: "count" },
+			annotation: {
+				type: "function-reference",
+				name: "plural",
+				options: [
+					{
+						name: "type",
+						value: { type: "variable-reference", name: "pluralType" },
+					},
+				],
+			},
+		},
+	},
+];
+
 const variant = (values: Record<string, string>) => ({
 	matches: Object.entries(values).map(
 		([key, value]): Match =>
@@ -123,6 +147,28 @@ test("an ICU offset keeps the plural rules known and is reported", () => {
 			"en"
 		)
 	).toBeUndefined();
+});
+
+test("a plural whose type is a variable has the rules of the type a form matches", () => {
+	const rules = (pluralType: string) =>
+		pluralRules(
+			"countPlural",
+			typedPlural,
+			"en",
+			variant({ pluralType, countPlural: "*" }).matches
+		);
+	expect(rules("ordinal")).toMatchObject({
+		type: "ordinal",
+		categories: ["one", "two", "few", "other"],
+	});
+	expect(rules("cardinal")).toMatchObject({
+		type: "cardinal",
+		categories: ["one", "other"],
+	});
+	// the catch-all is the runtime's default
+	expect(rules("*")?.type).toBe("cardinal");
+	// without a form, the type is only known at runtime
+	expect(pluralRules("countPlural", typedPlural, "en")).toBeUndefined();
 });
 
 test("the cartesian product uses the literal values of a select and the catch-all", () => {
@@ -566,4 +612,20 @@ test("exact numbers and select values are never substituted", () => {
 			"ru"
 		)
 	).toBeUndefined();
+});
+
+test("a plural whose type is a variable spells out one number in the type the form matches", () => {
+	// "One item": the catch-all type is cardinal, where Russian `one` is 1, 21, 31…
+	const english = [
+		variant({ pluralType: "*", countPlural: "one" }),
+		variant({ pluralType: "*", countPlural: "other" }),
+	];
+	expect(
+		sources(message("ru", ["pluralType", "countPlural"]), typedPlural, english)
+	).toEqual([
+		"* · one <- * · other",
+		"* · few <- * · other",
+		"* · many <- * · other",
+		"* · * <- * · other",
+	]);
 });

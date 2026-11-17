@@ -137,15 +137,26 @@ const SAMPLES = [
  * The plural rules of a `plural` selector in a locale. Undefined when the
  * selector is not a plural, its type or options are only known at runtime, or
  * the locale is unsupported (never guesses another language).
+ *
+ * A plural whose `type` is a variable (i18next's `type=$pluralType`) has the
+ * type a form chooses: pass the form's `matches`. Its catch-all on the type
+ * is the runtime's default, cardinal.
  */
 export function pluralRules(
 	selector: string,
 	declarations: readonly Declaration[] | undefined,
-	locale: string
+	locale: string,
+	matches?: readonly Match[]
 ): PluralRules | undefined {
 	const annotation = resolveAnnotation(selector, declarations);
 	if (annotation?.name !== "plural") return undefined;
-	return rulesOf(annotation, locale);
+	const variable = typeVariable(annotation);
+	if (variable === undefined || !matches) return rulesOf(annotation, locale);
+	const type = typeMatched(variable, matches, declarations);
+	return rulesOf(
+		withType(annotation, type === "*" ? "cardinal" : type),
+		locale
+	);
 }
 
 function rulesOf(
@@ -261,6 +272,25 @@ function typeVariable(annotation: FunctionReference): string | undefined {
 		: undefined;
 }
 
+/**
+ * The type a form chooses for a plural's `type=$variable`: what it matches on
+ * the select that reads that variable, "*" for the catch-all.
+ */
+function typeMatched(
+	variable: string,
+	matches: readonly Match[],
+	declarations: readonly Declaration[] | undefined
+): string {
+	const input = resolveInputVariable(variable, declarations);
+	const chosen = matches.find(
+		(match) =>
+			match.type === "literal-match" &&
+			resolveAnnotation(match.key, declarations) === undefined &&
+			resolveInputVariable(match.key, declarations) === input
+	);
+	return chosen?.type === "literal-match" ? chosen.value : "*";
+}
+
 /** The plural annotation with its `type` option set to a literal type. */
 function withType(
 	annotation: FunctionReference,
@@ -299,15 +329,7 @@ export function isUnreachableVariant(
 		const variable = typeVariable(annotation);
 		let types: (string | undefined)[] = [undefined];
 		if (variable !== undefined) {
-			// the type the variant selects, read through the selector on that variable
-			const input = resolveInputVariable(variable, declarations);
-			const chosen = variant.matches.find(
-				(other) =>
-					other.type === "literal-match" &&
-					resolveAnnotation(other.key, declarations) === undefined &&
-					resolveInputVariable(other.key, declarations) === input
-			);
-			const value = chosen?.type === "literal-match" ? chosen.value : "*";
+			const value = typeMatched(variable, variant.matches, declarations);
 			types =
 				value === "cardinal" || value === "ordinal"
 					? [value]
@@ -772,6 +794,8 @@ export function missingVariants(
  * - So are the numbers of a category that is one number in the reference but
  *   more in the translation, most of which are `other` there: Russian `one`
  *   (1, 21, 31…) is not translated from English `one` ("One file").
+ * - A plural with a variable type (`type=$pluralType`) has the type the form
+ *   matches, see {@link pluralRules}.
  * - Of the variants whose keys all hold, the runtime shows the one with
  *   literal keys on the earliest selectors (Paraglide's order, as in MF2):
  *   with selectors `count`, `gender`, `one · male` from `one · *` rather than
@@ -812,14 +836,20 @@ export function sourceVariantFor<V extends WithMatches>(
 				? [key, "*"]
 				: [key];
 		if (isNumericKey(key)) return [key];
-		const rules = pluralRules(group.selector, declarations, referenceLocale);
+		const rules = pluralRules(
+			group.selector,
+			declarations,
+			referenceLocale,
+			target
+		);
 		// the reference's text for one number may spell it out ("One file")
 		const spelledOut =
 			(rules?.singleNumberCategories.includes(key) ?? false) &&
 			!pluralRules(
 				group.selector,
 				declarations,
-				targetLocale
+				targetLocale,
+				target
 			)?.singleNumberCategories.includes(key);
 		const category =
 			key === "*" || spelledOut || (rules && !rules.categories.includes(key))
