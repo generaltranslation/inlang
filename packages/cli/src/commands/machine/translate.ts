@@ -129,9 +129,11 @@ export async function translateCommandAction(args: {
 
     const plans: BundleTranslationPlan[] = [];
     const errors: string[] = [];
-    /** bundle ids by locale */
-    const skipped = new Map<string, string[]>();
-    const skippedCategories = new Set<string>();
+    /** bundle ids and the plural categories they need, by locale */
+    const skipped = new Map<
+      string,
+      { ids: string[]; categories: Set<string> }
+    >();
     const unknownPluralRules = new Set<string>();
     const categoryKeySelectors: string[] = [];
     for (const bundle of bundles) {
@@ -145,8 +147,10 @@ export async function translateCommandAction(args: {
         continue;
       }
       for (const { locale, categories } of plan.skippedPlurals) {
-        skipped.set(locale, [...(skipped.get(locale) ?? []), bundle.id]);
-        for (const category of categories) skippedCategories.add(category);
+        const entry = skipped.get(locale) ?? { ids: [], categories: new Set() };
+        entry.ids.push(bundle.id);
+        for (const category of categories) entry.categories.add(category);
+        skipped.set(locale, entry);
       }
       for (const locale of plan.unknownPluralRules) {
         unknownPluralRules.add(locale);
@@ -166,7 +170,7 @@ export async function translateCommandAction(args: {
     if (categoryKeySelectors.length > 0) {
       log.warn(
         [
-          `These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Declare them with ": plural".`,
+          `These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Make them plurals.`,
           ...categoryKeySelectors,
         ].join("\n"),
       );
@@ -199,19 +203,19 @@ export async function translateCommandAction(args: {
     }
 
     if (skipped.size > 0) {
-      const count = [...skipped.values()].flat().length;
       log.warn(
         [
-          `Skipped ${count} ${count === 1 ? "message" : "messages"} in ${[...skipped.keys()].join(", ")}: their plurals need forms the source doesn't have (${PLURAL_CATEGORIES.filter((category) => skippedCategories.has(category)).join(", ")}). Add them by hand, then run again.`,
+          "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.",
           ...[...skipped].map(
-            ([locale, ids]) => `  ${locale}: ${ids.join(", ")}`,
+            ([locale, { ids, categories }]) =>
+              `  ${locale} (${PLURAL_CATEGORIES.filter((category) => categories.has(category)).join(", ")}): ${ids.join(", ")}`,
           ),
         ].join("\n"),
       );
     }
-    for (const locale of unknownPluralRules) {
+    if (unknownPluralRules.size > 0) {
       log.warn(
-        `Plural rules unknown for ${locale}; copied the source's forms.`,
+        `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
       );
     }
     log.success("Machine translate complete.");

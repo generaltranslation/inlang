@@ -23,17 +23,22 @@ const escapeEnd = "</span>";
  * other, unless a source variant has that variant's own matches: a source with
  * both `other` and `*` keeps both.
  */
-export function findMatchingVariant(
-  variants: VariantRow[],
-  matches: VariantRow["matches"],
-  sourceVariants: VariantRow[],
-  declarations: Declaration[] | undefined,
-): VariantRow | undefined {
+export function findMatchingVariant({
+  variants,
+  matches,
+  sourceVariants,
+  declarations,
+}: {
+  variants: VariantRow[];
+  matches: VariantRow["matches"];
+  sourceVariants: VariantRow[];
+  declarations: Declaration[] | undefined;
+}): VariantRow | undefined {
   const valueOf = (list: VariantRow["matches"], key: string) => {
     const match = list.find((value) => value.key === key);
     return match && (match.type === "literal-match" ? match.value : "*");
   };
-  const isOther = (value: string | undefined) =>
+  const isOtherOrCatchAll = (value: string | undefined) =>
     value === "other" || value === "*";
   const same = (
     a: VariantRow["matches"],
@@ -46,8 +51,8 @@ export function findMatchingVariant(
       return (
         value === expected ||
         (otherIsCatchAll &&
-          isOther(value) &&
-          isOther(expected) &&
+          isOtherOrCatchAll(value) &&
+          isOtherOrCatchAll(expected) &&
           isPluralSelector(match.key, declarations))
       );
     });

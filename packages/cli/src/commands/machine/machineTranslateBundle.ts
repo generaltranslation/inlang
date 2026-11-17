@@ -102,12 +102,8 @@ type TranslatedBundle = {
 /**
  * Finds the translations the bundle is missing in the target locales: no
  * variant for a source variant, or an empty one.
- *
- * A target locale that lacks a form in a plural category no source variant
- * has (Russian `few` and `many` for an English `one` and `*`) is left out,
- * see `PluralReport`: this run translates only the source's forms. Forms the
- * source lacks in its own locale too don't count: the translation is as
- * complete as the source.
+ * Skips target locales whose plurals need categories the source lacks, see
+ * `PluralReport`.
  */
 export function planBundleTranslation(
   args: MachineTranslateArgs,
@@ -193,12 +189,12 @@ export function planBundleTranslation(
 
     const missingBefore = missing.length;
     for (const sourceVariant of sourceMessage.variants) {
-      const existingVariant = findMatchingVariant(
-        target.variants,
-        sourceVariant.matches,
-        sourceMessage.variants,
+      const existingVariant = findMatchingVariant({
+        variants: target.variants,
+        matches: sourceVariant.matches,
+        sourceVariants: sourceMessage.variants,
         declarations,
-      );
+      });
 
       if (existingVariant && !isEmpty(existingVariant)) {
         continue;
@@ -241,12 +237,12 @@ export function planBundleTranslation(
         );
 
         if (targetMessage) {
-          const existingVariant = findMatchingVariant(
-            targetMessage.variants,
-            sourceVariant.matches,
-            sourceMessage.variants,
-            copy.declarations,
-          );
+          const existingVariant = findMatchingVariant({
+            variants: targetMessage.variants,
+            matches: sourceVariant.matches,
+            sourceVariants: sourceMessage.variants,
+            declarations: copy.declarations,
+          });
 
           // only an empty variant is missing a translation
           if (existingVariant) {
@@ -311,12 +307,9 @@ function isEmpty(variant: VariantRow): boolean {
 
 /**
  * The plural categories a missing form needs that no source variant of its
- * branch has: Russian `few` × `female` when no English variant is `few` and
- * `female`. A branch is the form's values of the other selectors (gender,
- * the plural's type, an exact number), or their catch-all where the source
- * has no variant for a value, as at runtime. So English ordinal `few` is no
- * source for Russian cardinal `few`, and a gender only the translation has
- * needs no category the source has.
+ * branch has. A branch is the form's values of the other selectors, or their
+ * catch-all where the source has no variant for a value, as at runtime: so
+ * English ordinal `few` is no source for Russian cardinal `few`.
  */
 function newCategories(
   matches: VariantRow["matches"],
@@ -347,11 +340,10 @@ function newCategories(
 }
 
 /**
- * True when a plural of the message has no known rules in its locale, so the
- * SDK requires only its catch-all: an unknown locale, or options only known
- * at runtime. A plural whose `type` a select chooses (`type=$pluralType`)
- * has rules per type, known when its cardinal rules are (the SDK reads the
- * catch-all type as cardinal).
+ * True when a plural of the message has no known rules in its locale (an
+ * unknown locale, or options only known at runtime), so the SDK requires only
+ * its catch-all. A plural whose `type` a select chooses has known rules when
+ * its cardinal rules are known.
  */
 function hasUnknownPluralRules(
   message: Parameters<typeof selectorGroups>[0],
@@ -499,12 +491,12 @@ export function orderLikeSource(
   const sourceIndex = (variant: VariantRow) =>
     sourceVariants.findIndex(
       (source) =>
-        findMatchingVariant(
-          [variant],
-          source.matches,
+        findMatchingVariant({
+          variants: [variant],
+          matches: source.matches,
           sourceVariants,
           declarations,
-        ) !== undefined,
+        }) !== undefined,
     );
   let previous = -1;
   const keyed = message.variants.map((variant, position) => {

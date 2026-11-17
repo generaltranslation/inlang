@@ -11,16 +11,10 @@ export async function machineTranslateBundle(
     provider: AnyMachineTranslateProvider;
   },
 ): Promise<
-  Partial<ReturnType<BundleTranslationPlan["apply"]>> &
-    Partial<Omit<BundleTranslationPlan, "missing" | "apply">> & {
-      error?: string;
-    }
+  Partial<ReturnType<BundleTranslationPlan["apply"]>> & { error?: string }
 > {
   const plan = planBundleTranslation(args);
   if ("error" in plan) return plan;
-  const { missing, apply, ...report } = plan;
-  const result = await translateMissing({ ...args, missing });
-  return result.ok
-    ? { ...apply(result.translations), ...report }
-    : { error: result.error };
+  const result = await translateMissing({ ...args, missing: plan.missing });
+  return result.ok ? plan.apply(result.translations) : { error: result.error };
 }

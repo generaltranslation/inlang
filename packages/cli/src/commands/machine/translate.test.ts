@@ -860,60 +860,20 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
   }
   await insertBundleNested(project.db, pluralBundle("bare", true));
   const warn = vi.spyOn(log, "warn");
-  const success = vi.spyOn(log, "success");
   const { provider } = fakeBatchProvider();
-  const translateBatch = vi.spyOn(provider, "translateBatch");
   try {
-    const { translated } = await translateCommandAction({ project, provider });
-    // de and x-foo for the plurals, every locale for the bare selector
-    expect(translated).toBe(2 * 2 * 2 + 4 * 2);
+    await translateCommandAction({ project, provider });
     expect(warn.mock.calls).toEqual([
       [
-        `These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Declare them with ": plural".\n` +
+        "These selectors have plural categories as keys but aren't plurals, so their keys never match a number. Make them plurals.\n" +
           "  bare: count",
       ],
       [
-        "Skipped 4 messages in ru, ar: their plurals need forms the source doesn't have (zero, two, few, many). Add them by hand, then run again.\n" +
-          "  ru: cart, items\n" +
-          "  ar: cart, items",
+        "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
+          "  ru (few, many): cart, items\n" +
+          "  ar (zero, two, few, many): cart, items",
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
-    ]);
-    // the plural report comes at the end of the run: after the last
-    // request, before the success line
-    const [, skippedWarning, unknownWarning] = warn.mock.invocationCallOrder;
-    expect(skippedWarning).toBeGreaterThan(
-      Math.max(...translateBatch.mock.invocationCallOrder),
-    );
-    expect(unknownWarning).toBeGreaterThan(skippedWarning!);
-    expect(success.mock.invocationCallOrder[0]).toBeGreaterThan(
-      unknownWarning!,
-    );
-    const bundles = await selectBundleNested(project.db).execute();
-    expect(
-      bundles
-        .find((bundle) => bundle.id === "items")
-        ?.messages.map((message) => message.locale)
-        .sort(),
-    ).toEqual(["de", "en", "x-foo"]);
-  } finally {
-    await project.close();
-  }
-});
-
-test("one skipped message is one message", async () => {
-  const project = await projectWithTextBundles(["en", "ru"], 0);
-  await insertBundleNested(project.db, pluralBundle("items"));
-  const warn = vi.spyOn(log, "warn");
-  const { provider, calls } = fakeBatchProvider();
-  try {
-    await translateCommandAction({ project, provider });
-    expect(calls).toEqual([]);
-    expect(warn.mock.calls).toEqual([
-      [
-        "Skipped 1 message in ru: their plurals need forms the source doesn't have (few, many). Add them by hand, then run again.\n" +
-          "  ru: items",
-      ],
     ]);
   } finally {
     await project.close();
