@@ -243,9 +243,8 @@ export function planBundleTranslation(
       );
       const rejected = missing.filter(
         (translation) =>
-          translations.has(translation) &&
-          (reasons.has(translation) ||
-            rejectedNewMessages.has(translation.targetLocale)),
+          reasons.has(translation) ||
+          rejectedNewMessages.has(translation.targetLocale),
       );
 
       const copy = structuredClone(args.bundle);
