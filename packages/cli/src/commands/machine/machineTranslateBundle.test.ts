@@ -455,11 +455,13 @@ test("a target's own selectors decide the forms it needs", async () => {
   const en = bundle.messages.find((message) => message.locale === "en")!;
   en.selectors = [];
   en.variants[0]!.matches = [];
-  const { result } = await translate(bundle, ["ru"]);
+  const { calls, result } = await translate(bundle, ["ru"]);
 
   expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["many"] },
   ]);
+  // the source's text wouldn't fit the plural: it is left as it is
+  expect(calls).toEqual([]);
 });
 
 test("`other` and the catch-all are the same form", async () => {

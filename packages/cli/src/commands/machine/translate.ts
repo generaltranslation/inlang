@@ -243,7 +243,7 @@ export async function translateCommandAction(args: {
     if (incomplete.size > 0) {
       log.warn(
         [
-          "Some plurals have only the source's forms, but their language needs more. Until those forms are added by hand, their numbers show the catch-all form:",
+          "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:",
           ...[...incomplete].map(
             ([locale, { ids, categories }]) =>
               `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
