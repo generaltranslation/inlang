@@ -27,7 +27,7 @@ DeepL and OpenAI use bundle descriptions and plural forms as context; Google Tra
 
 ## Community-operated translation service
 
-The free service at [translate.demosjarco.dev](https://translate.demosjarco.dev) was the default before General Translation. The CLI uses it when you answer no to using General Translation, or when `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` is set. It is a community-run, third-party service — it is not owned, operated, or maintained by inlang. It requires no API key:
+The free service at [translate.demosjarco.dev](https://translate.demosjarco.dev) was the default before General Translation. The CLI uses it when you answer no to using General Translation, when a run without a terminal has no key and the project didn't choose General Translation, or when `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` is set. It is a community-run, third-party service — it is not owned, operated, or maintained by inlang. It requires no API key:
 
 ```bash
 export INLANG_MACHINE_TRANSLATE_PROVIDER="demosjarco"

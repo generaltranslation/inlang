@@ -78,7 +78,7 @@ Create `messages/en.json`:
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-In a terminal, the first run asks whether to use General Translation and, if you say yes, signs you in; signing up is free. Without a terminal, as in CI and most coding agents, or on Linux without a display, as over SSH, it doesn't ask: without a key, it uses the community-operated service, unless the project chose General Translation, in which case it prints the steps to get a key. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
+In a terminal, the first run asks whether to use General Translation and, if you say yes, signs you in; signing up is free. For CI, coding agents and your own translation API key, see [`machine translate`](#machine-translate).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
