@@ -740,29 +740,18 @@ export function requiredVariants(
 			);
 		})
 	);
-	const forms = combinations.map((values) =>
-		toMatches(message.selectors, values)
-	);
-	// A plural category that selects only an exact number of another form
-	// (Arabic "zero", only 0, next to `=0`) is never shown: the exact form wins.
-	return forms.filter(
-		(form) =>
-			!forms.some(
-				(other) =>
-					other !== form &&
-					variantCovers({ matches: form }, other, declarations, message.locale)
-			)
-	);
+	return combinations.map((values) => toMatches(message.selectors, values));
 }
 
 /**
  * True when a variant is the form for a match combination. An explicit
  * `other` of a plural selector is its catch-all form as well.
  *
- * With the `locale`, a plural category that selects only the form's exact
- * number is that form: Arabic "zero" (only 0) is `=0`, which is how
- * `@inlang/plugin-i18next` imports Arabic `_zero`. Latvian "zero" (0, 10–20,
- * 30…) is not.
+ * With the `locale`, a plural category that selects only 0 is the form's
+ * exact 0: Arabic "zero" is `=0`, which is how `@inlang/plugin-i18next`
+ * imports Arabic `_zero`, with ordinal forms too (in the catch-all type, which
+ * is cardinal). Latvian "zero" (0, 10–20, 30…) is not. Neither is German
+ * "one" `=1`: plural rules ignore the sign, so "one" is -1 too.
  */
 export function variantCovers(
 	variant: WithMatches,
@@ -789,8 +778,11 @@ export function variantCovers(
 
 /**
  * The exact-number selector of `matches` and the plural selector of the same
- * input, when the variant has the catch-all on the first and, on the second,
- * the category that selects only that number in the locale. Empty otherwise.
+ * input, when the exact number is 0 after the plural's offset and the variant
+ * has the catch-all on the first and, on the second, the category that
+ * selects only 0 in the locale. With a variable plural type, also its select
+ * when the form matches "cardinal" there and the variant the catch-all (the
+ * cardinal type). Empty otherwise.
  */
 function exactNumberAsCategory(
 	variant: WithMatches,
@@ -813,13 +805,32 @@ function exactNumberAsCategory(
 				resolveInputVariable(plural.key, declarations) !== input
 			)
 				continue;
-			const rules = pluralRules(plural.key, declarations, locale);
+			const rules = pluralRules(plural.key, declarations, locale, matches);
 			const category = matchValue(variant, plural.key);
 			if (
-				rules?.singleNumberCategories.includes(category) &&
-				rules.rules.select(Number(exact.value) - rules.offset) === category
+				!rules ||
+				Number(exact.value) !== rules.offset ||
+				!rules.singleNumberCategories.includes(category) ||
+				rules.rules.select(0) !== category
 			)
-				return [exact.key, plural.key];
+				continue;
+			const variable = typeVariable(
+				resolveAnnotation(plural.key, declarations)!
+			);
+			const type =
+				variable === undefined
+					? undefined
+					: matches.find(
+							(match) =>
+								resolveAnnotation(match.key, declarations) === undefined &&
+								resolveInputVariable(match.key, declarations) ===
+									resolveInputVariable(variable, declarations)
+						);
+			return type?.type === "literal-match" &&
+				type.value === "cardinal" &&
+				matchValue(variant, type.key) === "*"
+				? [exact.key, plural.key, type.key]
+				: [exact.key, plural.key];
 		}
 	}
 	return [];
