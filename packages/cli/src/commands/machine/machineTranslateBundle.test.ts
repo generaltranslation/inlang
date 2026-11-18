@@ -1131,43 +1131,60 @@ test("with context, a target gets every plural form its language needs, each fro
   });
 });
 
-test("an exact number and the category that selects only it are one form: Arabic `zero` is `=0`", async () => {
-  // what @inlang/plugin-i18next imports for English `_zero`, `_one`, `_other`
-  const selectors = ["count", "countPlural"];
-  const en = {
-    "count=0,countPlural=*": "No items",
-    "count=*,countPlural=one": "One item",
-    "count=*,countPlural=*": "Many items",
+test("Arabic `zero`, which selects only 0, is the exact 0 form, as the i18next plugin reads Arabic `_zero` back", async () => {
+  const nothingMissing = (
+    declarations: Declaration[],
+    selectors: string[],
+    messages: Record<string, Record<string, string>>,
+  ) => {
+    for (const supportsContext of [true, false]) {
+      expect(
+        planBundleTranslation({
+          bundle: formsBundle(declarations, selectors, messages),
+          sourceLocale: "en",
+          targetLocales: ["ar"],
+          supportsContext,
+        }),
+      ).toMatchObject({ missing: [] });
+    }
   };
-  // `=0` and no "zero", which `=0` always wins over
-  const { result } = await expand(formsBundle(countPlural, selectors, { en }), [
-    "ar",
-  ]);
-  expect(Object.keys(formsOf(result, "ar")!)).toEqual([
-    "count=0,countPlural=*",
-    "count=*,countPlural=one",
-    "count=*,countPlural=two",
-    "count=*,countPlural=few",
-    "count=*,countPlural=many",
-    "count=*,countPlural=*",
-  ]);
-  // as the plugin reads Arabic `_zero` back: nothing is missing
-  const ar = Object.fromEntries(
-    ["zero", "one", "two", "few", "many", "*"].map((category) => [
-      `count=*,countPlural=${category}`,
-      `[ar] ${category}`,
-    ]),
+  const arabic = (prefix: string) =>
+    Object.fromEntries(
+      ["zero", "one", "two", "few", "many", "*"].map((category) => [
+        `${prefix}countPlural=${category}`,
+        `[ar] ${category}`,
+      ]),
+    );
+  // English `_zero`, `_one`, `_other`
+  nothingMissing(countPlural, ["count", "countPlural"], {
+    en: {
+      "count=0,countPlural=*": "No items",
+      "count=*,countPlural=one": "One item",
+      "count=*,countPlural=*": "Many items",
+    },
+    ar: arabic("count=*,"),
+  });
+  // with `_ordinal_other` too
+  nothingMissing(
+    [
+      input("count"),
+      input("pluralType"),
+      plural("countPlural", "count", { type: "$pluralType" }),
+    ],
+    ["pluralType", "count", "countPlural"],
+    {
+      en: {
+        "pluralType=cardinal,count=0,countPlural=*": "No items",
+        "pluralType=*,count=*,countPlural=one": "One item",
+        "pluralType=*,count=*,countPlural=*": "Many items",
+        "pluralType=ordinal,count=*,countPlural=*": "Nth",
+      },
+      ar: {
+        ...arabic("pluralType=*,count=*,"),
+        "pluralType=ordinal,count=*,countPlural=*": "[ar] Nth",
+      },
+    },
   );
-  for (const supportsContext of [true, false]) {
-    expect(
-      planBundleTranslation({
-        bundle: formsBundle(countPlural, selectors, { en, ar }),
-        sourceLocale: "en",
-        targetLocales: ["ar"],
-        supportsContext,
-      }),
-    ).toMatchObject({ missing: [] });
-  }
 });
 
 test("two plurals: the context names each category that isn't the source's", async () => {
