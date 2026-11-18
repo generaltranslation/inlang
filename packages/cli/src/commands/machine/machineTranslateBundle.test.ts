@@ -1483,7 +1483,7 @@ test("a message without a plural gets only the source's forms, with context too"
   });
 });
 
-test("a target whose selectors aren't the source's isn't expanded: it gets the source's forms and is reported", async () => {
+test("a target whose selectors aren't the source's isn't expanded: reported and left as it is", async () => {
   // a target with a gender the source doesn't select
   const bundle = formsBundle(
     [input("gender"), ...countPlural],
@@ -1503,13 +1503,9 @@ test("a target whose selectors aren't the source's isn't expanded: it gets the s
   const ru = formsOf({ data: bundle }, "ru");
   const { calls, result } = await expand(bundle, ["ru"]);
 
-  // as without context: the source's forms, with no plural-form guidance
-  expect(calls.map(({ text, context }) => [text, context])).toEqual([
-    ["One item", undefined],
-    ["Many items", undefined],
-  ]);
+  expect(calls).toEqual([]);
   expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["few", "many"] },
   ]);
-  expect(formsOf(result, "ru")).toMatchObject(ru!);
+  expect(formsOf(result, "ru")).toEqual(ru);
 });
