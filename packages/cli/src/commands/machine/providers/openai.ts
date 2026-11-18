@@ -113,6 +113,9 @@ export function createOpenAITranslateProvider(
       if (!response.ok) {
         return {
           ok: false,
+          scope: [400, 413, 422].includes(response.status)
+            ? "text"
+            : "provider",
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
       }
@@ -121,6 +124,7 @@ export function createOpenAITranslateProvider(
       if (!isCompletedResponse(json)) {
         return {
           ok: false,
+          scope: "text",
           error: `OpenAI response was not completed: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
       }
@@ -129,6 +133,7 @@ export function createOpenAITranslateProvider(
       if (typeof outputText !== "string") {
         return {
           ok: false,
+          scope: "text",
           error: `Invalid response from OpenAI: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
       }
