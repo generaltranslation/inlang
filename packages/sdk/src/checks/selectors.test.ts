@@ -317,12 +317,8 @@ test("an exact number and the plural category that selects only it are one form"
 		variant({ count: "*", countPlural: "one" }),
 		variant({ count: "*", countPlural: "*" }),
 	];
-	const arabic = message("ar", ["count", "countPlural"]);
-	// Arabic "zero" selects only 0, where the exact form is shown
-	expect(
-		values(requiredVariants(arabic, plural, { referenceVariants: english }))
-	).toEqual(["0 · *", "* · one", "* · two", "* · few", "* · many", "* · *"]);
-	// and is the exact form: the plugin imports Arabic `_zero` as "zero"
+	// Arabic "zero" selects only 0, so it is the exact form: the plugin imports
+	// Arabic `_zero` as "zero"
 	expect(
 		missingVariants(
 			message(
@@ -354,21 +350,85 @@ test("an exact number and the plural category that selects only it are one form"
 			)
 		)
 	).toEqual(["0 · *"]);
-	// ICU `=1` next to German "one", which selects only 1
+	// with ordinal forms too: English `_zero` is the exact 0 of the cardinal
+	// type, Arabic `_zero` the "zero" of the catch-all type, which is cardinal
 	expect(
+		missingVariants(
+			message(
+				"ar",
+				["pluralType", "count", "countPlural"],
+				[
+					...["zero", "one", "two", "few", "many", "*"].map((category) => ({
+						pluralType: "*",
+						count: "*",
+						countPlural: category,
+					})),
+					{ pluralType: "ordinal", count: "*", countPlural: "*" },
+				]
+			),
+			typedPlural,
+			{
+				referenceVariants: [
+					variant({ pluralType: "cardinal", count: "0", countPlural: "*" }),
+					variant({ pluralType: "*", count: "*", countPlural: "one" }),
+					variant({ pluralType: "*", count: "*", countPlural: "*" }),
+					variant({ pluralType: "ordinal", count: "*", countPlural: "one" }),
+					variant({ pluralType: "ordinal", count: "*", countPlural: "*" }),
+				],
+			}
+		)
+	).toEqual([]);
+	// German "one" also selects -1: ICU `=1` doesn't stand in for it
+	const german = (declarations: Declaration[], numbers: string[]) =>
 		values(
 			requiredVariants(
 				message("de", ["countPluralExact", "countPlural"]),
-				icuExact,
+				declarations,
 				{
 					referenceVariants: [
-						variant({ countPluralExact: "1", countPlural: "*" }),
+						...numbers.map((number) =>
+							variant({ countPluralExact: number, countPlural: "*" })
+						),
+						variant({ countPluralExact: "*", countPlural: "*" }),
+					],
+				}
+			)
+		);
+	expect(german(icuExact, ["1"])).toEqual(["1 · *", "* · one", "* · *"]);
+	// nor, with `offset:1`, `=0` and `=1`: "one" is 0 and 2
+	const offset = structuredClone(icuExact);
+	const local = offset[1]!;
+	if (local.type === "local-variable")
+		local.value.annotation!.options = [
+			{ name: "offset", value: { type: "literal", value: "1" } },
+		];
+	expect(german(offset, ["0", "1"])).toEqual([
+		"0 · *",
+		"1 · *",
+		"* · one",
+		"* · *",
+	]);
+	expect(
+		values(
+			missingVariants(
+				message(
+					"de",
+					["countPluralExact", "countPlural"],
+					[
+						{ countPluralExact: "*", countPlural: "one" },
+						{ countPluralExact: "*", countPlural: "*" },
+					]
+				),
+				offset,
+				{
+					referenceVariants: [
+						variant({ countPluralExact: "0", countPlural: "*" }),
 						variant({ countPluralExact: "*", countPlural: "*" }),
 					],
 				}
 			)
 		)
-	).toEqual(["1 · *", "* · *"]);
+	).toEqual(["0 · *"]);
 });
 
 test("an explicit other covers the catch-all, a missing match counts as catch-all", () => {
