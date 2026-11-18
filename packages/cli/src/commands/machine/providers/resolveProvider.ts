@@ -120,7 +120,7 @@ export async function resolveMachineTranslateProvider(args: {
   // Answering No saves the choice to .env.local. A provider or key in the
   // environment beats it.
   if (
-    !(PROVIDER_ENV in env) &&
+    !env[PROVIDER_ENV]?.trim() &&
     (await readEnvFiles(dir))[PROVIDER_ENV] === "demosjarco"
   ) {
     const provider = createCommunityProvider(env);
@@ -206,7 +206,7 @@ async function missingGtKeyError(
   const init = ["npx", ...(await gtInitArgs({ dir, settings, env }))]
     .map(shellQuote)
     .join(" ");
-  const envLocal = shellQuote(nodePath.resolve(dir, ".env.local"));
+  const envLocal = shellQuote(nodePath.join(dir, ".env.local"));
   // gt init adds gt to a package.json in its folder, so it runs in an empty
   // one, and the .env.local it saves there is appended to the project's. The
   // subshell keeps the caller's working directory: an agent's shell keeps it

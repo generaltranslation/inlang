@@ -363,6 +363,8 @@ test("uses the choice saved in .env.local without asking, and says where it is",
   vi.spyOn(log, "warn").mockImplementation(() => undefined);
   const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
   const provider = await resolve({
+    // an empty provider setting is no setting
+    env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "" },
     projectPath: projectIn({
       ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n",
     }).projectPath,
