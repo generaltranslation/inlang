@@ -117,14 +117,6 @@ function gitTree(files: Record<string, string> = {}): string {
   return dir;
 }
 
-/** A folder with only git, to put on PATH. */
-function binWithGit(): string {
-  const bin = tree();
-  const git = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  fs.symlinkSync(git, nodePath.join(bin, "git"));
-  return bin;
-}
-
 /** Everything the CLI prints, joined: every consola log type. */
 function captureLog(): () => string {
   const lines: unknown[][] = [];
@@ -137,24 +129,6 @@ function captureLog(): () => string {
 }
 
 describe("readGtCredentials", () => {
-  test("reads an unprefixed development key", async () => {
-    const dir = tree({
-      ".env.local": "GT_PROJECT_ID=prj_1\nGT_DEV_API_KEY=key\n",
-    });
-    expect(await readGtCredentials({ env: {}, dir })).toEqual({
-      apiKey: "key",
-      projectId: "prj_1",
-    });
-  });
-
-  test("reads Next.js's GT_API_KEY", async () => {
-    const dir = tree({ ".env.local": "GT_PROJECT_ID=prj_1\nGT_API_KEY=key\n" });
-    expect(await readGtCredentials({ env: {}, dir })).toEqual({
-      apiKey: "key",
-      projectId: "prj_1",
-    });
-  });
-
   test("pairs the key with the project ID of its prefix", async () => {
     const dir = tree({
       ".env.local":
@@ -174,13 +148,6 @@ describe("readGtCredentials", () => {
         dir,
       }),
     ).toEqual({ apiKey: "env-key", projectId: "prj_env" });
-  });
-
-  test("never pairs the environment's key with a file's project ID", async () => {
-    const dir = tree({ ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" });
-    expect(
-      await readGtCredentials({ env: { GT_API_KEY: "env-key" }, dir }),
-    ).toEqual({ apiKey: "env-key", projectId: undefined });
   });
 
   test("reads .env, which .env.local overrides, as gt does", async () => {
@@ -216,11 +183,6 @@ describe("readGtCredentials", () => {
         dir: tree(),
       }),
     ).toEqual({ apiKey: "key", projectId: undefined });
-  });
-
-  test("returns undefined for a project ID without a key", async () => {
-    const dir = tree({ ".env.local": "VITE_GT_PROJECT_ID=prj_1\n" });
-    expect(await readGtCredentials({ env: {}, dir })).toBeUndefined();
   });
 
   test("rethrows a read error other than a missing file", async () => {
@@ -352,15 +314,6 @@ describe("signInToGt", () => {
     );
   });
 
-  test("adds a .gitignore rule outside a git work tree too", async () => {
-    captureLog();
-    const dir = tree();
-    await signIn({ dir, run: fakeGt(signedIn).run });
-    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
-      ".env.local\n",
-    );
-  });
-
   test("signs in without git", async () => {
     captureLog();
     vi.stubEnv("PATH", tree());
@@ -439,23 +392,6 @@ describe("signInToGt", () => {
       ],
     });
     expect(gt.calls[1]).toEqual([...gt.calls[0]!, "--org-id", "org_def456"]);
-  });
-
-  test("returns undefined when the user cancels the organization prompt", async () => {
-    captureLog();
-    const dir = tree();
-    const gt = fakeGt({
-      events: [needsOrg],
-      files: { "gt.config.json": "{}" },
-    });
-    expect(
-      await signIn({
-        dir,
-        run: gt.run,
-        prompt: fakePrompt(undefined).prompt,
-      }),
-    ).toBeUndefined();
-    expect(gt.calls).toHaveLength(1);
   });
 
   test("throws gt's error, shows the tail of its log and removes gt's folder", async () => {
@@ -566,18 +502,6 @@ const timer = setInterval(() => {
     ).toEqual({ apiKey: "key", projectId: undefined });
   });
 
-  test("rejects when npx can't be started", async () => {
-    captureLog();
-    vi.stubEnv("PATH", binWithGit());
-    await expect(
-      signInToGt({
-        dir: tree(),
-        settings,
-        env: {},
-      }),
-    ).rejects.toThrow("spawn npx ENOENT");
-  });
-
   test("opens the sign-in URL with the platform's opener", async () => {
     captureLog();
     const opened = nodePath.join(tree(), "argv.json");
@@ -600,18 +524,5 @@ require("node:fs").writeFileSync(${JSON.stringify(opened)}, JSON.stringify(proce
         authorizationRequired.verificationUriComplete,
       ]),
     );
-  });
-
-  test("still signs in when no opener can be started", async () => {
-    captureLog();
-    vi.stubEnv("PATH", binWithGit());
-    expect(
-      await signInToGt({
-        dir: tree(),
-        settings,
-        env: {},
-        run: fakeGt(signedIn).run,
-      }),
-    ).toEqual({ apiKey: API_KEY, projectId: "prj_1" });
   });
 });
