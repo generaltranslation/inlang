@@ -1051,6 +1051,38 @@ test("a plural whose type no selector chooses has unknown rules: the source's fo
   });
 });
 
+// Native MF2 may give the cardinal type its own categories. The SDK's plan follows i18next,
+// where cardinal categories live under the catch-all type, so expanding would drop these.
+test("cardinal categories under an explicit type branch: the source's forms are copied", async () => {
+  const { result } = await expand(
+    formsBundle(
+      [
+        input("count"),
+        input("pluralType"),
+        plural("countPlural", "count", { type: "$pluralType" }),
+      ],
+      ["pluralType", "countPlural"],
+      {
+        en: {
+          "pluralType=cardinal,countPlural=one": "One item",
+          "pluralType=cardinal,countPlural=*": "Many items",
+          "pluralType=*,countPlural=one": "First place",
+          "pluralType=*,countPlural=*": "Other place",
+        },
+      },
+    ),
+    ["de"],
+  );
+
+  expect(result.unknownPluralRules).toEqual(["de"]);
+  expect(formsOf(result, "de")).toEqual({
+    "pluralType=cardinal,countPlural=one": "[de] One item",
+    "pluralType=cardinal,countPlural=*": "[de] Many items",
+    "pluralType=*,countPlural=one": "[de] First place",
+    "pluralType=*,countPlural=*": "[de] Other place",
+  });
+});
+
 test("a batch provider gets every form of a locale in one request, the same source text several times", async () => {
   const calls: TranslateBatchArgs[] = [];
   const result = await machineTranslateBundle({
