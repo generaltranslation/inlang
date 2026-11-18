@@ -98,7 +98,7 @@ export async function checkCommandAction(
     );
     if (options.format !== "json" && hasMissingTranslations(report))
       process.stdout.write(
-        `\nTranslate what's missing with inlang machine translate --project ${options.project}\n`,
+        `\nTranslate what's missing with inlang machine translate --project ${options.project.includes(" ") ? `"${options.project}"` : options.project}\n`,
       );
     if (hasFindings(report) && options.fail !== false) {
       if (options.format !== "json")
