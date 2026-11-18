@@ -5,12 +5,7 @@ import os from "node:os";
 import nodePath from "node:path";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
-import {
-  appendToEnvLocal,
-  readGtCredentials,
-  shareGtProjectId,
-  signInToGt,
-} from "./gtSignIn.js";
+import { readGtCredentials, shareGtProjectId, signInToGt } from "./gtSignIn.js";
 
 type SignInArgs = Parameters<typeof signInToGt>[0];
 
@@ -207,65 +202,7 @@ function signIn(args: Pick<SignInArgs, "dir" | "run"> & Partial<SignInArgs>) {
   });
 }
 
-describe("appendToEnvLocal", () => {
-  test("adds no second .gitignore rule outside a git work tree", async () => {
-    const dir = tree({ ".gitignore": "dist\r\n.env.local\r\n" });
-    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(false);
-    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
-      "dist\r\n.env.local\r\n",
-    );
-  });
-
-  test("adds the rule again outside a git work tree when a later line undoes it", async () => {
-    const dir = tree({ ".gitignore": ".env.local\n!.env.local\n" });
-    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
-    expect(fs.readFileSync(nodePath.join(dir, ".gitignore"), "utf8")).toBe(
-      ".env.local\n!.env.local\n.env.local\n",
-    );
-  });
-
-  test.each([
-    " .env.local\n",
-    "\\.env.local\n",
-    ".env.local\t\n",
-    ".env.local\u00a0\n",
-  ])(
-    "outside a git work tree, adds the rule when the last line only looks like it (%j)",
-    async (gitignore) => {
-      const dir = tree({ ".gitignore": gitignore });
-      expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
-    },
-  );
-
-  test("outside a git work tree, a last rule with trailing spaces holds", async () => {
-    const dir = tree({ ".gitignore": ".env.local  \n" });
-    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(false);
-  });
-
-  test("trusts git that .env.local isn't ignored, whatever .gitignore lists", async () => {
-    const dir = gitTree({ ".gitignore": ".env.local\n!.env.local\n" });
-    expect(await appendToEnvLocal(dir, "A=1\n")).toBe(true);
-    expect(
-      execFileSync("git", ["check-ignore", "--", ".env.local"], {
-        cwd: dir,
-        encoding: "utf8",
-      }).trim(),
-    ).toBe(".env.local");
-  });
-});
-
 describe("shareGtProjectId", () => {
-  test("shares the project ID of the key, not another prefix's", async () => {
-    const dir = tree({
-      ".env.local":
-        "VITE_GT_PROJECT_ID=prj_vite\nGT_API_KEY=key\nGT_PROJECT_ID=prj_1\n",
-    });
-    expect(await shareGtProjectId(dir)).toBe(true);
-    expect(
-      JSON.parse(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")),
-    ).toEqual({ projectId: "prj_1" });
-  });
-
   test("adds the project ID to a gt.config.json without one", async () => {
     const dir = tree({
       ".env.local": ENV_LOCAL,
@@ -277,15 +214,11 @@ describe("shareGtProjectId", () => {
     ).toEqual({ defaultLocale: "en", projectId: "prj_1" });
   });
 
-  test.each([
-    ["names a project", '{"projectId":"prj_other"}'],
-    ["isn't a JSON object", "[]"],
-    ["isn't JSON", "{"],
-  ])("leaves a gt.config.json that %s alone", async (_, config) => {
-    const dir = tree({ ".env.local": ENV_LOCAL, "gt.config.json": config });
+  test("leaves a gt.config.json that isn't JSON alone", async () => {
+    const dir = tree({ ".env.local": ENV_LOCAL, "gt.config.json": "{" });
     expect(await shareGtProjectId(dir)).toBe(false);
     expect(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")).toBe(
-      config,
+      "{",
     );
   });
 

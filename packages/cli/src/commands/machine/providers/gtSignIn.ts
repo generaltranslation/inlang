@@ -243,20 +243,11 @@ export async function appendToEnvLocal(
   dir: string,
   text: string,
 ): Promise<boolean> {
-  const gitignore = nodePath.join(dir, ".gitignore");
-  const { code } = await git(dir, "check-ignore", "-q", "--", ".env.local");
-  // 0: ignored, 1: not. Otherwise git can't tell, as outside a work tree:
-  // only a rule that ends .gitignore holds whatever comes before it, such as
-  // a `!.env.local`.
-  const lastLine = (await fs.readFile(gitignore, "utf8").catch(() => ""))
-    .split(/\r?\n/)
-    .filter((line) => line.trim())
-    .at(-1);
+  // Exit code 0: ignored.
   const ignored =
-    // git drops trailing spaces, but not tabs, and keeps leading spaces
-    code === 0 || (code !== 1 && lastLine?.replace(/ +$/, "") === ".env.local");
+    (await git(dir, "check-ignore", "-q", "--", ".env.local")).code === 0;
   if (!ignored) {
-    await appendToFile(gitignore, ".env.local\n");
+    await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
   }
   await appendToFile(nodePath.join(dir, ".env.local"), text, { mode: 0o600 });
   return !ignored;
@@ -315,18 +306,51 @@ async function appendToFile(
  * The General Translation project that `dir`'s .env files, gt.config.json or
  * the environment name. One in .env or .env.local comes first: a new key is
  * saved next to it, and readGtCredentials pairs a key with the project ID from
- * the same source.
+ * the same source. Missing config is allowed; unreadable or invalid config
+ * throws so provider selection cannot silently switch services.
  */
 export async function findGtProjectId(
   dir: string,
   env: Record<string, string | undefined>,
 ): Promise<string | undefined> {
-  const config = await fs
-    .readFile(nodePath.join(dir, "gt.config.json"), "utf8")
-    .catch(() => undefined);
+  const configPath = nodePath.join(dir, "gt.config.json");
+  const text = await fs.readFile(configPath, "utf8").catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  let projectId: string | undefined;
+  if (text !== undefined) {
+    // This lookup decides whether text may go to the community service.
+    // Invalid configuration must not count as an unconfigured project.
+    let config: unknown;
+    try {
+      config = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Invalid General Translation config at ${configPath}: expected valid JSON.`,
+      );
+    }
+    if (
+      typeof config !== "object" ||
+      config === null ||
+      Array.isArray(config)
+    ) {
+      throw new Error(
+        `Invalid General Translation config at ${configPath}: expected a JSON object.`,
+      );
+    }
+    if ("projectId" in config) {
+      if (typeof config.projectId !== "string" || !config.projectId.trim()) {
+        throw new Error(
+          `Invalid General Translation config at ${configPath}: projectId must be a non-empty string.`,
+        );
+      }
+      projectId = config.projectId;
+    }
+  }
   return (
     findVariable(await readEnvFiles(dir), PROJECT_ID) ||
-    parseJson(config ?? "")?.projectId ||
+    projectId ||
     findVariable(env, PROJECT_ID)
   );
 }

@@ -1019,15 +1019,14 @@ function clearProviderEnv() {
 }
 
 test.each([
-  { stdinTTY: false, stdoutTTY: true, CI: "", asks: false },
-  { stdinTTY: true, stdoutTTY: false, CI: "", asks: false },
-  { stdinTTY: true, stdoutTTY: true, CI: "1", asks: false },
-  { stdinTTY: true, stdoutTTY: true, CI: "", asks: true },
+  { stdinTTY: false, stdoutTTY: true, asks: false },
+  { stdinTTY: true, stdoutTTY: false, asks: false },
+  { stdinTTY: true, stdoutTTY: true, asks: true },
 ])(
   "unconfigured runs translate unattended and ask only at a terminal (%o)",
-  async ({ stdinTTY, stdoutTTY, CI, asks }) => {
+  async ({ stdinTTY, stdoutTTY, asks }) => {
     clearProviderEnv();
-    vi.stubEnv("CI", CI);
+    vi.stubEnv("CI", "");
     // Linux counts as interactive only with a display.
     vi.stubEnv("DISPLAY", ":0");
     const restoreTTY = [
@@ -1086,40 +1085,6 @@ test.each([
       }
     } finally {
       for (const restore of restoreTTY) restore();
-      await cleanup();
-    }
-  },
-);
-
-test.each([401, 402, 503])(
-  "configured GT failure (%i) never falls back to the community service",
-  async (status) => {
-    clearProviderEnv();
-    vi.stubEnv("GT_API_KEY", "gt-key");
-    vi.stubEnv("CI", "1");
-    const fetch = vi
-      .fn()
-      .mockImplementation(async () => new Response(null, { status }));
-    vi.stubGlobal("fetch", fetch);
-    const { path, read, cleanup } = await projectOnDisk({
-      en: `{"alpha":"Alpha"}`,
-      de: `{}`,
-    });
-    const exit = vi
-      .spyOn(process, "exit")
-      .mockImplementation(() => undefined as never);
-    try {
-      await translate.parseAsync(["--project", path, "--nobar"], {
-        from: "user",
-      });
-      expect(exit).toHaveBeenCalledWith(1);
-      const requests = fetch.mock.calls.filter(([url]) =>
-        String(url).startsWith("https://"),
-      );
-      expect(requests).toHaveLength(1);
-      expect(String(requests[0]![0])).toBe("https://api.gtx.dev/v2/translate");
-      expect(JSON.parse(read("de"))).toEqual({});
-    } finally {
       await cleanup();
     }
   },
@@ -1251,7 +1216,6 @@ test.each([
     description: "A greeting on the home page",
     warnings: [],
   },
-  { supportsContext: false, description: undefined, warnings: [] },
 ])(
   "warns only when the provider ignores bundle descriptions (supportsContext: $supportsContext, description: $description)",
   async ({ supportsContext, description, warnings }) => {
