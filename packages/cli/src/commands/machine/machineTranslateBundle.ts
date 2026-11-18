@@ -54,16 +54,28 @@ const RATE_LIMIT_BASE_DELAY_MS = 2_000;
  */
 const MAX_RATE_LIMIT_WAIT_MS = 60_000;
 
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Waits `ms`, or less if `signal` aborts. */
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 
 /**
  * Sends a request again while it is rate-limited, within
- * `MAX_RATE_LIMIT_RETRIES` and `MAX_RATE_LIMIT_WAIT_MS`.
+ * `MAX_RATE_LIMIT_RETRIES` and `MAX_RATE_LIMIT_WAIT_MS`. Once `stop` aborts,
+ * because another request failed for good, it stops waiting and doesn't
+ * send the request again.
  */
 async function retryRateLimited(
   send: () => Promise<TranslateBatchResult>,
-  wait: (ms: number) => Promise<void>,
+  wait: (ms: number, signal: AbortSignal) => Promise<void>,
+  stop: AbortSignal,
 ): Promise<TranslateBatchResult> {
   let waited = 0;
   for (let retry = 0; ; retry++) {
@@ -82,8 +94,10 @@ async function retryRateLimited(
         error: `${result.error} (still rate limited after ${retry} retries. Run again later.)`,
       };
     }
+    if (stop.aborted) return result;
     waited += delay;
-    await wait(delay);
+    await wait(delay, stop);
+    if (stop.aborted) return result;
   }
 }
 
@@ -420,7 +434,7 @@ export async function translateMissing(args: {
   /** Called with the number of texts each successful request translated. */
   onProgress?: (translated: number) => void;
   /** Waits before a rate-limited request is sent again; for tests. */
-  wait?: (ms: number) => Promise<void>;
+  wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 }): Promise<
   ({ ok: true } | TranslateFailure) & {
     translations: Map<MissingTranslation, VariantRow["pattern"]>;
@@ -454,6 +468,8 @@ export async function translateMissing(args: {
   }
 
   const translations = new Map<MissingTranslation, VariantRow["pattern"]>();
+  /** Aborts on a provider failure: no request is sent after it. */
+  const stop = new AbortController();
   /** Each sends one request and records what it translated. */
   const requests: Array<() => Promise<{ ok: true } | TranslateFailure>> = [];
   for (const [targetLocale, missing] of byLocale) {
@@ -476,6 +492,7 @@ export async function translateMissing(args: {
               ),
             }),
           args.wait ?? sleep,
+          stop.signal,
         );
         // The texts that did come back are kept, as with any failure, even
         // when one of them is missing or isn't a valid pattern.
@@ -502,17 +519,19 @@ export async function translateMissing(args: {
   }
 
   const errors = new Set<string>();
-  let stopped = false;
   let next = 0;
   const worker = async () => {
-    while (!stopped && next < requests.length) {
+    while (!stop.signal.aborted && next < requests.length) {
       // Thrown errors, such as network failures, are provider-wide.
       const result = await requests[next++]!().catch(
         (error): TranslateFailure => ({ ok: false, error: String(error) }),
       );
       if (!result.ok) {
-        errors.add(result.error);
-        if (result.scope !== "text") stopped = true;
+        // a rate limit whose retry the stop cut short isn't a cause of its own
+        if (!(result.rateLimited && stop.signal.aborted)) {
+          errors.add(result.error);
+        }
+        if (result.scope !== "text") stop.abort();
       }
     }
   };

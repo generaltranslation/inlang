@@ -188,6 +188,33 @@ test("Retry-After waits add up to at most a minute per request", async () => {
   });
 });
 
+test("a rate-limited request waiting to be sent again isn't sent once another request fails for good", async () => {
+  // 51 texts: the first request (50 texts) is rate-limited; while it waits,
+  // the second (1 text) is rejected for its key, which stops the run
+  let calls = 0;
+  const fake: BatchMachineTranslateProvider = {
+    translateBatch: async ({ texts }) => {
+      calls++;
+      if (Object.keys(texts).length === 50) return rateLimited();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { ok: false, error: "401 Unauthorized", scope: "provider" };
+    },
+  };
+  const started = Date.now();
+
+  // the real wait: 2 s unless the stop cuts it short
+  const result = await translateMissing({
+    provider: fake,
+    sourceLocale: "en",
+    missing: missing(51),
+  });
+
+  expect(calls).toBe(2);
+  expect(Date.now() - started).toBeLessThan(1000);
+  // the rate limit the stop cut short isn't reported as a cause
+  expect(result).toMatchObject({ ok: false, error: "401 Unauthorized" });
+});
+
 test("other failures, such as a 503 that may have been processed, aren't sent again", async () => {
   const waits: number[] = [];
   const fake = provider([
