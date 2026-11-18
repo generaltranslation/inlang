@@ -184,7 +184,7 @@ export function planBundleTranslation(
     // categories under the catch-all type. A source form in a branch the plan
     // lacks, such as `pluralType=cardinal` with its own categories, would be
     // dropped, so the source's forms are copied instead.
-    if (forms && dropsSourceBranch(sourceMessage.variants, forms, declarations))
+    if (forms && dropsSourceBranch(sourceMessage, forms, declarations))
       unknownRules = true;
     else if (forms) {
       formsByLocale.set(targetLocale, forms);
@@ -504,21 +504,22 @@ function newCategories(
 
 /**
  * True when a source form is in a branch none of `forms` has. A branch is a
- * form's matches less its plural categories, which differ by locale.
+ * form's value for each selector but its plurals, whose categories differ by
+ * locale; a selector a form leaves out is its catch-all.
  */
 function dropsSourceBranch(
-  sourceVariants: BundleNested["messages"][number]["variants"],
+  source: BundleNested["messages"][number],
   forms: VariantRow["matches"][],
   declarations: BundleNested["declarations"],
 ): boolean {
-  return sourceVariants.some(
+  const selectors = source.selectors
+    .map(({ name }) => name)
+    .filter((name) => !isPluralSelector(name, declarations));
+  return source.variants.some(
     (variant) =>
       !forms.some((matches) =>
-        variant.matches.every(
-          (match) =>
-            isPluralSelector(match.key, declarations) ||
-            matchValue({ matches }, match.key) ===
-              matchValue(variant, match.key),
+        selectors.every(
+          (name) => matchValue({ matches }, name) === matchValue(variant, name),
         ),
       ),
   );
