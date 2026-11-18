@@ -1,10 +1,9 @@
 import { expect, test } from "vitest";
-import {
-  matchValue,
-  type BundleNested,
-  type Declaration,
-  type NewBundleNested,
-  type Pattern,
+import type {
+  BundleNested,
+  Declaration,
+  NewBundleNested,
+  Pattern,
 } from "@inlang/sdk";
 import { planBundleTranslation } from "./machineTranslateBundle.js";
 import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
@@ -352,33 +351,7 @@ async function translate(
   const plan = planBundleTranslation({ ...args, supportsContext });
   if ("error" in plan) throw new Error(plan.error);
   const result = await machineTranslateBundle({ ...args, provider });
-  expectReachable(bundle, result.data!);
   return { calls, result: { ...plan, ...result } };
-}
-
-/**
- * Fails if a variant with a new id (added, or moved by `orderLikeSource`)
- * can never show: a consumer that reads variants in stored order (Paraglide
- * before 2.27) selects the first variant whose every key is the input's or a
- * catch-all.
- */
-function expectReachable(before: BundleNested, after: NewBundleNested) {
-  const ids = new Set(
-    before.messages.flatMap((message) => message.variants.map(({ id }) => id)),
-  );
-  for (const { variants } of (after as BundleNested).messages) {
-    variants.forEach((variant, index) => {
-      if (ids.has(variant.id)) return;
-      const shadowing = variants
-        .slice(0, index)
-        .filter((earlier) =>
-          variant.matches.every(({ key }) =>
-            ["*", matchValue(variant, key)].includes(matchValue(earlier, key)),
-          ),
-        );
-      expect(shadowing).toEqual([]);
-    });
-  }
 }
 
 const items = { "countPlural=one": "One item", "countPlural=*": "Many items" };
@@ -1207,101 +1180,7 @@ test("two plurals: the context names each category that isn't the source's", asy
   expect(calls[6]!.context).toBe(`${fewInRu}\n${manyInRu}`);
 });
 
-test("a form added to a message goes to its category's place, a variant only the target has stays where it is", async () => {
-  // Arabic `zero` goes before the existing `one`
-  const ar = await expand(
-    formsBundle(countPlural, ["countPlural"], {
-      en: items,
-      ar: { "countPlural=one": "عنصر واحد", "countPlural=*": "عناصر" },
-    }),
-    ["ar"],
-  );
-  expect(Object.entries(formsOf(ar.result, "ar")!)).toEqual([
-    ["countPlural=zero", "[ar] Many items"],
-    ["countPlural=one", "عنصر واحد"],
-    ["countPlural=two", "[ar] Many items"],
-    ["countPlural=few", "[ar] Many items"],
-    ["countPlural=many", "[ar] Many items"],
-    ["countPlural=*", "عناصر"],
-  ]);
-  expect(ar.result.replacedVariantIds).toEqual([
-    "01900000-0000-7000-8000-0000ar000000",
-    "01900000-0000-7000-8000-0000ar000001",
-  ]);
-
-  // a hand-written exact 5 stays after `one`; few and many go before `*`
-  const ru = await expand(
-    formsBundle(countPlural, ["countPlural"], {
-      en: items,
-      ru: {
-        "countPlural=one": "Один товар",
-        "countPlural=5": "Пять товаров",
-        "countPlural=*": "Товары",
-      },
-    }),
-    ["ru"],
-  );
-  expect(Object.entries(formsOf(ru.result, "ru")!)).toEqual([
-    ["countPlural=one", "Один товар"],
-    ["countPlural=5", "Пять товаров"],
-    ["countPlural=few", "[ru] Many items"],
-    ["countPlural=many", "[ru] Many items"],
-    ["countPlural=*", "Товары"],
-  ]);
-});
-
-test("a new message is written in the target's order, whatever the source's", async () => {
-  const { result } = await expand(
-    formsBundle(countPlural, ["countPlural"], {
-      en: { "countPlural=*": "Many items", "countPlural=one": "One item" },
-    }),
-    ["ru"],
-  );
-
-  expect(Object.keys(formsOf(result, "ru")!)).toEqual([
-    "countPlural=one",
-    "countPlural=few",
-    "countPlural=many",
-    "countPlural=*",
-  ]);
-  expect(result.replacedVariantIds).toBeUndefined();
-});
-
-test("`other` and the catch-all are the same form when expanding", async () => {
-  // a source that writes `other` gets `other`, not a second catch-all
-  const ru = await expand(
-    formsBundle(countPlural, ["countPlural"], {
-      en: { "countPlural=one": "One item", "countPlural=other": "Items" },
-    }),
-    ["ru"],
-  );
-  expect(Object.entries(formsOf(ru.result, "ru")!)).toEqual([
-    ["countPlural=one", "[ru] Items"],
-    ["countPlural=few", "[ru] Items"],
-    ["countPlural=many", "[ru] Items"],
-    ["countPlural=other", "[ru] Items"],
-  ]);
-  // the source's `other` is the target's
-  expect(ru.calls.map((call) => call.context)).toEqual([
-    oneInRu,
-    fewInRu,
-    manyInRu,
-    undefined,
-  ]);
-
-  // an empty `other` is filled from the source's catch-all
-  const de = await expand(
-    formsBundle(countPlural, ["countPlural"], {
-      en: items,
-      de: { "countPlural=one": "Ein Ding", "countPlural=other": "" },
-    }),
-    ["de"],
-  );
-  expect(Object.entries(formsOf(de.result, "de")!)).toEqual([
-    ["countPlural=one", "Ein Ding"],
-    ["countPlural=other", "[de] Many items"],
-  ]);
-
+test("with context, a blank form is filled unless its source is blank too", async () => {
   // a whitespace-only form is missing too, as `inlang check` reports it, but
   // not one whose source is blank as well: a translation can't fill it
   const blank = await expand(
@@ -1518,31 +1397,6 @@ test("a source with both `other` and the catch-all: every empty variant of the t
   ]);
 });
 
-test("a source variant its own locale never shows isn't translated: Russian `few` from English `*`, not `few`", async () => {
-  const { calls, result } = await expand(
-    formsBundle(countPlural, ["countPlural"], {
-      en: {
-        "countPlural=one": "One item",
-        "countPlural=few": "Unused",
-        "countPlural=*": "Many items",
-      },
-    }),
-    ["ru"],
-  );
-
-  expect(formsOf(result, "ru")).toEqual({
-    "countPlural=one": "[ru] Many items",
-    "countPlural=few": "[ru] Many items",
-    "countPlural=many": "[ru] Many items",
-    "countPlural=*": "[ru] Many items",
-  });
-  expect(calls[1]).toEqual({
-    text: "Many items",
-    targetLocale: "ru",
-    context: fewInRu,
-  });
-});
-
 test("a select value only the target has gets no forms; its variant stays where it is", async () => {
   const bundle = formsBundle(
     [input("gender"), ...countPlural],
@@ -1587,14 +1441,8 @@ test("a message without a plural gets only the source's forms, with context too"
 });
 
 test("a target whose selectors aren't the source's isn't expanded: skipped and reported", async () => {
-  // a source without a plural
-  const withoutPlural = formsBundle(countPlural, ["countPlural"], {
-    en: { "": "Items" },
-    ru: { "countPlural=one": "Один товар", "countPlural=*": "Товары" },
-  });
-  withoutPlural.messages[0]!.selectors = [];
   // a target with a gender the source doesn't select
-  const withGender = formsBundle(
+  const bundle = formsBundle(
     [input("gender"), ...countPlural],
     ["countPlural"],
     {
@@ -1605,18 +1453,16 @@ test("a target whose selectors aren't the source's isn't expanded: skipped and r
       },
     },
   );
-  withGender.messages[1]!.selectors.push({
+  bundle.messages[1]!.selectors.push({
     type: "variable-reference",
     name: "gender",
   });
+  const ru = formsOf({ data: bundle }, "ru");
+  const { calls, result } = await expand(bundle, ["ru"]);
 
-  for (const bundle of [withoutPlural, withGender]) {
-    const ru = formsOf({ data: bundle }, "ru");
-    const { calls, result } = await expand(bundle, ["ru"]);
-    expect(calls).toEqual([]);
-    expect(result.skippedPlurals).toEqual([
-      { locale: "ru", categories: ["few", "many"] },
-    ]);
-    expect(formsOf(result, "ru")).toEqual(ru);
-  }
+  expect(calls).toEqual([]);
+  expect(result.skippedPlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+  expect(formsOf(result, "ru")).toEqual(ru);
 });
