@@ -369,6 +369,24 @@ describe("signInToGt", () => {
     expect(gt.calls).toEqual([]);
   });
 
+  test("refuses a symlinked .env.local before signing in", async () => {
+    captureLog();
+    const dir = gitTree({
+      ".gitignore": ".env.local\n",
+      "shared.env": "A=1\n",
+    });
+    execFileSync("git", ["add", "shared.env"], { cwd: dir });
+    fs.symlinkSync("shared.env", nodePath.join(dir, ".env.local"));
+    const gt = fakeGt(signedIn);
+    await expect(signIn({ dir, run: gt.run })).rejects.toThrow(
+      "Can't save the General Translation key: .env.local is a symbolic link. Replace it with a regular file, then run again.",
+    );
+    expect(gt.calls).toEqual([]);
+    expect(fs.readFileSync(nodePath.join(dir, "shared.env"), "utf8")).toBe(
+      "A=1\n",
+    );
+  });
+
   test("asks for the organization when gt needs one and reruns with it", async () => {
     captureLog();
     const dir = tree();

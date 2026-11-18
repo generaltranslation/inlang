@@ -120,7 +120,7 @@ function parseEnvFile(content: string): Record<string, string> {
  * an interactive terminal. Resolves `undefined` if the user cancels that.
  *
  * `.env.local` gets a `.gitignore` rule unless git ignores it already, and a
- * tracked `.env.local` fails before the sign-in.
+ * tracked or symlinked `.env.local` fails before the sign-in.
  */
 export async function signInToGt(args: {
   dir: string;
@@ -148,6 +148,16 @@ export async function signInToGt(args: {
   ) {
     throw new Error(
       "Can't save the General Translation key: .env.local is tracked by git. Untrack it with `git rm --cached .env.local`, then run again.",
+    );
+  }
+  // The key is appended through a symlink, so an ignored .env.local could
+  // still write it to a tracked file.
+  const envLocal = await fs
+    .lstat(nodePath.join(dir, ".env.local"))
+    .catch(() => undefined);
+  if (envLocal?.isSymbolicLink()) {
+    throw new Error(
+      "Can't save the General Translation key: .env.local is a symbolic link. Replace it with a regular file, then run again.",
     );
   }
 
