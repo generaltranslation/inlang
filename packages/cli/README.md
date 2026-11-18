@@ -196,7 +196,7 @@ If you choose Other, the command links to the [BYOK setup guide](https://inlang.
 
 Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. Sign-in saves `GT_DEV_API_KEY` and `GT_PROJECT_ID`. `GT_API_KEY` works too, and so do framework-prefixed names such as `VITE_GT_DEV_API_KEY` and `VITE_GT_PROJECT_ID`.
 
-Without a terminal, as in CI and most coding agents, through a task runner that captures the output, or on Linux without a display, as over SSH, the command doesn't ask. Without a key, it uses the community-operated service, as before. A project that chose General Translation, with a project ID in `gt.config.json` or `GT_PROJECT_ID`, or with `INLANG_MACHINE_TRANSLATE_PROVIDER=gt`, fails instead and prints the steps to get a key, so a missing CI secret doesn't send its text to another service. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
+SSH and other terminals without a display show the same provider choices; open the printed sign-in URL in your browser. Without a terminal, as in CI and most coding agents, or through a task runner that captures the output, the command doesn't ask. Without a key, it uses the community-operated service, as before, and links to GT setup. A project that chose General Translation, with a project ID in `gt.config.json` or `GT_PROJECT_ID`, or with `INLANG_MACHINE_TRANSLATE_PROVIDER=gt`, fails instead and prints the steps to get a key, so a missing CI secret doesn't send its text to another service. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com). Coding agents can select `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to get the sign-in steps, including login without opening a browser; a person completes the sign-in.
 
 **Bring your own key**
 
@@ -208,7 +208,9 @@ When a bundle has a description, providers that support context, including Gener
 
 With a provider that supports context, a plural gets every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. Otherwise, with a provider without context or when a translation's selectors differ from the source's, messages whose target needs forms the source lacks are skipped and listed so you can add them by hand.
 
-If the provider is unavailable, throttles requests or a translation fails, the command starts no more requests, saves the translations that came back and exits with code 1; run it again to translate the rest. A message gets a language only when all its translations came back. A translation that comes back empty, or drops, adds or changes a variable or markup tag, or breaks the nesting of markup, isn't saved; if its message is new in that language, the whole message is left out. The command lists them, saves the other translations and exits with code 1. General Translation requests time out after 5 minutes.
+If one translation fails, the command continues with unrelated messages. If the provider is unavailable, rejects the key or throttles requests, the command starts no more requests. In either case, it saves successful translations and exits with code 1; run it again to translate the rest. A new message gets a language only when all its forms succeed.
+
+A translation that comes back empty, drops, adds or changes a variable or markup tag, or breaks markup nesting isn't saved. Fixed-count plural forms can spell out the count instead of repeating its variable, as in “one item” or “two items”; other variables and formatting still have to match. The command lists rejected translations, saves the other messages and exits with code 1. General Translation requests time out after 5 minutes.
 
 ## `check`
 
