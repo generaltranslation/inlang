@@ -880,13 +880,19 @@ export function missingVariants(
  * Undefined when the reference has no such variant, such as for an exact
  * number or a select value only the translation uses.
  */
-export function sourceVariantFor<V extends WithMatches>(
-	target: readonly Match[],
-	reference: readonly V[],
-	declarations: readonly Declaration[] | undefined,
-	referenceLocale: string,
-	targetLocale: string
-): V | undefined {
+export function sourceVariantFor<V extends WithMatches>({
+	target,
+	reference,
+	declarations,
+	referenceLocale,
+	targetLocale,
+}: {
+	target: readonly Match[];
+	reference: readonly V[];
+	declarations: readonly Declaration[] | undefined;
+	referenceLocale: string;
+	targetLocale: string;
+}): V | undefined {
 	const form = { matches: target };
 	// Candidates exclude variants the reference never shows: an exact number's
 	// key holds as is, so `0 · zero` would otherwise stand in for English 0.
