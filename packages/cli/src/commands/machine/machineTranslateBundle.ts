@@ -31,6 +31,7 @@ import {
 import type {
   AnyMachineTranslateProvider,
   BatchMachineTranslateProvider,
+  TranslateBatchResult,
   TranslateFailure,
 } from "./providers/types.js";
 
@@ -45,6 +46,54 @@ const MAX_TEXTS_PER_REQUEST = 50;
  * once runs into the providers' rate limits on large projects.
  */
 const MAX_CONCURRENT_REQUESTS = 4;
+
+/**
+ * A rate-limited request (429) is sent again at most this many times, after
+ * its `Retry-After` or else 2s, 4s, 8s. A 429 means the request wasn't
+ * processed, so sending it again doesn't pay twice. Other failures aren't
+ * retried: a 5xx or network error may have been processed.
+ */
+const MAX_RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BASE_DELAY_MS = 2_000;
+
+/**
+ * The most one request waits for rate limits in total. A provider that asks
+ * for longer fails the run at once, saving what came back.
+ */
+const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Sends a request again while it is rate-limited, within
+ * `MAX_RATE_LIMIT_RETRIES` and `MAX_RATE_LIMIT_WAIT_MS`.
+ */
+async function retryRateLimited(
+  send: () => Promise<TranslateBatchResult>,
+  wait: (ms: number) => Promise<void>,
+): Promise<TranslateBatchResult> {
+  let waited = 0;
+  for (let retry = 0; ; retry++) {
+    const result = await send();
+    if (result.ok || !result.rateLimited) return result;
+    const delay = result.retryAfterMs ?? RATE_LIMIT_BASE_DELAY_MS * 2 ** retry;
+    if (delay + waited > MAX_RATE_LIMIT_WAIT_MS) {
+      return {
+        ...result,
+        error: `${result.error} (rate limited: the provider asked to wait ${Math.ceil(delay / 1000)} s${waited > 0 ? ` after ${Math.ceil(waited / 1000)} s of waiting` : ""}. Run again later.)`,
+      };
+    }
+    if (retry >= MAX_RATE_LIMIT_RETRIES) {
+      return {
+        ...result,
+        error: `${result.error} (still rate limited after ${retry} retries. Run again later.)`,
+      };
+    }
+    waited += delay;
+    await wait(delay);
+  }
+}
 
 type MachineTranslateArgs = {
   bundle: BundleNested;
@@ -68,11 +117,14 @@ type MissingTranslation = {
 /** What a bundle's plurals tell the user. */
 type PluralReport = {
   /**
-   * Target locales left out, with the plural categories they need that no
-   * source variant has: translating the source's forms would leave the
-   * translation without them, so they are left to be added by hand.
+   * Target locales whose plurals need categories no source variant has, with
+   * those categories. The source's forms are still translated, as they were
+   * before these were reported: the target's catch-all then shows for the
+   * numbers of the categories it lacks until they are added by hand. A
+   * translation whose selectors aren't the source's, such as a hand-written
+   * plural of a text, is left as it is: the source's forms wouldn't fit it.
    */
-  skippedPlurals: Array<{ locale: string; categories: string[] }>;
+  incompletePlurals: Array<{ locale: string; categories: string[] }>;
   /**
    * Target locales translated without known plural rules (see the SDK's
    * `pluralRules`): their plural forms are the source's.
@@ -117,8 +169,8 @@ type TranslatedBundle = {
  * variant for a source variant, or an empty one.
  * With a provider that uses context, a target with the source's selectors
  * gets every plural form its language needs instead, see `missingForms`.
- * Otherwise skips target locales whose plurals need categories the source
- * lacks, see `PluralReport`.
+ * Otherwise the source's forms are translated, and target locales whose
+ * plurals need categories the source lacks are reported, see `PluralReport`.
  */
 export function planBundleTranslation(
   args: MachineTranslateArgs & {
@@ -147,7 +199,7 @@ export function planBundleTranslation(
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const report: PluralReport = {
-    skippedPlurals: [],
+    incompletePlurals: [],
     unknownPluralRules: [],
   };
 
@@ -230,11 +282,13 @@ export function planBundleTranslation(
         .forEach((category) => categories.add(category));
     }
     if (categories.size > 0) {
-      report.skippedPlurals.push({
+      report.incompletePlurals.push({
         locale: targetLocale,
         categories: [...categories],
       });
-      continue;
+      const names = (selectors: typeof target.selectors) =>
+        selectors.map(({ name }) => name).join();
+      if (names(target.selectors) !== names(sourceMessage.selectors)) continue;
     }
 
     const missingBefore = missing.length;
@@ -695,8 +749,10 @@ function categoryOf(variant: Pick<VariantRow, "matches">, selector: string) {
  * requests of at most `MAX_TEXTS_PER_REQUEST`; a single-text provider gets
  * one request per text.
  *
- * A failed text does not stop unrelated requests. A provider failure (including
- * a thrown network error) stops new requests; those in flight still settle.
+ * A failed text does not stop unrelated requests. A rate-limited request is
+ * sent again (see `MAX_RATE_LIMIT_RETRIES`). A provider failure (including a
+ * thrown network error, or a rate limit that outlasts the retries) stops new
+ * requests; those in flight still settle.
  * Returns every failure and the translations that came back.
  */
 export async function translateMissing(args: {
@@ -705,6 +761,8 @@ export async function translateMissing(args: {
   missing: MissingTranslation[];
   /** Called with the number of texts each successful request translated. */
   onProgress?: (translated: number) => void;
+  /** Waits before a rate-limited request is sent again; for tests. */
+  wait?: (ms: number) => Promise<void>;
 }): Promise<
   ({ ok: true } | TranslateFailure) & {
     translations: Map<MissingTranslation, VariantRow["pattern"]>;
@@ -747,16 +805,20 @@ export async function translateMissing(args: {
         // keyed by position, not by source variant id, so that one source
         // variant can have several translations into a locale (e.g. one per
         // plural form of the target language), each with its own context
-        const result = await translateBatch({
-          sourceLocale,
-          targetLocale,
-          texts: Object.fromEntries(
-            chunk.map(({ text, context }, index) => [
-              String(index),
-              { text, context },
-            ]),
-          ),
-        });
+        const result = await retryRateLimited(
+          () =>
+            translateBatch({
+              sourceLocale,
+              targetLocale,
+              texts: Object.fromEntries(
+                chunk.map(({ text, context }, index) => [
+                  String(index),
+                  { text, context },
+                ]),
+              ),
+            }),
+          args.wait ?? sleep,
+        );
         // The texts that did come back are kept, as with any failure, even
         // when one of them is missing or isn't a valid pattern.
         let textError: string | undefined;
