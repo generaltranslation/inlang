@@ -158,17 +158,13 @@ test("signs in to General Translation in an interactive terminal without credent
   // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
   expect(prompt.mock.calls).toEqual([
     [
-      "How should this project translate?",
+      "Which translation provider should this project use?",
       {
         type: "select",
         options: [
           { value: "gt", label: "General Translation (recommended)" },
-          {
-            value: "community",
-            label: "Community translation",
-            hint: "translate.demosjarco.dev, not operated by inlang",
-          },
-          { value: "other", label: "Other", hint: "your own API key" },
+          { value: "community", label: "Community translation service" },
+          { value: "other", label: "Other" },
         ],
         initial: "gt",
         cancel: "undefined",
@@ -301,14 +297,14 @@ test("choosing community translation uses that service and saves the choice", as
   ]);
 });
 
-test("choosing other links to the setup for your own key, and saves nothing", async () => {
+test("choosing other links to the provider setup, and saves nothing", async () => {
   vi.spyOn(log, "prompt").mockResolvedValue("other");
   const { dir, projectPath } = projectIn();
   await expect(
     resolve({ projectPath, interactive: true, signIn: unexpectedSignIn }),
   ).rejects.toThrowError(
     new MachineTranslateError(
-      `To translate with your own API key, follow ${BYOK_URL}, then run this command again.`,
+      `To use another translation provider, see ${BYOK_URL}, then run this command again.`,
     ),
   );
   expect(fs.readdirSync(dir)).toEqual([]);

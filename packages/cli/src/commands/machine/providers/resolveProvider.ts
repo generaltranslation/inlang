@@ -145,24 +145,23 @@ export async function resolveMachineTranslateProvider(args: {
       throw await missingGtKeyError(dir, args.settings, env);
     }
     // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
-    const choice = await log.prompt("How should this project translate?", {
-      type: "select",
-      options: [
-        { value: "gt", label: "General Translation (recommended)" },
-        {
-          value: "community",
-          label: "Community translation",
-          hint: "translate.demosjarco.dev, not operated by inlang",
-        },
-        { value: "other", label: "Other", hint: "your own API key" },
-      ],
-      initial: "gt",
-      cancel: "undefined",
-    });
+    const choice = await log.prompt(
+      "Which translation provider should this project use?",
+      {
+        type: "select",
+        options: [
+          { value: "gt", label: "General Translation (recommended)" },
+          { value: "community", label: "Community translation service" },
+          { value: "other", label: "Other" },
+        ],
+        initial: "gt",
+        cancel: "undefined",
+      },
+    );
     if (choice === "other") {
       // Nothing is saved: the provider set up from the docs is used without asking.
       throw new MachineTranslateError(
-        `To translate with your own API key, follow ${BYOK_URL}, then run this command again.`,
+        `To use another translation provider, see ${BYOK_URL}, then run this command again.`,
       );
     }
     if (choice === "community") {
