@@ -991,7 +991,7 @@ function pluralBundle(id: string): NewBundleNested {
   };
 }
 
-test("plurals the run can't translate are reported once, grouped by locale", async () => {
+test("plurals that need forms the source lacks get the source's forms and are reported once, grouped by locale", async () => {
   const project = await projectWithTextBundles(
     ["en", "ru", "ar", "de", "x-foo"],
     0,
@@ -1007,12 +1007,23 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
     await translateCommandAction({ project, provider });
     expect(warn.mock.calls).toEqual([
       [
-        "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
+        "Some plurals have only the source's forms, but their language needs more. Until those forms are added by hand, their numbers show the catch-all form:\n" +
           "  ru (few, many): cart, items\n" +
           "  ar (zero, two, few, many): cart, items",
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
     ]);
+    // translated as before these were reported, rather than left out
+    const bundles = await selectBundleNested(project.db).selectAll().execute();
+    for (const bundle of bundles) {
+      for (const locale of ["ru", "ar"]) {
+        expect(
+          bundle.messages.find(
+            (message: { locale: string }) => message.locale === locale,
+          )?.variants,
+        ).toHaveLength(2);
+      }
+    }
   } finally {
     await project.close();
   }
