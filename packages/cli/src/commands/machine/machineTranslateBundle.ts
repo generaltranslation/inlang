@@ -109,7 +109,9 @@ type PluralReport = {
    * Target locales whose plurals need categories no source variant has, with
    * those categories. The source's forms are still translated, as they were
    * before these were reported: the target's catch-all then shows for the
-   * numbers of the categories it lacks until they are added by hand.
+   * numbers of the categories it lacks until they are added by hand. A
+   * translation whose selectors aren't the source's, such as a hand-written
+   * plural of a text, is left as it is: the source's forms wouldn't fit it.
    */
   incompletePlurals: Array<{ locale: string; categories: string[] }>;
   /**
@@ -219,6 +221,9 @@ export function planBundleTranslation(
         locale: targetLocale,
         categories: [...categories],
       });
+      const names = (selectors: typeof target.selectors) =>
+        selectors.map(({ name }) => name).join();
+      if (names(target.selectors) !== names(sourceMessage.selectors)) continue;
     }
 
     const missingBefore = missing.length;

@@ -1005,7 +1005,7 @@ test("plurals that need forms the source lacks get the source's forms and are re
     await translateCommandAction({ project, provider });
     expect(warn.mock.calls).toEqual([
       [
-        "Some plurals have only the source's forms, but their language needs more. Until those forms are added by hand, their numbers show the catch-all form:\n" +
+        "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
           "  ru (few, many): cart, items\n" +
           "  ar (zero, two, few, many): cart, items",
       ],
