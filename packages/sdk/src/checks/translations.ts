@@ -7,7 +7,6 @@ import type { Match } from "../database/schema.js";
 import {
 	isNumericKey,
 	isPluralSelector,
-	isSingleNumberCategory,
 	isUnreachableVariant,
 	matchValue,
 	missingVariants,
@@ -201,14 +200,15 @@ export function checkTranslation(args: {
 					resolveAnnotation(match.key, declarations) === undefined
 					? [group.input]
 					: [];
+			// the form's matches resolve a variable plural type (i18next's `type=$pluralType`)
 			return isNumericKey(match.value) ||
 				(match.key === group.selector &&
-					isSingleNumberCategory(
+					pluralRules(
 						match.key,
 						declarations,
 						target.locale,
-						match.value
-					))
+						variant.matches
+					)?.singleNumberCategories.includes(match.value))
 				? [group.input]
 				: [];
 		});
