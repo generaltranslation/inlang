@@ -513,7 +513,6 @@ function dropsSourceBranch(
 ): boolean {
   return sourceVariants.some(
     (variant) =>
-      !isEmptyPattern(variant.pattern) &&
       !forms.some((matches) =>
         variant.matches.every(
           (match) =>
