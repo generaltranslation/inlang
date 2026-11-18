@@ -222,6 +222,69 @@ test("a plural category of one number may spell it out, others need the variable
 	expect(missing("fr", "Un fichier")).toEqual([
 		{ type: "missing-variable", name: "count", variantId: "fr-one" },
 	]);
+	// with a variable type (i18next keys with ordinal forms): German cardinal "one"
+	const typed: Declaration[] = [
+		{ type: "input-variable", name: "count" },
+		{ type: "input-variable", name: "pluralType" },
+		{
+			type: "local-variable",
+			name: "countPlural",
+			value: {
+				type: "expression",
+				arg: { type: "variable-reference", name: "count" },
+				annotation: {
+					type: "function-reference",
+					name: "plural",
+					options: [
+						{
+							name: "type",
+							value: { type: "variable-reference", name: "pluralType" },
+						},
+					],
+				},
+			},
+		},
+	];
+	const typedMessage = (
+		locale: string,
+		forms: [string, string, Pattern][]
+	) => ({
+		id: `t-${locale}`,
+		locale,
+		selectors: ["pluralType", "countPlural"].map((name) => ({
+			type: "variable-reference" as const,
+			name,
+		})),
+		variants: forms.map(([type, form, pattern]) => ({
+			id: `${locale}-${type}-${form}`,
+			matches: [
+				type === "*"
+					? ({ type: "catchall-match", key: "pluralType" } as const)
+					: ({
+							type: "literal-match",
+							key: "pluralType",
+							value: type,
+						} as const),
+				key(form),
+			],
+			pattern,
+		})),
+	});
+	expect(
+		checkTranslation({
+			reference: typedMessage("en", [
+				["*", "one", [v("count"), t(" file left")]],
+				["*", "*", [v("count"), t(" files left")]],
+				["ordinal", "*", [v("count"), t("th")]],
+			]),
+			target: typedMessage("de", [
+				["*", "one", [t("Eine Datei")]],
+				["*", "*", [v("count"), t(" Dateien")]],
+				["ordinal", "*", [v("count"), t(".")]],
+			]),
+			declarations: typed,
+		}).filter((issue) => issue.type === "missing-variable")
+	).toEqual([]);
 });
 
 test("a translation needs the forms the reference's select values ask for", () => {
