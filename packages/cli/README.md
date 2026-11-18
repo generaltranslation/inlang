@@ -243,7 +243,11 @@ unused-message incomplete: unused messages can't be determined because:
 3 findings
   missing-translation  1
   missing-variable     2
+
+Translate what's missing with inlang machine translate --project ./project.inlang
 ```
+
+When translations or plural forms are missing or empty, the output ends with the [`machine translate`](#machine-translate) command to fill them. With `--locales`, the command only translates those locales.
 
 ### Checks
 
