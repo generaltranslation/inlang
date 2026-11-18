@@ -151,6 +151,7 @@ describe("createGtTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "text",
       error: "3 of 4 translations from en to de failed: Translation timed out",
       // not the translation of a text that failed
       translatedTexts: { greeting: "Hallo" },
@@ -322,6 +323,7 @@ describe("createGtTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "text",
       error: "400 Bad Request: translating from en to xx",
     });
   });

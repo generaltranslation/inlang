@@ -85,6 +85,9 @@ export function createGtTranslateProvider(args: {
       if (!response.ok) {
         return {
           ok: false,
+          scope: [400, 413, 422].includes(response.status)
+            ? "text"
+            : "provider",
           error: `${response.status} ${response.statusText}: translating from ${sourceLocale} to ${targetLocale}`,
         };
       }
@@ -114,6 +117,7 @@ export function createGtTranslateProvider(args: {
       if (failures.length > 0) {
         return {
           ok: false,
+          scope: "text",
           error: `${failures.length} of ${Object.keys(texts).length} translations from ${sourceLocale} to ${targetLocale} failed: ${failures[0]}`,
           translatedTexts: Object.fromEntries(translations),
         };
