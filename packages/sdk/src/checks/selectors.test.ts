@@ -8,6 +8,7 @@ import {
 	resolveInputVariable,
 	selectorGroups,
 	sourceVariantFor,
+	spelledOutInputs,
 } from "./selectors.js";
 
 const plural: Declaration[] = [
@@ -555,4 +556,40 @@ test("a plural whose type is a variable spells out one number in the type the fo
 		"* · many <- * · other",
 		"* · * <- * · other",
 	]);
+});
+
+test("only an exact or single-number selector's input may be spelled out", () => {
+	expect(
+		spelledOutInputs(variant({ countPlural: "two" }), plural, "ar")
+	).toEqual(["count"]);
+	expect(
+		spelledOutInputs(variant({ countPlural: "one" }), plural, "de")
+	).toEqual(["count"]);
+	expect(
+		spelledOutInputs(variant({ countPlural: "one" }), plural, "fr")
+	).toEqual([]);
+	expect(
+		spelledOutInputs(variant({ countPlural: "one" }), plural, "ru")
+	).toEqual([]);
+	expect(
+		spelledOutInputs(
+			variant({ countPluralExact: "4", countPlural: "*" }),
+			icuExact,
+			"ru"
+		)
+	).toEqual(["count"]);
+	expect(
+		spelledOutInputs(
+			variant({ pluralType: "cardinal", countPlural: "two" }),
+			typedPlural,
+			"ar"
+		)
+	).toEqual(["count"]);
+	expect(
+		spelledOutInputs(
+			variant({ pluralType: "ordinal", countPlural: "two" }),
+			typedPlural,
+			"ar"
+		)
+	).toEqual([]);
 });

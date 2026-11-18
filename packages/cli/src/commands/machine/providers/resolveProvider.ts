@@ -39,6 +39,8 @@ export type MachineTranslateProviderName =
   | "demosjarco";
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+const GT_SETUP_URL =
+  "https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";
 
@@ -112,24 +114,29 @@ export async function resolveMachineTranslateProvider(args: {
   interactive: boolean;
   signIn?: typeof signInToGt;
 }): Promise<AnyMachineTranslateProvider> {
-  const { env } = args;
-  const providerName = resolveMachineTranslateProviderName(env);
+  const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
+  const fileEnv = await readEnvFiles(dir);
+  const env = { ...fileEnv, ...args.env };
+  // Preserve explicit providers and BYOK keys in the shell ahead of saved
+  // preferences. Otherwise all providers read the same project env files.
+  const environmentSelectsProvider =
+    args.env[PROVIDER_ENV]?.trim() ||
+    [GOOGLE_API_KEY_ENV, DEEPL_API_KEY_ENV, OPENAI_API_KEY_ENV].some(
+      (key) => args.env[key],
+    );
+  env[PROVIDER_ENV] = args.env[PROVIDER_ENV]?.trim() || fileEnv[PROVIDER_ENV];
+  const providerName = resolveMachineTranslateProviderName(
+    environmentSelectsProvider ? args.env : env,
+  );
+  if (providerName === "demosjarco" && !environmentSelectsProvider) {
+    log.info(
+      `You chose this service in .env or .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
+    );
+  }
   if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
-  const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
-  // Choosing community translation saves it to .env.local. A provider or key in the
-  // environment beats it.
-  if (
-    !env[PROVIDER_ENV]?.trim() &&
-    (await readEnvFiles(dir))[PROVIDER_ENV] === "demosjarco"
-  ) {
-    const provider = createCommunityProvider(env);
-    log.info(
-      `You chose this service in .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
-    );
-    return provider;
-  }
-  let credentials = await readGtCredentials({ env, dir });
+  // Keep GT keys paired with project IDs from the same source.
+  let credentials = await readGtCredentials({ env: args.env, dir });
   if (!credentials) {
     if (!args.interactive) {
       // Keyless automation keeps the community service it used before GT was
@@ -138,7 +145,7 @@ export async function resolveMachineTranslateProvider(args: {
       // pull request from a fork, must not send its text to another service.
       if (!env[PROVIDER_ENV]?.trim() && !(await findGtProjectId(dir, env))) {
         log.info(
-          `No translation provider configured. Using the community service. To use General Translation, set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
+          `No translation provider configured. Using the community service. General Translation setup for CI and coding agents: ${GT_SETUP_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
         );
         return createCommunityProvider(env);
       }
@@ -223,7 +230,7 @@ async function missingGtKeyError(
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",
-      "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output, with CI set, or on Linux without a display.",
+      "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output or with CI set. Over SSH, open the printed sign-in URL in your browser.",
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
       `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
       `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,

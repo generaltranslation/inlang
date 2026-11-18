@@ -5,6 +5,7 @@ import type {
   NewBundleNested,
   Pattern,
 } from "@inlang/sdk";
+import { checkTranslation } from "@inlang/sdk";
 import { planBundleTranslation } from "./machineTranslateBundle.js";
 import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
 import type { TranslateBatchArgs } from "./providers/types.js";
@@ -760,6 +761,162 @@ const itemCount = {
   "countPlural=*": "{count} items",
 };
 
+test("expanded Arabic forms may spell out their count, as the SDK check allows", () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  const plan = planBundleTranslation({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["ar"],
+    supportsContext: true,
+  });
+  if ("error" in plan) throw Error(plan.error);
+  const spelled: Record<string, string> = {
+    zero: "لا ملفات",
+    one: "ملف",
+    two: "ملفان",
+  };
+  const result = plan.apply(
+    new Map(
+      plan.missing.map((translation) => {
+        const category = translation.matches.find(
+          (match) => match.type === "literal-match",
+        );
+        const text =
+          category?.type === "literal-match"
+            ? spelled[category.value]
+            : undefined;
+        return [
+          translation,
+          text
+            ? [{ type: "text", value: text }]
+            : translation.sourceVariant.pattern,
+        ];
+      }),
+    ),
+  );
+  expect(result.rejected).toEqual([]);
+  const target = result.data.messages.find(
+    (message) => message.locale === "ar",
+  )!;
+  expect(target.variants).toHaveLength(6);
+  expect(
+    checkTranslation({
+      reference: bundle.messages[0],
+      target: {
+        ...target,
+        selectors: target.selectors ?? [],
+        variants: target.variants.map((variant) => ({
+          ...variant,
+          matches: variant.matches ?? [],
+          pattern: variant.pattern ?? [],
+        })),
+      },
+      declarations: bundle.declarations,
+    }),
+  ).toEqual([]);
+});
+
+test("a German singular and an exact number may omit their own count", async () => {
+  const singular = await translateEditing(
+    withPlaceholders(
+      formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+    ),
+    ["de"],
+    (text) => (text.endsWith(" item") ? dropPlaceholders(text) : text),
+  );
+  expect(singular.rejected).toEqual([]);
+  const exact = await translateEditing(
+    withPlaceholders(
+      formsBundle([input("count")], ["count"], {
+        en: { "count=4": "{count} items", "count=*": "{count} things" },
+      }),
+    ),
+    ["ru"],
+    (text) => (text.endsWith(" items") ? dropPlaceholders(text) : text),
+  );
+  expect(exact.rejected).toEqual([]);
+});
+
+test("a single-number form still requires other variables and rejects added counts", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=one": "{name}: {count} item",
+        "countPlural=*": "{name}: {count} items",
+      },
+    }),
+  );
+  const missingName = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+  expect(missingName.rejected).toContainEqual({
+    locale: "de",
+    reasons: ["{name}"],
+  });
+  const repeated = await translateEditing(
+    withPlaceholders(
+      formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+    ),
+    ["de"],
+    (text) =>
+      text.endsWith(" item") ? text.replace(new RegExp(span), "$&$&") : text,
+  );
+  expect(repeated.rejected).toContainEqual({
+    locale: "de",
+    reasons: ["{count}"],
+  });
+});
+
+test("a single-number form cannot change or omit a formatted count", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  const count = bundle.messages[0]!.variants[0]!.pattern.find(
+    (part) => part.type === "expression",
+  )!;
+  if (count.type !== "expression") throw Error("Expected count");
+  count.annotation = {
+    type: "function-reference",
+    name: "number",
+    options: [
+      { name: "style", value: { type: "literal", value: "currency" } },
+      { name: "currency", value: { type: "literal", value: "USD" } },
+    ],
+  };
+  for (const edit of [
+    (text: string) => text.replace('"USD"', '"EUR"'),
+    (text: string) => (text.endsWith(" item") ? dropPlaceholders(text) : text),
+  ]) {
+    const result = await translateEditing(bundle, ["de"], edit);
+    expect(result.rejected).toContainEqual({
+      locale: "de",
+      reasons: ["{count}"],
+    });
+  }
+});
+
+test("a single-number form may spell out ICU's #", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  for (const variant of bundle.messages[0]!.variants) {
+    for (const part of variant.pattern)
+      if (part.type === "expression") {
+        part.annotation = {
+          type: "function-reference",
+          name: "icu:pound",
+          options: [],
+        };
+      }
+  }
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+  expect(result.rejected).toEqual([]);
+});
+
 test("a new message with a rejected translation isn't created: French `one` (0 and 1) drops `{count}`", async () => {
   const bundle = withPlaceholders(
     formsBundle(countPlural, ["countPlural"], { en: itemCount }),
@@ -809,11 +966,14 @@ const expand = (bundle: BundleNested, targetLocales: string[]) =>
   translate(bundle, targetLocales, true);
 
 const oneInRu =
-  "Plural form: one (cardinal) in ru, used for n = 1, 21, 31…. Translate as the one form; the source shows the other form.";
+  "Plural form for {count}: one (cardinal) in ru, used for n = 1, 21, 31…. Translate as the one form; the source shows the other form.";
 const fewInRu =
-  "Plural form: few (cardinal) in ru, used for n = 2–4, 22…. Translate as the few form; the source shows the other form.";
+  "Plural form for {count}: few (cardinal) in ru, used for n = 2–4, 22…. Translate as the few form; the source shows the other form.";
 const manyInRu =
-  "Plural form: many (cardinal) in ru, used for n = 0, 5–20…. Translate as the many form; the source shows the other form.";
+  "Plural form for {count}: many (cardinal) in ru, used for n = 0, 5–20…. Translate as the many form; the source shows the other form.";
+
+const otherInRu =
+  "Plural form for {count}: other (cardinal) in ru, used for n = 1.5. Translate as the other form; the source shows the other form.";
 
 test("with context, a target gets every plural form its language needs, each from its source form", async () => {
   const bundle = withPlaceholders(
@@ -830,7 +990,7 @@ test("with context, a target gets every plural form its language needs, each fro
     ["countPlural=many", "[ru] {count} items"],
     ["countPlural=*", "[ru] {count} items"],
   ]);
-  // one, few and many say which form they are, after the description:
+  // Every form identifies its input and category after the description:
   // English `one` is 1, Russian `one` 1, 21, 31…, so it comes from `*`
   expect(
     calls.map(({ targetLocale, context }) => [targetLocale, context]),
@@ -838,9 +998,15 @@ test("with context, a target gets every plural form its language needs, each fro
     ["ru", `A cart\n\n${oneInRu}`],
     ["ru", `A cart\n\n${fewInRu}`],
     ["ru", `A cart\n\n${manyInRu}`],
-    ["ru", "A cart"],
-    ["de", "A cart"],
-    ["de", "A cart"],
+    ["ru", `A cart\n\n${otherInRu}`],
+    [
+      "de",
+      "A cart\n\nPlural form for {count}: one (cardinal) in de, used for n = 1. Translate as the one form; the source shows the one form.",
+    ],
+    [
+      "de",
+      "A cart\n\nPlural form for {count}: other (cardinal) in de, used for n = 0, 2, 3…. Translate as the other form; the source shows the other form.",
+    ],
   ]);
   expect(formsOf(result, "de")).toEqual({
     "countPlural=one": "[de] {count} item",
@@ -904,7 +1070,7 @@ test("Arabic `zero`, which selects only 0, is the exact 0 form, as the i18next p
   );
 });
 
-test("two plurals: the context names each category that isn't the source's", async () => {
+test("two plurals: the context identifies each input and category", async () => {
   const bundle = formsBundle(
     [...countPlural, input("guests"), plural("guestsPlural", "guests")],
     ["countPlural", "guestsPlural"],
@@ -921,7 +1087,50 @@ test("two plurals: the context names each category that isn't the source's", asy
   expect(formsOf(result, "ru")!["countPlural=few,guestsPlural=many"]).toBe(
     "[ru] Items for guests",
   );
-  expect(calls[6]!.context).toBe(`${fewInRu}\n${manyInRu}`);
+  expect(calls[6]!.context).toBe(
+    `${fewInRu}\n${manyInRu.replace("{count}", "{guests}")}`,
+  );
+});
+
+test("matching category names still describe the target's numbers", () => {
+  const plan = planBundleTranslation({
+    bundle: formsBundle(countPlural, ["countPlural"], {
+      ru: {
+        "countPlural=one": "Один товар",
+        "countPlural=few": "Товары",
+        "countPlural=many": "Товары",
+        "countPlural=*": "Товары",
+      },
+    }),
+    sourceLocale: "ru",
+    targetLocales: ["ar"],
+    supportsContext: true,
+  });
+  if ("error" in plan) throw Error(plan.error);
+  const few = plan.missing.find((translation) =>
+    translation.matches.some(
+      (match) => match.type === "literal-match" && match.value === "few",
+    ),
+  )!;
+  expect(few.context).toBe(
+    "Plural form for {count}: few (cardinal) in ar, used for n = 3–10, 103…. Translate as the few form; the source shows the few form.",
+  );
+});
+
+test("an exact-number form is not described as the plural catch-all", async () => {
+  const { calls } = await expand(
+    formsBundle(countPlural, ["count", "countPlural"], {
+      en: {
+        "count=0,countPlural=*": "No items",
+        "count=*,countPlural=one": "One item",
+        "count=*,countPlural=*": "Items",
+      },
+    }),
+    ["ar"],
+  );
+  expect(calls.find((call) => call.text === "No items")?.context).toBe(
+    "Exact-number form for {count}: 0 in ar. Preserve this exact-number meaning.",
+  );
 });
 
 test("with context, a blank form is filled unless its source is blank too", async () => {
@@ -977,7 +1186,7 @@ test("a plural whose type a select chooses gets the forms of each type", async (
     calls.find(
       (call) =>
         call.targetLocale === "ru" &&
-        call.context?.includes("Plural form: one (cardinal)"),
+        call.context?.includes("Plural form for {count}: one (cardinal)"),
     )?.context,
   ).toContain("21");
   // Welsh `zero` is an ordinal and a cardinal form, each of its type
@@ -988,8 +1197,8 @@ test("a plural whose type a select chooses gets the forms of each type", async (
         : [],
     ),
   ).toEqual([
-    "Plural form: zero (ordinal) in cy, used for n = 0, 7–9. Translate as the zero form; the source shows the other form.",
-    "Plural form: zero (cardinal) in cy, used for n = 0. Translate as the zero form; the source shows the other form.",
+    "Plural form for {count}: zero (ordinal) in cy, used for n = 0, 7–9. Translate as the zero form; the source shows the other form.",
+    "Plural form for {count}: zero (cardinal) in cy, used for n = 0. Translate as the zero form; the source shows the other form.",
   ]);
   expect(Object.keys(formsOf(result, "cy")!)).toHaveLength(13);
 });
@@ -1004,7 +1213,7 @@ test("the examples follow the plural's offset and the locale as written in some 
     ["ru"],
   );
   expect(offset.calls[1]!.context).toBe(
-    "Plural form: few (cardinal) in ru, used for n = 3–5, 23…. Translate as the few form; the source shows the other form.",
+    "Plural form for {count}: few (cardinal) in ru, used for n = 3–5, 23…. Translate as the few form; the source shows the other form.",
   );
 
   const underscore = await expand(
@@ -1012,7 +1221,7 @@ test("the examples follow the plural's offset and the locale as written in some 
     ["ru_RU"],
   );
   expect(underscore.calls[1]!.context).toBe(
-    "Plural form: few (cardinal) in ru_RU, used for n = 2–4, 22…. Translate as the few form; the source shows the other form.",
+    "Plural form for {count}: few (cardinal) in ru_RU, used for n = 2–4, 22…. Translate as the few form; the source shows the other form.",
   );
 });
 
@@ -1146,7 +1355,7 @@ test("a batch provider gets every form of a locale in one request, the same sour
         "0": { text: "Many items", context: oneInRu },
         "1": { text: "Many items", context: fewInRu },
         "2": { text: "Many items", context: manyInRu },
-        "3": { text: "Many items" },
+        "3": { text: "Many items", context: otherInRu },
       },
     },
   ]);

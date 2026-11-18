@@ -1,4 +1,4 @@
-import { afterEach, test, expect, vi } from "vitest";
+import { afterEach, beforeEach, test, expect, vi } from "vitest";
 import {
   translate,
   translateAndSave,
@@ -33,10 +33,27 @@ import {
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
 
+let providerDirectory: string;
+beforeEach(() => {
+  providerDirectory = fs.mkdtempSync(
+    nodePath.join(os.tmpdir(), "inlang-command-env-"),
+  );
+  const opts = translate.opts.bind(translate);
+  vi.spyOn(translate, "opts").mockImplementation(() => {
+    const options = opts();
+    return {
+      ...options,
+      project:
+        options.project ?? nodePath.join(providerDirectory, "project.inlang"),
+    };
+  });
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  fs.rmSync(providerDirectory, { recursive: true, force: true });
 });
 
 test("skipping the retry waits leaves other timers alone (Lix's close watchdog is 5000 ms)", async () => {
@@ -645,7 +662,7 @@ test("a blank translation is missing unless its source is blank too", async () =
   }
 });
 
-test("at most 4 requests are in flight and none starts after a failure", async () => {
+test("at most 4 requests are in flight and provider failures stop new requests", async () => {
   const project = await projectWithTextBundles(["en", "de"], 7);
   /** Settles a request in flight, successfully or not. */
   const pending: Array<(failure?: TranslateFailure) => void> = [];
@@ -674,17 +691,119 @@ test("at most 4 requests are in flight and none starts after a failure", async (
     // a request in flight that fails after the first failure
     pending[2]!({ ok: false, error: "Another failure." });
     for (const settleRequest of pending.slice(3)) settleRequest();
-    // the first failure is reported
+    // failures already in flight are reported too
     const error = await run;
     expect(error).toBeInstanceOf(MachineTranslateError);
     expect((error as Error).message).toBe(
-      "First failure.\nSaved the 3 translations that came back. Run again to translate the rest.",
+      "First failure.\nAnother failure.\nSaved the 3 translations that came back. Run again to translate the rest.",
     );
     expect(pending).toHaveLength(5);
   } finally {
     await project.close();
   }
 });
+
+test("a permanent text error cannot starve messages behind an incomplete new message", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
+  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "test-key");
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: JSON.stringify({
+      a_blocker: [
+        {
+          declarations: ["input tone"],
+          selectors: ["tone"],
+          match: {
+            "tone=a": "Bad",
+            "tone=b": "B",
+            "tone=c": "C",
+            "tone=*": "D",
+          },
+        },
+      ],
+      b_after: "After B",
+      c_after: "After C",
+    }),
+    de: "{}",
+  });
+  const fetch = vi.fn(async (url: string) => {
+    const text = new URL(url).searchParams.get("q");
+    if (text === "Bad")
+      return new Response(null, { status: 400, statusText: "Bad Request" });
+    // The bad text fails while the other three forms occupy the workers.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return Response.json({
+      data: { translations: [{ translatedText: `${text} (de)` }] },
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    await expect(translateAndSave({ project, path })).rejects.toThrow(
+      "400 Bad Request",
+    );
+    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(JSON.parse(read("de"))).toMatchObject({
+      b_after: "After B (de)",
+      c_after: "After C (de)",
+    });
+    expect(JSON.parse(read("de")).a_blocker).toBeUndefined();
+    const saved = read("de");
+    const reopened = await loadProjectFromDirectory({ path, fs });
+    fetch.mockClear();
+    try {
+      await expect(
+        translateAndSave({ project: reopened, path }),
+      ).rejects.toThrow("400 Bad Request");
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(read("de")).toBe(saved);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await cleanup();
+  }
+});
+
+test.each(["failed", "missing"] as const)(
+  "a %s batch item does not stop batches beyond the initial four requests",
+  async (failure) => {
+    const project = await projectWithTextBundles(["en", "de"], 251);
+    const { provider, calls } = fakeBatchProvider(async (args) => {
+      const translatedTexts = Object.fromEntries(
+        Object.entries(args.texts)
+          .filter(([, { text }]) => text !== "Text 0")
+          .map(([key, { text }]) => [key, `${text} (de)`]),
+      );
+      return failure === "failed" &&
+        Object.values(args.texts).some(({ text }) => text === "Text 0")
+        ? {
+            ok: false,
+            scope: "text",
+            error: "Model refused Text 0",
+            translatedTexts,
+          }
+        : { ok: true, translatedTexts };
+    });
+    try {
+      await expect(
+        translateCommandAction({ project, provider }),
+      ).rejects.toThrow("Saved the 250 translations");
+      expect(calls).toHaveLength(6);
+      const bundles = await selectBundleNested(project.db).execute();
+      expect(
+        bundles.filter((bundle) =>
+          bundle.messages.some((message) => message.locale === "de"),
+        ),
+      ).toHaveLength(250);
+      expect(
+        bundles
+          .find((bundle) => bundle.id === "bundle0")
+          ?.messages.map((message) => message.locale),
+      ).toEqual(["en"]);
+    } finally {
+      await project.close();
+    }
+  },
+);
 
 test("a thrown error fails the run like a returned one", async () => {
   const project = await projectWithTextBundles(["en", "de"], 1);
@@ -1015,16 +1134,17 @@ function clearProviderEnv() {
 }
 
 test.each([
-  { stdinTTY: false, stdoutTTY: true, asks: false },
-  { stdinTTY: true, stdoutTTY: false, asks: false },
-  { stdinTTY: true, stdoutTTY: true, asks: true },
+  { stdinTTY: false, stdoutTTY: true, ci: "", asks: false },
+  { stdinTTY: true, stdoutTTY: false, ci: "", asks: false },
+  { stdinTTY: true, stdoutTTY: true, ci: "", asks: true },
+  { stdinTTY: true, stdoutTTY: true, ci: "1", asks: false },
 ])(
   "unconfigured runs translate unattended and ask only at a terminal (%o)",
-  async ({ stdinTTY, stdoutTTY, asks }) => {
+  async ({ stdinTTY, stdoutTTY, ci, asks }) => {
     clearProviderEnv();
-    vi.stubEnv("CI", "");
-    // Linux counts as interactive only with a display.
-    vi.stubEnv("DISPLAY", ":0");
+    vi.stubEnv("CI", ci);
+    vi.stubEnv("DISPLAY", undefined);
+    vi.stubEnv("WAYLAND_DISPLAY", undefined);
     const restoreTTY = [
       stubIsTTY(process.stdin, stdinTTY),
       stubIsTTY(process.stdout, stdoutTTY),
@@ -1050,6 +1170,8 @@ test.each([
     const exit = vi
       .spyOn(process, "exit")
       .mockImplementation(() => undefined as never);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux" });
     try {
       await translate.parseAsync(["--project", path, "--nobar"], {
         from: "user",
@@ -1080,6 +1202,7 @@ test.each([
         );
       }
     } finally {
+      Object.defineProperty(process, "platform", platform);
       for (const restore of restoreTTY) restore();
       await cleanup();
     }

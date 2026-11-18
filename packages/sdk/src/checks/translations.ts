@@ -11,7 +11,7 @@ import {
 	matchValue,
 	missingVariants,
 	pluralRules,
-	resolveAnnotation,
+	spelledOutInputs,
 	resolveInputVariable,
 	selectorGroups,
 } from "./selectors.js";
@@ -186,32 +186,6 @@ export function checkTranslation(args: {
 		...new Set(referenceForms.flatMap((form) => markupNames(form.pattern))),
 	];
 	const groups = selectorGroups(target, declarations);
-	// A variant for one exact number may spell that number out: "=0" (on the plural selector,
-	// or on the exact-number selector ICU's `=0 {…} one {…}` imports next to it), or a
-	// category that selects one number such as German "one". Only that input is exempt.
-	const spelledOut = (variant: VariantLike): string[] =>
-		variant.matches.flatMap((match) => {
-			if (match.type !== "literal-match") return [];
-			const group = groups.find((value) => value.names.includes(match.key));
-			if (!group) return [];
-			// an exact-number selector on its own (`count=0`) also selects one number
-			if (!group.isPlural)
-				return isNumericKey(match.value) &&
-					resolveAnnotation(match.key, declarations) === undefined
-					? [group.input]
-					: [];
-			// the form's matches resolve a variable plural type (i18next's `type=$pluralType`)
-			return isNumericKey(match.value) ||
-				(match.key === group.selector &&
-					pluralRules(
-						match.key,
-						declarations,
-						target.locale,
-						variant.matches
-					)?.singleNumberCategories.includes(match.value))
-				? [group.input]
-				: [];
-		});
 	// The reference forms with the same exact numbers and select values. Plural categories are
 	// not compared: they mean different numbers in each locale (Russian "one" is 1, 21, 31…).
 	const sameForms = (variant: VariantLike) => {
@@ -257,7 +231,7 @@ export function checkTranslation(args: {
 		if (!reference || referenceForms.length === 0) continue;
 		const variantId = variant.id;
 		const forms = sameForms(variant);
-		const exempt = spelledOut(variant);
+		const exempt = spelledOutInputs(variant, declarations, target.locale);
 		const category = categoryForms(variant, forms);
 		// A plural's input ("count") is needed in every form that isn't one number when the
 		// reference uses it in the forms with these select values and exact numbers.

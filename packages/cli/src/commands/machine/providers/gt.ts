@@ -78,13 +78,16 @@ export function createGtTranslateProvider(args: {
       if (response.status === 402) {
         return {
           ok: false,
-          error: `General Translation could not bill this request. Check your billing: ${GT_DASHBOARD_URL}`,
+          error: `General Translation could not bill this request. Check your billing: ${GT_DASHBOARD_URL}\nTo use the community service, set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco. For another provider, see https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok.`,
         };
       }
 
       if (!response.ok) {
         return {
           ok: false,
+          scope: [400, 413, 422].includes(response.status)
+            ? "text"
+            : "provider",
           error: `${response.status} ${response.statusText}: translating from ${sourceLocale} to ${targetLocale}`,
         };
       }
@@ -114,6 +117,7 @@ export function createGtTranslateProvider(args: {
       if (failures.length > 0) {
         return {
           ok: false,
+          scope: "text",
           error: `${failures.length} of ${Object.keys(texts).length} translations from ${sourceLocale} to ${targetLocale} failed: ${failures[0]}`,
           translatedTexts: Object.fromEntries(translations),
         };

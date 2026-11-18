@@ -4,12 +4,16 @@ import { isDeepStrictEqual } from "node:util";
 import { v7 as randomUUID } from "uuid";
 import {
   isEmptyPattern,
+  isNumericKey,
   isPluralSelector,
   matchValue,
   missingVariants,
   pluralExamples,
   pluralRules,
   requiredVariants,
+  resolveAnnotation,
+  resolveInputVariable,
+  spelledOutInputs,
   selectorGroups,
   sourceVariantFor,
   variantCovers,
@@ -288,6 +292,8 @@ export function planBundleTranslation(
         const found = rejectionReasons(
           pattern,
           translation.sourceVariant.pattern,
+          spelledOutInputs(translation, declarations, translation.targetLocale),
+          declarations,
         );
         if (found.length > 0) reasons.set(translation, found);
       }
@@ -393,7 +399,8 @@ export function planBundleTranslation(
 /**
  * Why a translation can't be written, compared with the variant it was
  * translated from: `empty`, or the placeholders (`{count}`, `</b>`) it
- * dropped, added or changed, and its markup that doesn't nest where the
+ * dropped, added or changed (a fixed count may be spelled out), and its markup
+ * that doesn't nest where the
  * source's does. Placeholders may move: word order differs between languages.
  * A provider gets each placeholder as JSON, which a model can change: another
  * `currency` option, a lost `</b>`.
@@ -401,12 +408,27 @@ export function planBundleTranslation(
 function rejectionReasons(
   pattern: VariantRow["pattern"],
   source: VariantRow["pattern"],
+  spelledOut: string[],
+  declarations: BundleNested["declarations"],
 ): string[] {
   if (isEmptyPattern(pattern) && !isEmptyPattern(source)) return ["empty"];
   const placeholders = pattern.filter((part) => part.type !== "text");
   const sourcePlaceholders = source.filter((part) => part.type !== "text");
   const changed = [
-    ...without(sourcePlaceholders, placeholders),
+    ...without(sourcePlaceholders, placeholders).filter((part) => {
+      if (part.type !== "expression" || part.arg.type !== "variable-reference")
+        return true;
+      // Plain counts and ICU # can be written in words; currency and unit
+      // formatters still carry meaning beyond the selected number.
+      const annotation =
+        part.annotation ?? resolveAnnotation(part.arg.name, declarations);
+      return (
+        !spelledOut.includes(
+          resolveInputVariable(part.arg.name, declarations),
+        ) ||
+        (annotation !== undefined && annotation.name !== "icu:pound")
+      );
+    }),
     ...without(placeholders, sourcePlaceholders),
   ];
   // a changed placeholder says enough, while markup that only moved can
@@ -557,9 +579,9 @@ function hasUnknownPluralRules(
  * Every empty variant of a form is filled, such as an empty `other` next to
  * a `*`.
  *
- * Where a plural's category isn't the source variant's, the context says
- * which form to write and for which numbers, after the bundle description:
- * a provider gets the same text for Russian `few`, `many` and `*`.
+ * Context identifies each plural input, its target form and example numbers,
+ * even when category names match: Russian and Arabic `few` differ. Exact
+ * numbers get their own guidance instead of the plural catch-all's.
  */
 function missingForms(args: {
   target: { locale: string; variants: VariantRow[] };
@@ -594,9 +616,21 @@ function missingForms(args: {
       continue;
     const plurals = form.flatMap(({ key }) => {
       if (!isPluralSelector(key, declarations)) return [];
+      const input = resolveInputVariable(key, declarations);
+      const exact = form.find(
+        (match) =>
+          match.type === "literal-match" &&
+          isNumericKey(match.value) &&
+          !resolveAnnotation(match.key, declarations) &&
+          resolveInputVariable(match.key, declarations) === input,
+      );
+      if (exact?.type === "literal-match") {
+        return [
+          `Exact-number form for {${input}}: ${exact.value} in ${target.locale}. Preserve this exact-number meaning.`,
+        ];
+      }
       const category = categoryOf({ matches: form }, key);
       const sourceCategory = categoryOf(sourceVariant, key);
-      if (category === sourceCategory) return [];
       // of the type the form matches, for a `type=$pluralType` plural
       const rules = pluralRules(key, declarations, target.locale, form)!;
       const examples = pluralExamples(
@@ -606,7 +640,7 @@ function missingForms(args: {
         { offset: rules.offset },
       )[category];
       return [
-        `Plural form: ${category} (${rules.type}) in ${target.locale}, used for n = ${examples}. Translate as the ${category} form; the source shows the ${sourceCategory} form.`,
+        `Plural form for {${input}}: ${category} (${rules.type}) in ${target.locale}, used for n = ${examples}. Translate as the ${category} form; the source shows the ${sourceCategory} form.`,
       ];
     });
     // the matches of a variant added for the form
@@ -661,9 +695,9 @@ function categoryOf(variant: Pick<VariantRow, "matches">, selector: string) {
  * requests of at most `MAX_TEXTS_PER_REQUEST`; a single-text provider gets
  * one request per text.
  *
- * Stops starting requests at the first failure, returned or thrown, and
- * returns it once the requests in flight have settled, with the translations
- * that came back.
+ * A failed text does not stop unrelated requests. A provider failure (including
+ * a thrown network error) stops new requests; those in flight still settle.
+ * Returns every failure and the translations that came back.
  */
 export async function translateMissing(args: {
   provider: AnyMachineTranslateProvider;
@@ -739,28 +773,35 @@ export async function translateMissing(args: {
           }
         }
         if (!result.ok) return result;
-        if (textError !== undefined) return { ok: false, error: textError };
+        if (textError !== undefined)
+          return { ok: false, error: textError, scope: "text" };
         args.onProgress?.(chunk.length);
         return result;
       });
     }
   }
 
-  let failure: TranslateFailure | undefined;
+  const errors = new Set<string>();
+  let stopped = false;
   let next = 0;
   const worker = async () => {
-    while (!failure && next < requests.length) {
-      // e.g. a network error, or a translation that isn't a valid pattern
+    while (!stopped && next < requests.length) {
+      // Thrown errors, such as network failures, are provider-wide.
       const result = await requests[next++]!().catch(
         (error): TranslateFailure => ({ ok: false, error: String(error) }),
       );
-      if (!result.ok) failure ??= result;
+      if (!result.ok) {
+        errors.add(result.error);
+        if (result.scope !== "text") stopped = true;
+      }
     }
   };
   await Promise.all(
     Array.from({ length: MAX_CONCURRENT_REQUESTS }, () => worker()),
   );
-  return { ...(failure ?? { ok: true }), translations };
+  return errors.size > 0
+    ? { ok: false, error: [...errors].join("\n"), translations }
+    : { ok: true, translations };
 }
 
 const UUID_V7 =

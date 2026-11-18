@@ -178,6 +178,7 @@ describe("createOpenAITranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "provider",
       error: "401 Unauthorized: translating from en to de",
     });
   });
@@ -220,6 +221,7 @@ describe("createOpenAITranslateProvider", () => {
 
       expect(result).toEqual({
         ok: false,
+        scope: "text",
         error: "OpenAI response was not completed: translating from en to de",
       });
     },
@@ -243,6 +245,7 @@ describe("createOpenAITranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "text",
       error: "Invalid response from OpenAI: translating from en to de",
     });
   });
