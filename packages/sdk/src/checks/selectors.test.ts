@@ -431,13 +431,13 @@ const sources = (
 	requiredVariants(translation, declarations, {
 		referenceVariants: reference,
 	}).map((form) => {
-		const source = sourceVariantFor(
-			form,
+		const source = sourceVariantFor({
+			target: form,
 			reference,
 			declarations,
 			referenceLocale,
-			translation.locale
-		);
+			targetLocale: translation.locale,
+		});
 		return `${values([form])} <- ${source ? values([source.matches]) : "none"}`;
 	});
 
@@ -494,9 +494,15 @@ test("an exact number's variant the reference never shows is not a source", () =
 		variant({ countPluralExact: "*", countPlural: "*" }),
 	];
 	const form = variant({ countPluralExact: "0", countPlural: "*" }).matches;
-	expect(sourceVariantFor(form, english, icuExact, "en", "de")).toBe(
-		english[1]
-	);
+	expect(
+		sourceVariantFor({
+			target: form,
+			reference: english,
+			declarations: icuExact,
+			referenceLocale: "en",
+			targetLocale: "de",
+		})
+	).toBe(english[1]);
 });
 
 test("a select value only a variant the reference never shows uses still has its source", () => {
@@ -506,13 +512,13 @@ test("a select value only a variant the reference never shows uses still has its
 		variant({ countPlural: "*", gender: "*" }),
 	];
 	expect(
-		sourceVariantFor(
-			variant({ countPlural: "one", gender: "male" }).matches,
-			english,
-			genderPlural,
-			"en",
-			"de"
-		)
+		sourceVariantFor({
+			target: variant({ countPlural: "one", gender: "male" }).matches,
+			reference: english,
+			declarations: genderPlural,
+			referenceLocale: "en",
+			targetLocale: "de",
+		})
 	).toBe(english[1]);
 });
 
