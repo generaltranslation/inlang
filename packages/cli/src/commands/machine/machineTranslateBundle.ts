@@ -9,6 +9,8 @@ import {
   missingVariants,
   pluralRules,
   resolveAnnotation,
+  resolveInputVariable,
+  spelledOutInputs,
   selectorGroups,
   variantCovers,
   type BundleNested,
@@ -225,6 +227,8 @@ export function planBundleTranslation(
         const found = rejectionReasons(
           pattern,
           translation.sourceVariant.pattern,
+          spelledOutInputs(translation, declarations, translation.targetLocale),
+          declarations,
         );
         if (found.length > 0) reasons.set(translation, found);
       }
@@ -332,7 +336,8 @@ export function planBundleTranslation(
 /**
  * Why a translation can't be written, compared with the variant it was
  * translated from: `empty`, or the placeholders (`{count}`, `</b>`) it
- * dropped, added or changed, and its markup that doesn't nest where the
+ * dropped, added or changed (a fixed count may be spelled out), and its markup
+ * that doesn't nest where the
  * source's does. Placeholders may move: word order differs between languages.
  * A provider gets each placeholder as JSON, which a model can change: another
  * `currency` option, a lost `</b>`.
@@ -340,12 +345,25 @@ export function planBundleTranslation(
 function rejectionReasons(
   pattern: VariantRow["pattern"],
   source: VariantRow["pattern"],
+  spelledOut: string[],
+  declarations: BundleNested["declarations"],
 ): string[] {
   if (isEmptyPattern(pattern) && !isEmptyPattern(source)) return ["empty"];
   const placeholders = pattern.filter((part) => part.type !== "text");
   const sourcePlaceholders = source.filter((part) => part.type !== "text");
   const changed = [
-    ...without(sourcePlaceholders, placeholders),
+    ...without(sourcePlaceholders, placeholders).filter(
+      (part) =>
+        // A plain count may be written in words in an exact/single-number
+        // form. Formatted expressions still carry meaning (currency, units).
+        !(
+          part.type === "expression" &&
+          part.arg.type === "variable-reference" &&
+          !part.annotation &&
+          !resolveAnnotation(part.arg.name, declarations) &&
+          spelledOut.includes(resolveInputVariable(part.arg.name, declarations))
+        ),
+    ),
     ...without(placeholders, sourcePlaceholders),
   ];
   // a changed placeholder says enough, while markup that only moved can

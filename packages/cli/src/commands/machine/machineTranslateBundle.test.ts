@@ -740,6 +740,86 @@ const itemCount = {
   "countPlural=*": "{count} items",
 };
 
+
+test("a German singular and an exact number may omit their own plain count", async () => {
+  const singular = await translateEditing(
+    withPlaceholders(
+      formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+    ),
+    ["de"],
+    (text) => (text.endsWith(" item") ? dropPlaceholders(text) : text),
+  );
+  expect(singular.rejected).toEqual([]);
+  const exact = await translateEditing(
+    withPlaceholders(
+      formsBundle([input("count")], ["count"], {
+        en: { "count=4": "{count} items", "count=*": "{count} things" },
+      }),
+    ),
+    ["ru"],
+    (text) => (text.endsWith(" items") ? dropPlaceholders(text) : text),
+  );
+  expect(exact.rejected).toEqual([]);
+});
+
+test("a single-number form still requires other variables and rejects added counts", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=one": "{name}: {count} item",
+        "countPlural=*": "{name}: {count} items",
+      },
+    }),
+  );
+  const missingName = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+  expect(missingName.rejected).toContainEqual({
+    locale: "de",
+    reasons: ["{name}"],
+  });
+  const repeated = await translateEditing(
+    withPlaceholders(
+      formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+    ),
+    ["de"],
+    (text) =>
+      text.endsWith(" item") ? text.replace(new RegExp(span), "$&$&") : text,
+  );
+  expect(repeated.rejected).toContainEqual({
+    locale: "de",
+    reasons: ["{count}"],
+  });
+});
+
+test("a single-number form cannot change or omit a formatted count", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  const count = bundle.messages[0]!.variants[0]!.pattern.find(
+    (part) => part.type === "expression",
+  )!;
+  if (count.type !== "expression") throw Error("Expected count");
+  count.annotation = {
+    type: "function-reference",
+    name: "number",
+    options: [
+      { name: "style", value: { type: "literal", value: "currency" } },
+      { name: "currency", value: { type: "literal", value: "USD" } },
+    ],
+  };
+  for (const edit of [
+    (text: string) => text.replace('"USD"', '"EUR"'),
+    (text: string) => (text.endsWith(" item") ? dropPlaceholders(text) : text),
+  ]) {
+    const result = await translateEditing(bundle, ["de"], edit);
+    expect(result.rejected).toContainEqual({
+      locale: "de",
+      reasons: ["{count}"],
+    });
+  }
+});
+
 test("a new message with a rejected translation isn't created: French `one` (0 and 1) drops `{count}`", async () => {
   const bundle = withPlaceholders(
     formsBundle(countPlural, ["countPlural"], { en: itemCount }),
