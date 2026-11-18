@@ -205,9 +205,50 @@ test("signs in to General Translation in an interactive terminal without credent
   });
 });
 
-test("fails fast without credentials outside an interactive terminal", async () => {
+test.each([undefined, "", "  "])(
+  "unconfigured noninteractive runs use the community service without saving a preference (%j)",
+  async (selection) => {
+    const { dir, projectPath } = projectIn();
+    const prompt = vi.spyOn(log, "prompt");
+    const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const provider = await resolve({
+      projectPath,
+      env: { INLANG_MACHINE_TRANSLATE_PROVIDER: selection },
+    });
+    expect((await firstRequest(provider)).url).toMatch(
+      /^https:\/\/translate\.demosjarco\.dev\//,
+    );
+    expect(prompt).not.toHaveBeenCalled();
+    expect(npxCalls()).toEqual([]);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(info).toHaveBeenCalledWith(
+      "No translation provider configured. Using the community service. To use General Translation, set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com. To use this service without this message, set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
+    );
+  },
+);
+
+// A missing CI secret, as in a pull request from a fork, must not send the
+// text of a project that chose General Translation to another service.
+test.each<{ files: Record<string, string>; env: Record<string, string> }>([
+  { files: { "gt.config.json": `{"projectId":"prj_shared"}` }, env: {} },
+  { files: { ".env": "GT_PROJECT_ID=prj_shared" }, env: {} },
+  { files: {}, env: { GT_PROJECT_ID: "prj_shared" } },
+])(
+  "a project with a GT project ID fails without a key outside an interactive terminal (%o)",
+  async ({ files, env }) => {
+    const { projectPath } = projectIn(files);
+    await expect(resolve({ projectPath, env })).rejects.toThrow(
+      /^Machine translation needs a General Translation API key\.\n.*--project-id prj_shared/s,
+    );
+  },
+);
+
+test("an explicit GT provider fails without credentials outside an interactive terminal", async () => {
   const { dir, projectPath } = projectIn({}, "bob's app");
-  await expect(resolve({ projectPath })).rejects.toThrowError(
+  await expect(
+    resolve({ projectPath, env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" } }),
+  ).rejects.toThrowError(
     new MachineTranslateError(
       [
         "Machine translation needs a General Translation API key.",
@@ -229,7 +270,10 @@ test("the gt init command for agents keeps a known project and saves the key nex
   try {
     await expect(
       resolve({
-        env: { GT_PROJECT_ID: "prj_known" },
+        env: {
+          INLANG_MACHINE_TRANSLATE_PROVIDER: "gt",
+          GT_PROJECT_ID: "prj_known",
+        },
         projectPath: "./project.inlang",
       }),
     ).rejects.toThrow(

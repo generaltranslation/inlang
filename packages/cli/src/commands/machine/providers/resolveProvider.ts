@@ -9,6 +9,7 @@ import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
 import {
   GT_CLI,
   appendToEnvLocal,
+  findGtProjectId,
   gtInitArgs,
   readEnvFiles,
   readGtCredentials,
@@ -130,8 +131,19 @@ export async function resolveMachineTranslateProvider(args: {
   }
   let credentials = await readGtCredentials({ env, dir });
   if (!credentials) {
-    if (!args.interactive)
+    if (!args.interactive) {
+      // Keyless automation keeps the community service it used before GT was
+      // the default. A project that chose GT, by name or with a project ID (a
+      // committed gt.config.json), fails instead: a missing CI secret, as in a
+      // pull request from a fork, must not send its text to another service.
+      if (!env[PROVIDER_ENV]?.trim() && !(await findGtProjectId(dir, env))) {
+        log.info(
+          `No translation provider configured. Using the community service. To use General Translation, set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
+        );
+        return createCommunityProvider(env);
+      }
       throw await missingGtKeyError(dir, args.settings, env);
+    }
     log.log(
       "Machine translation is powered by General Translation. Answer No to use the community translation service instead.",
     );
@@ -185,7 +197,7 @@ export async function resolveMachineTranslateProvider(args: {
   });
 }
 
-/** CI and agents can't sign in here, so they are told how to get a key. */
+/** CI and agents that chose GT can't sign in here, so they are told how to get a key. */
 async function missingGtKeyError(
   dir: string,
   settings: ProjectSettings,
