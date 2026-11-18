@@ -122,7 +122,7 @@ If one of the commands can't be found, you probably use an outdated CLI version.
 | --------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **CLI Version** | `npx @inlang/cli@latest [command]`            | Get the latest version of the inlang CLI.                                                                                                                           |
 | **Check**       | `npx @inlang/cli check [options]`             | Check translations for missing, empty or inconsistent messages, and source code for unused messages. Exits with 1 on findings, for CI.                              |
-| **Machine**     | `npx @inlang/cli machine translate [options]` | Automate translation processes. Options include `--project <path>`, `--locale <source>` and `--targetLocales <targets...>`                                          |
+| **Machine**     | `npx @inlang/cli machine translate [options]` | Automate translation processes. Options include `--project <path>` and `--targetLocales <targets...>`                                                               |
 | **Cloud**       | `npx @inlang/cli cloud`                       | See what's coming in inlang Cloud and tell us what your team needs.                                                                                                 |
 | **Plugin**      | `npx @inlang/cli plugin [command]`            | Interact with Inlang plugins, including initialization and building. `build [options]` build an inlang module. Options include `--type`, `--entry`, and `--outdir`. |
 
@@ -183,7 +183,7 @@ npx @inlang/cli machine translate --project ./project.inlang
 The translate command has the following options:
 
 - `--project <path>`: Path to the inlang project (required).
-- `--locale <source>`: Specifies the base locale.
+- `--locale <source>`: Has no effect. The source locale is always the project's `baseLocale` in `settings.json`.
 - `--targetLocales <targets...>`: Specifies the target locales as comma seperated list (e.g. sk,zh,pt-BR).
 
 **General Translation**
