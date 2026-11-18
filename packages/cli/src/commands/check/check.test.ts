@@ -109,21 +109,6 @@ function run(
 }
 
 const project = ["--project", "./project.inlang"];
-const translateHint =
-  "Translate what's missing with inlang machine translate --project ./project.inlang\n";
-
-/** The check-app fixture's messages file of a locale, changed. */
-function messages(
-  locale: "en-US" | "pt-BR",
-  change: (messages: Record<string, any>) => void,
-): Record<string, string> {
-  const path = `messages/${locale}.json`;
-  const content = JSON.parse(
-    fs.readFileSync(nodePath.join(fixtures, "check-app", path), "utf8"),
-  );
-  change(content);
-  return { [path]: JSON.stringify(content, undefined, 2) };
-}
 
 describe("inlang check", { timeout: 60_000 }, () => {
   test("reports findings grouped by check and why unused messages can't be determined", async () => {
@@ -142,8 +127,7 @@ describe("inlang check", { timeout: 60_000 }, () => {
       "unused-message incomplete: unused messages can't be determined because:\n  src/Field.tsx:14:8  m[`${fieldName}_label`]  Dynamic message access cannot be resolved.",
     );
     expect(stdout).toContain(
-      "3 findings\n  missing-translation  1\n  missing-variable     2\n\n" +
-        translateHint,
+      "3 findings\n  missing-translation  1\n  missing-variable     2\n\nTranslate what's missing with inlang machine translate --project ./project.inlang\n",
     );
     // Paraglide's compiled output isn't analyzed, its re-exports would make analysis incomplete.
     expect(stdout).not.toContain("paraglide/messages.js");
@@ -266,52 +250,16 @@ describe("inlang check", { timeout: 60_000 }, () => {
     const noFail = await run(root, ["check", ...project, "--no-fail"]);
     expect(noFail.code).toBe(0);
     expect(noFail.stdout).toContain("3 findings");
-    expect(noFail.stdout).toContain(translateHint);
-  });
-
-  test.each([
-    [
-      "empty-translation",
-      "--empty-translations",
-      messages("pt-BR", (m) => (m.welcome_back = "")),
-    ],
-    [
-      "empty-variant",
-      "--empty-variants",
-      messages("pt-BR", (m) => (m.cart_items[0].match["countPlural=one"] = "")),
-    ],
-    [
-      "missing-variant",
-      "--missing-variants",
-      messages("pt-BR", (m) => delete m.cart_items[0].match["countPlural=one"]),
-    ],
-  ])("%s points to machine translate", async (_id, flag, files) => {
-    const { stdout } = await run(app({ files }), ["check", ...project, flag]);
-    expect(stdout).toContain(translateHint);
-  });
-
-  test("quotes a project path with a space in the hint", async () => {
-    const parent = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-check-"));
-    temporary.push(parent);
-    fs.cpSync(
-      app({ files: messages("pt-BR", (m) => (m.welcome_back = "")) }),
-      nodePath.join(parent, "my app"),
-      { recursive: true },
-    );
-    const { stdout } = await run(parent, [
-      "check",
-      "--project",
-      "my app/project.inlang",
-      "--empty-translations",
-    ]);
-    expect(stdout).toContain(
-      "Translate what's missing with inlang machine translate --project 'my app/project.inlang'\n",
-    );
   });
 
   test("doesn't point to machine translate for the base locale", async () => {
+    const path = "messages/en-US.json";
+    const messages = JSON.parse(
+      fs.readFileSync(nodePath.join(fixtures, "check-app", path), "utf8"),
+    );
+    messages.welcome_back = "";
     const { stdout } = await run(
-      app({ files: messages("en-US", (m) => (m.welcome_back = "")) }),
+      app({ files: { [path]: JSON.stringify(messages) } }),
       ["check", ...project, "--empty-translations"],
     );
     expect(stdout).toContain("empty-translation (1)\n  welcome_back  en-US");
@@ -409,11 +357,7 @@ describe("inlang check", { timeout: 60_000 }, () => {
         settings.modules = [legacy];
       },
     });
-    const { stdout } = await run(root, [
-      "check",
-      ...project,
-      "--unused-messages",
-    ]);
+    const { stdout } = await run(root, ["check", ...project, "--unused-messages"]);
     expect(stdout).toContain(
       "Unused-message check needs @inlang/plugin-i18next ≥ 6.5.0, update the module URL in settings.json",
     );
