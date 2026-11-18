@@ -499,17 +499,23 @@ function newCategories(
  * True when a plural of the message has no known rules in its locale (an
  * unknown locale, or options only known at runtime), so the SDK requires only
  * its catch-all. A plural whose `type` a select chooses has known rules when
- * its cardinal rules are known.
+ * its cardinal rules are known; one whose `type` no select chooses doesn't.
  */
 function hasUnknownPluralRules(
   message: Parameters<typeof selectorGroups>[0],
   declarations: BundleNested["declarations"],
 ): boolean {
-  return message.selectors.some(
-    ({ name }) =>
-      isPluralSelector(name, declarations) &&
-      // no matches: the catch-all type, cardinal
-      !pluralRules(name, declarations, message.locale, []),
+  return selectorGroups(message, declarations).some(
+    (group) =>
+      group.isPlural &&
+      !pluralRules(
+        group.selector,
+        declarations,
+        message.locale,
+        // no matches: the catch-all type, cardinal; without a type selector a
+        // `type=$pluralType` plural's rules are unknown
+        group.typeSelector ? [] : undefined,
+      ),
   );
 }
 
