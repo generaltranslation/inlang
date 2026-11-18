@@ -30,7 +30,7 @@ export function createGtTranslateProvider(args: {
           key,
           {
             source: text,
-            metadata: { dataFormat: "STRING", ...(context ? { context } : {}) },
+            metadata: { dataFormat: "STRING", context },
           },
         ]),
       );
