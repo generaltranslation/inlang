@@ -70,6 +70,7 @@ async function firstRequest(provider: AnyMachineTranslateProvider) {
   return {
     url: String(url),
     headers: (init?.headers ?? {}) as Record<string, string>,
+    body: init?.body,
   };
 }
 
@@ -89,6 +90,93 @@ test("uses openai when its key is set and no provider is configured", async () =
   expect((await firstRequest(provider)).url).toMatch(
     /^https:\/\/api\.openai\.com\//,
   );
+});
+
+test.each([
+  ["INLANG_GOOGLE_TRANSLATE_API_KEY", "translation.googleapis.com"],
+  ["INLANG_DEEPL_API_KEY", "api.deepl.com"],
+  ["INLANG_OPENAI_API_KEY", "api.openai.com"],
+])(
+  "uses %s from the project's env files without signing in",
+  async (key, host) => {
+    const { projectPath } = projectIn({ ".env.local": `${key}=file-key\n` });
+    const provider = await resolve({ projectPath });
+    expect(new URL((await firstRequest(provider)).url).hostname).toBe(host);
+  },
+);
+
+test("reads explicit providers from env files, with .env.local and then the shell taking precedence", async () => {
+  const { projectPath } = projectIn({
+    ".env":
+      "INLANG_MACHINE_TRANSLATE_PROVIDER=google\nINLANG_GOOGLE_TRANSLATE_API_KEY=google-key\n",
+    ".env.local":
+      "INLANG_MACHINE_TRANSLATE_PROVIDER=deepl\nINLANG_DEEPL_API_KEY=local-key\n",
+  });
+  const local = await resolve({ projectPath });
+  expect((await firstRequest(local)).headers).toMatchObject({
+    Authorization: "DeepL-Auth-Key local-key",
+  });
+  vi.restoreAllMocks();
+  const shell = await resolve({
+    projectPath,
+    env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "google" },
+  });
+  expect(new URL((await firstRequest(shell)).url).hostname).toBe(
+    "translation.googleapis.com",
+  );
+});
+
+test("the shell's key overrides the same provider's file key without mutating the shell", async () => {
+  const { projectPath } = projectIn({
+    ".env.local": "INLANG_DEEPL_API_KEY=local-key\n",
+  });
+  const env = { INLANG_DEEPL_API_KEY: "shell-key" };
+  const provider = await resolve({ projectPath, env });
+  expect((await firstRequest(provider)).headers).toMatchObject({
+    Authorization: "DeepL-Auth-Key shell-key",
+  });
+  expect(env).toEqual({ INLANG_DEEPL_API_KEY: "shell-key" });
+});
+
+test("an explicit GT provider in .env.local never falls back without credentials", async () => {
+  const { projectPath } = projectIn({
+    ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=gt\n",
+  });
+  await expect(resolve({ projectPath })).rejects.toThrow(
+    "Machine translation needs a General Translation API key.",
+  );
+});
+
+test("provider options in .env.local configure the request too", async () => {
+  const { projectPath } = projectIn({
+    ".env.local":
+      "INLANG_OPENAI_API_KEY=file-key\nINLANG_OPENAI_MODEL=gpt-file-model\n",
+  });
+  const provider = await resolve({ projectPath });
+  const { body } = await firstRequest(provider);
+  expect(JSON.parse(body as string).model).toBe("gpt-file-model");
+});
+
+test("an invalid file provider fails instead of falling back", async () => {
+  const { projectPath } = projectIn({
+    ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=unknown\n",
+  });
+  await expect(resolve({ projectPath })).rejects.toThrow(
+    "Unsupported INLANG_MACHINE_TRANSLATE_PROVIDER",
+  );
+});
+
+test("GT credentials still pair a shell key only with the shell's project ID", async () => {
+  const { projectPath } = projectIn({
+    ".env.local": "GT_API_KEY=local-key\nGT_PROJECT_ID=local-project\n",
+  });
+  const provider = await resolve({
+    projectPath,
+    env: { GT_API_KEY: "shell-key" },
+  });
+  const { headers } = await firstRequest(provider);
+  expect(headers.Authorization).toBe("Bearer shell-key");
+  expect(headers).not.toHaveProperty("gt-project-id");
 });
 
 test("a bring-your-own key beats a General Translation key", async () => {
@@ -325,7 +413,7 @@ test("uses the choice saved in .env.local without asking, and says where it is",
   expect(prompt).not.toHaveBeenCalled();
   expect(info.mock.calls).toEqual([
     [
-      "You chose this service in .env.local. To be asked about General Translation again, remove INLANG_MACHINE_TRANSLATE_PROVIDER from it.",
+      "You chose this service in .env or .env.local. To be asked about General Translation again, remove INLANG_MACHINE_TRANSLATE_PROVIDER from it.",
     ],
   ]);
   expect((await firstRequest(provider)).url).toMatch(

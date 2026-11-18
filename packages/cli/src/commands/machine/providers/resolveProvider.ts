@@ -112,24 +112,29 @@ export async function resolveMachineTranslateProvider(args: {
   interactive: boolean;
   signIn?: typeof signInToGt;
 }): Promise<AnyMachineTranslateProvider> {
-  const { env } = args;
-  const providerName = resolveMachineTranslateProviderName(env);
+  const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
+  const fileEnv = await readEnvFiles(dir);
+  const env = { ...fileEnv, ...args.env };
+  // Preserve explicit providers and BYOK keys in the shell ahead of saved
+  // preferences. Otherwise all providers read the same project env files.
+  const environmentSelectsProvider =
+    args.env[PROVIDER_ENV]?.trim() ||
+    [GOOGLE_API_KEY_ENV, DEEPL_API_KEY_ENV, OPENAI_API_KEY_ENV].some(
+      (key) => args.env[key],
+    );
+  env[PROVIDER_ENV] = args.env[PROVIDER_ENV]?.trim() || fileEnv[PROVIDER_ENV];
+  const providerName = resolveMachineTranslateProviderName(
+    environmentSelectsProvider ? args.env : env,
+  );
+  if (providerName === "demosjarco" && !environmentSelectsProvider) {
+    log.info(
+      `You chose this service in .env or .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
+    );
+  }
   if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
-  const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
-  // Choosing community translation saves it to .env.local. A provider or key in the
-  // environment beats it.
-  if (
-    !env[PROVIDER_ENV]?.trim() &&
-    (await readEnvFiles(dir))[PROVIDER_ENV] === "demosjarco"
-  ) {
-    const provider = createCommunityProvider(env);
-    log.info(
-      `You chose this service in .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
-    );
-    return provider;
-  }
-  let credentials = await readGtCredentials({ env, dir });
+  // Keep GT keys paired with project IDs from the same source.
+  let credentials = await readGtCredentials({ env: args.env, dir });
   if (!credentials) {
     if (!args.interactive) {
       // Keyless automation keeps the community service it used before GT was
