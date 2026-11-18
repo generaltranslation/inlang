@@ -2,8 +2,14 @@ import type {
   BatchMachineTranslateProvider,
   TranslateBatchArgs,
 } from "./types.js";
+import { rateLimitOf } from "./rateLimit.js";
 
 const GT_TRANSLATE_API_URL = "https://api.gtx.dev/v2/translate";
+/**
+ * The API contract the request and the response parsing are written for.
+ * Without it, the API answers with its oldest supported contract.
+ */
+export const GT_API_VERSION = "2026-03-06.v1";
 const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
 // A batch of texts can take a while; this only ends a request that hangs.
 const GT_REQUEST_TIMEOUT_MINUTES = 5;
@@ -43,6 +49,7 @@ export function createGtTranslateProvider(args: {
             Authorization: `Bearer ${args.apiKey}`,
             "Content-Type": "application/json",
             "User-Agent": args.userAgent,
+            "gt-api-version": GT_API_VERSION,
             ...(args.projectId ? { "gt-project-id": args.projectId } : {}),
           },
           body: JSON.stringify({
@@ -88,6 +95,7 @@ export function createGtTranslateProvider(args: {
           scope: [400, 413, 422].includes(response.status)
             ? "text"
             : "provider",
+          ...rateLimitOf(response),
           error: `${response.status} ${response.statusText}: translating from ${sourceLocale} to ${targetLocale}`,
         };
       }
