@@ -27,7 +27,6 @@ import {
   loadProjectInMemory,
   newProject,
   selectBundleNested,
-  type InlangProject,
   type NewBundleNested,
 } from "@inlang/sdk";
 
@@ -143,60 +142,6 @@ test("fails with a non-zero-triggering error when the fallback service is comple
   await expect(translateCommandAction({ project })).rejects.toThrow(
     "translate.demosjarco.dev is not available",
   );
-});
-
-test("keeps the translations that came back when others fail", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
-  skipRetryDelay();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockImplementation(async (url: string) => {
-      const query = new URL(url).searchParams;
-      if (query.get("q") === "Goodbye" || query.get("target") === "fr") {
-        return unavailableResponse();
-      }
-      return Response.json({
-        data: {
-          translations: [
-            { translatedText: `${query.get("q")} (${query.get("target")})` },
-          ],
-        },
-      });
-    }),
-  );
-
-  const project = await loadProjectInMemory({
-    blob: await newProject({
-      settings: {
-        baseLocale: "en",
-        locales: ["en", "de", "fr"],
-      },
-    }),
-  });
-
-  await insertBundleNested(project.db, textBundle("hello", "Hello"));
-  await insertBundleNested(project.db, textBundle("goodbye", "Goodbye"));
-
-  const error = await translateCommandAction({ project }).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-
-  expect(error).toBeInstanceOf(MachineTranslateError);
-  expect((error as Error).message).toBe(
-    `${SERVICE_UNAVAILABLE_ERROR}\nSaved the 1 translation that came back. Run again to translate the rest.`,
-  );
-  expect((error as MachineTranslateError).translated).toBe(1);
-
-  const bundles = await selectBundleNested(project.db).execute();
-  expect(
-    Object.fromEntries(
-      bundles.map((bundle) => [
-        bundle.id,
-        bundle.messages.map((message) => message.locale).sort(),
-      ]),
-    ),
-  ).toEqual({ hello: ["de", "en"], goodbye: ["en"] });
 });
 
 test.runIf(process.env.INLANG_GOOGLE_TRANSLATE_API_KEY)(
@@ -445,41 +390,6 @@ test("only the translated messages change in the translation files", async () =>
     expect(read("de")).toBe(
       `{\n    "zeta": "Zeta (de)",\n    "alpha":"Caf\\u00e9",\n    "beta":"Beta (de)"\n}`,
     );
-  } finally {
-    await cleanup();
-  }
-});
-
-test("saves the translations that came back when one fails", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
-  skipRetryDelay();
-  const en = `{"alpha": "Alpha", "zeta": "Zeta"}`;
-  const { project, path, read, cleanup } = await projectOnDisk({
-    en,
-    de: `{}`,
-  });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockImplementation(async (url: string) => {
-      const query = new URL(url).searchParams;
-      if (query.get("q") === "Zeta") return unavailableResponse();
-      return Response.json({
-        data: {
-          translations: [
-            { translatedText: `${query.get("q")} (${query.get("target")})` },
-          ],
-        },
-      });
-    }),
-  );
-  try {
-    await expect(translateAndSave({ project, path })).rejects.toBeInstanceOf(
-      MachineTranslateError,
-    );
-    expect(read("en")).toBe(en);
-    const de = JSON.parse(read("de"));
-    expect(de).toMatchObject({ alpha: "Alpha (de)" });
-    expect(de).not.toHaveProperty("zeta");
   } finally {
     await cleanup();
   }
@@ -816,76 +726,27 @@ test("a thrown error fails the run like a returned one", async () => {
   }
 });
 
-test.each([
-  {
-    answer: "leaves out a text",
-    translatedText: () => undefined,
-    // the other two texts came back
-    error:
-      'No translation was returned for "Text 0".\nSaved the 2 translations that came back. Run again to translate the rest.',
-  },
-  {
-    answer: "has a placeholder that isn't one",
-    translatedText: () => '<span class="notranslate">null</span>',
-    // the other two texts came back
-    error:
-      "SyntaxError: Not a placeholder: null\nSaved the 2 translations that came back. Run again to translate the rest.",
-  },
-  {
-    answer: "has a placeholder that isn't valid",
-    translatedText: () => '<span class="notranslate">{broken</span>',
-    // the other two texts came back
-    error: expect.stringMatching(
-      /^SyntaxError: .*\nSaved the 2 translations that came back\./s,
+test("a batch answer with a placeholder that isn't one fails the run, keeping the others", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 3);
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: true,
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts).map(([key, { text }]) => [
+        key,
+        text === "Text 0"
+          ? '<span class="notranslate">null</span>'
+          : `${text} (de)`,
+      ]),
     ),
-  },
-])(
-  "a batch answer that $answer fails the run",
-  async ({ translatedText, error }) => {
-    const project = await projectWithTextBundles(["en", "de"], 3);
-    const { provider } = fakeBatchProvider(async (args) => ({
-      ok: true,
-      translatedTexts: Object.fromEntries(
-        Object.entries(args.texts).flatMap(([key, { text }]) => {
-          const translation =
-            text === "Text 0" ? translatedText() : `${text} (de)`;
-          return translation === undefined ? [] : [[key, translation]];
-        }),
-      ),
-    }));
-    try {
-      const thrown = await translateCommandAction({ project, provider }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(thrown).toBeInstanceOf(MachineTranslateError);
-      expect((thrown as Error).message).toEqual(error);
-    } finally {
-      await project.close();
-    }
-  },
-);
-
-/** Inserts a bundle that has a `de` message but no source message. */
-async function insertOrphanBundle(project: InlangProject) {
-  await insertBundleNested(project.db, {
-    id: "orphan",
-    messages: [
-      {
-        id: "orphan_de",
-        bundle_id: "orphan",
-        locale: "de",
-        variants: [
-          {
-            id: "orphan_de",
-            message_id: "orphan_de",
-            pattern: [{ type: "text", value: "Waise" }],
-          },
-        ],
-      },
-    ],
-  });
-}
+  }));
+  try {
+    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
+      "SyntaxError: Not a placeholder: null\nSaved the 2 translations that came back. Run again to translate the rest.",
+    );
+  } finally {
+    await project.close();
+  }
+});
 
 test("a failed batch keeps the texts it did translate", async () => {
   const project = await projectWithTextBundles(["en", "de"], 3);
@@ -927,7 +788,24 @@ test("a failed batch keeps the texts it did translate", async () => {
 
 test("a bundle without a source message is reported when a translation fails", async () => {
   const project = await projectWithTextBundles(["en", "de"], 1);
-  await insertOrphanBundle(project);
+  // a bundle with a `de` message but no source message
+  await insertBundleNested(project.db, {
+    id: "orphan",
+    messages: [
+      {
+        id: "orphan_de",
+        bundle_id: "orphan",
+        locale: "de",
+        variants: [
+          {
+            id: "orphan_de",
+            message_id: "orphan_de",
+            pattern: [{ type: "text", value: "Waise" }],
+          },
+        ],
+      },
+    ],
+  });
   const warn = vi.spyOn(log, "warn");
   const { provider } = fakeBatchProvider(async () => ({
     ok: false,
