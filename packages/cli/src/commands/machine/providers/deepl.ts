@@ -42,6 +42,9 @@ export function createDeepLTranslateProvider(
       if (!response.ok) {
         return {
           ok: false,
+          scope: [400, 413, 422].includes(response.status)
+            ? "text"
+            : "provider",
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
       }

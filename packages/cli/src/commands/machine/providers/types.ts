@@ -9,6 +9,8 @@ export type TranslateTextArgs = {
 export type TranslateFailure = {
   ok: false;
   error: string;
+  /** Text failures leave other requests worth trying; omitted scope means provider-wide. */
+  scope?: "text" | "provider";
 };
 
 export type TranslateTextResult =

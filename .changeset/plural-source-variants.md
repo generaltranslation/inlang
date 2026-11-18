@@ -1,5 +1,5 @@
 ---
-"@inlang/sdk": patch
+"@inlang/sdk": minor
 "@inlang/editor-component": patch
 ---
 
@@ -10,3 +10,5 @@ Add `sourceVariantFor`: the reference variant a form of a translation is transla
 Move `pluralExamples` from `@inlang/editor-component` (which still exports it) to `@inlang/sdk`.
 
 `missing-variant` treats a plural category that selects only 0 as the exact 0 form: Arabic "zero" is `=0`, so Arabic i18next `_zero` no longer reports a missing `=0`, with ordinal forms too.
+
+Expose `spelledOutInputs` so translation validation can share the SDK's exact-number and single-number plural exceptions.

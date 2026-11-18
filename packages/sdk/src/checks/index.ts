@@ -23,6 +23,7 @@ export {
 	pluralRules,
 	pluralCategories,
 	isSingleNumberCategory,
+	spelledOutInputs,
 	isUnreachableVariant,
 	isPluralSelector,
 	isNumericKey,

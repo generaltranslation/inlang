@@ -264,6 +264,36 @@ export function isSingleNumberCategory(
 	);
 }
 
+/**
+ * Inputs a variant may spell out instead of interpolating: an exact number,
+ * or a plural category that selects one number in the variant's locale.
+ * Only that selector's input is exempt; other variables remain required.
+ */
+export function spelledOutInputs(
+	variant: WithMatches,
+	declarations: readonly Declaration[] | undefined,
+	locale: string
+): string[] {
+	return variant.matches.flatMap((match) => {
+		if (match.type !== "literal-match") return [];
+		const annotation = resolveAnnotation(match.key, declarations);
+		const exact =
+			isNumericKey(match.value) &&
+			(annotation === undefined || annotation.name === "plural");
+		const single =
+			annotation?.name === "plural" &&
+			pluralRules(
+				match.key,
+				declarations,
+				locale,
+				variant.matches
+			)?.singleNumberCategories.includes(match.value);
+		return exact || single
+			? [resolveInputVariable(match.key, declarations)]
+			: [];
+	});
+}
+
 /** The variable a plural's `type` option reads (`type=$pluralType`), if any. */
 function typeVariable(annotation: FunctionReference): string | undefined {
 	const option = annotation.options?.find((value) => value.name === "type");
