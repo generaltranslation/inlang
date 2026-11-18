@@ -1030,6 +1030,27 @@ test("unknown plural rules: the source's forms are copied and reported, with con
   expect(Object.keys(formsOf(result, "ru")!)).toHaveLength(4);
 });
 
+test("a plural whose type no selector chooses has unknown rules: the source's forms are copied", async () => {
+  const { result } = await expand(
+    formsBundle(
+      [
+        input("count"),
+        input("pluralType"),
+        plural("countPlural", "count", { type: "$pluralType" }),
+      ],
+      ["countPlural"],
+      { en: items },
+    ),
+    ["de"],
+  );
+
+  expect(result.unknownPluralRules).toEqual(["de"]);
+  expect(formsOf(result, "de")).toEqual({
+    "countPlural=one": "[de] One item",
+    "countPlural=*": "[de] Many items",
+  });
+});
+
 test("a batch provider gets every form of a locale in one request, the same source text several times", async () => {
   const calls: TranslateBatchArgs[] = [];
   const result = await machineTranslateBundle({
