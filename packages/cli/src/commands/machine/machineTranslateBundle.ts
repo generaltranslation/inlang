@@ -227,7 +227,11 @@ export function planBundleTranslation(
         const found = rejectionReasons(
           pattern,
           translation.sourceVariant.pattern,
-          spelledOutInputs(translation, declarations, translation.targetLocale),
+          spelledOutInputs(
+            translation.sourceVariant,
+            declarations,
+            translation.targetLocale,
+          ),
           declarations,
         );
         if (found.length > 0) reasons.set(translation, found);
