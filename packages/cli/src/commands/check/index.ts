@@ -98,7 +98,7 @@ export async function checkCommandAction(
     );
     if (options.format !== "json" && hasMissingTranslations(report))
       process.stdout.write(
-        `\nTranslate what's missing with inlang machine translate --project ${options.project.includes(" ") ? `"${options.project}"` : options.project}\n`,
+        `\nTranslate what's missing with ${machineTranslateCommand(options.project, locales.length > 0 ? report.locales : undefined, report.baseLocale)}\n`,
       );
     if (hasFindings(report) && options.fail !== false) {
       if (options.format !== "json")
@@ -129,6 +129,24 @@ function hasMissingTranslations(report: CheckReport): boolean {
       diagnostic.locale !== report.baseLocale &&
       MISSING_TRANSLATION_CHECKS.has(diagnostic.checkId),
   );
+}
+
+/**
+ * The machine translate command for the checked project. Locales passed to
+ * `check` become its target locales, comma separated: `machine translate`
+ * only splits the first `--targetLocales` value.
+ */
+function machineTranslateCommand(
+  project: string,
+  locales: readonly string[] | undefined,
+  baseLocale: string,
+): string {
+  const targets = locales?.filter((locale) => locale !== baseLocale);
+  return [
+    "inlang machine translate --project",
+    project.includes(" ") ? `"${project}"` : project,
+    ...(targets?.length ? ["--targetLocales", targets.join(",")] : []),
+  ].join(" ");
 }
 
 /** Commander's option key: `--missing-translations` -> `missingTranslations`. */

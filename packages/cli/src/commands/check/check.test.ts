@@ -289,6 +289,10 @@ describe("inlang check", { timeout: 60_000 }, () => {
       "--missing-translations",
     ]);
     expect(alias.stdout).toContain("welcome_back  pt-BR  no translation");
+    // the hint translates only the checked locales, without the base locale
+    expect(alias.stdout).toContain(
+      "Translate what's missing with inlang machine translate --project ./project.inlang --targetLocales pt-BR\n",
+    );
     const unknown = await run(root, ["check", ...project, "--locales", "de"]);
     expect(unknown.code).toBe(1);
     expect(unknown.stderr).toContain(
