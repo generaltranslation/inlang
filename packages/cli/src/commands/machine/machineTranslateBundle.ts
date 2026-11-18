@@ -10,16 +10,13 @@ import {
   pluralExamples,
   pluralRules,
   requiredVariants,
-  resolveAnnotation,
   selectorGroups,
   sourceVariantFor,
   variantCovers,
   type BundleNested,
-  type Declaration,
   type MarkupEnd,
   type MarkupStart,
   type NewBundleNested,
-  type SelectorGroup,
   type VariantRow,
 } from "@inlang/sdk";
 import {
@@ -297,9 +294,8 @@ export function planBundleTranslation(
       );
       const rejected = missing.filter(
         (translation) =>
-          translations.has(translation) &&
-          (reasons.has(translation) ||
-            rejectedNewMessages.has(translation.targetLocale)),
+          reasons.has(translation) ||
+          rejectedNewMessages.has(translation.targetLocale),
       );
 
       const copy = structuredClone(args.bundle);
@@ -509,39 +505,12 @@ function hasUnknownPluralRules(
   message: Parameters<typeof selectorGroups>[0],
   declarations: BundleNested["declarations"],
 ): boolean {
-  return selectorGroups(message, declarations).some(
-    (group) =>
-      group.isPlural &&
-      !rulesOf(group, "cardinal", declarations, message.locale),
+  return message.selectors.some(
+    ({ name }) =>
+      isPluralSelector(name, declarations) &&
+      // no matches: the catch-all type, cardinal
+      !pluralRules(name, declarations, message.locale, []),
   );
-}
-
-/**
- * The plural rules of a selector group in a locale. A plural whose `type` a
- * select chooses (`type=$pluralType`) has rules per type: those of `type`.
- */
-function rulesOf(
-  group: SelectorGroup,
-  type: "cardinal" | "ordinal",
-  declarations: BundleNested["declarations"],
-  locale: string,
-) {
-  if (!group.typeSelector) {
-    return pluralRules(group.selector, declarations, locale);
-  }
-  const annotation = resolveAnnotation(group.selector, declarations)!;
-  const typed: Declaration = {
-    type: "input-variable",
-    name: group.selector,
-    annotation: {
-      ...annotation,
-      options: [
-        ...annotation.options.filter((option) => option.name !== "type"),
-        { name: "type", value: { type: "literal", value: type } },
-      ],
-    },
-  };
-  return pluralRules(group.selector, [typed], locale);
 }
 
 /**
@@ -557,9 +526,7 @@ function rulesOf(
  * a provider gets the same text for Russian `few`, `many` and `*`.
  */
 function missingForms(args: {
-  target: { locale: string; variants: VariantRow[] } & Parameters<
-    typeof selectorGroups
-  >[0];
+  target: { locale: string; variants: VariantRow[] };
   forms: VariantRow["matches"][];
   sourceMessage: BundleNested["messages"][number];
   sourceLocale: string;
@@ -567,9 +534,6 @@ function missingForms(args: {
   description: string | undefined;
 }): MissingTranslation[] {
   const { target, forms, sourceMessage, declarations } = args;
-  const groups = selectorGroups(target, declarations, {
-    referenceVariants: sourceMessage.variants,
-  });
   const missing: MissingTranslation[] = [];
   for (const form of forms) {
     const covering = target.variants.filter((variant) =>
@@ -592,17 +556,13 @@ function missingForms(args: {
       (empty.length > 0 && isEmptyPattern(sourceVariant.pattern))
     )
       continue;
-    const plurals = groups.flatMap((group) => {
-      if (!group.isPlural) return [];
-      const category = categoryOf({ matches: form }, group.selector);
-      const sourceCategory = categoryOf(sourceVariant, group.selector);
+    const plurals = form.flatMap(({ key }) => {
+      if (!isPluralSelector(key, declarations)) return [];
+      const category = categoryOf({ matches: form }, key);
+      const sourceCategory = categoryOf(sourceVariant, key);
       if (category === sourceCategory) return [];
-      const type =
-        group.typeSelector &&
-        matchValue({ matches: form }, group.typeSelector) === "ordinal"
-          ? "ordinal"
-          : "cardinal";
-      const rules = rulesOf(group, type, declarations, target.locale)!;
+      // of the type the form matches, for a `type=$pluralType` plural
+      const rules = pluralRules(key, declarations, target.locale, form)!;
       const examples = pluralExamples(
         // `pt_BR` as written in some projects: Intl needs `pt-BR`
         target.locale.replace(/_/g, "-"),
