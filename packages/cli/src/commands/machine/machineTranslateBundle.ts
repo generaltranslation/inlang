@@ -168,18 +168,25 @@ export function planBundleTranslation(
     );
     // without known rules only the catch-all is needed: the source's forms
     // are copied instead
-    const unknownRules = hasUnknownPluralRules(target, declarations);
-    if (
+    let unknownRules = hasUnknownPluralRules(target, declarations);
+    const forms =
       args.supportsContext &&
       hasPlural &&
       !unknownRules &&
       // `orderLikeSource` puts an added form before a later form the source
       // has, which only the source's selectors guarantee
       target.selectors.map(({ name }) => name).join() === sourceSelectors.join()
-    ) {
-      const forms = requiredVariants(target, declarations, {
-        referenceVariants: sourceMessage.variants,
-      });
+        ? requiredVariants(target, declarations, {
+            referenceVariants: sourceMessage.variants,
+          })
+        : undefined;
+    // The SDK plans plural types as i18next lays them out, with cardinal
+    // categories under the catch-all type. A source form in a branch the plan
+    // lacks, such as `pluralType=cardinal` with its own categories, would be
+    // dropped, so the source's forms are copied instead.
+    if (forms && dropsSourceBranch(sourceMessage.variants, forms, declarations))
+      unknownRules = true;
+    else if (forms) {
       formsByLocale.set(targetLocale, forms);
       missing.push(
         ...missingForms({
@@ -492,6 +499,29 @@ function newCategories(
     !branch.some((variant) => matchValue(variant, match.key) === match.value)
       ? [match.value]
       : [],
+  );
+}
+
+/**
+ * True when a source form is in a branch none of `forms` has. A branch is a
+ * form's matches less its plural categories, which differ by locale.
+ */
+function dropsSourceBranch(
+  sourceVariants: BundleNested["messages"][number]["variants"],
+  forms: VariantRow["matches"][],
+  declarations: BundleNested["declarations"],
+): boolean {
+  return sourceVariants.some(
+    (variant) =>
+      !isEmptyPattern(variant.pattern) &&
+      !forms.some((matches) =>
+        variant.matches.every(
+          (match) =>
+            isPluralSelector(match.key, declarations) ||
+            matchValue({ matches }, match.key) ===
+              matchValue(variant, match.key),
+        ),
+      ),
   );
 }
 
