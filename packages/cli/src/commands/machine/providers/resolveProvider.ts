@@ -39,7 +39,7 @@ export type MachineTranslateProviderName =
   | "demosjarco";
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
-const GT_SETUP_URL =
+export const GT_SETUP_URL =
   "https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";

@@ -1009,7 +1009,8 @@ test("plurals that need forms the source lacks get the source's forms and are re
       [
         "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
           "  ru (few, many): cart, items\n" +
-          "  ar (zero, two, few, many): cart, items",
+          "  ar (zero, two, few, many): cart, items\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
     ]);
@@ -1338,7 +1339,8 @@ test("a provider without context that finds nothing to translate starts no trans
     expect(warn.mock.calls).toEqual([
       [
         "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
-          "  ru (few, many): items",
+          "  ru (few, many): items\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
     ]);
   } finally {

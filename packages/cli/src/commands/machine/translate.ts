@@ -17,6 +17,7 @@ import {
   type BundleTranslationPlan,
 } from "./machineTranslateBundle.js";
 import {
+  GT_SETUP_URL,
   MachineTranslateError,
   resolveMachineTranslateProvider,
 } from "./providers/resolveProvider.js";
@@ -178,6 +179,12 @@ export async function translateCommandAction(args: {
               ([locale, { ids, categories }]) =>
                 `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
             ),
+            // a provider with context writes them, unless the selectors differ
+            ...(supportsContext
+              ? []
+              : [
+                  `General Translation writes every form a language needs: ${GT_SETUP_URL}`,
+                ]),
           ].join("\n"),
         );
       }
