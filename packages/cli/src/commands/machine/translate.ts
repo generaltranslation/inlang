@@ -154,8 +154,8 @@ export async function translateCommandAction(args: {
 
     const plans: BundleTranslationPlan[] = [];
     const errors: string[] = [];
-    /** bundle ids and the plural categories they need, by locale */
-    const skipped = new Map<
+    /** bundle ids and the plural categories they lack, by locale */
+    const incomplete = new Map<
       string,
       { ids: string[]; categories: Set<string> }
     >();
@@ -170,11 +170,14 @@ export async function translateCommandAction(args: {
         errors.push(plan.error);
         continue;
       }
-      for (const { locale, categories } of plan.skippedPlurals) {
-        const entry = skipped.get(locale) ?? { ids: [], categories: new Set() };
+      for (const { locale, categories } of plan.incompletePlurals) {
+        const entry = incomplete.get(locale) ?? {
+          ids: [],
+          categories: new Set(),
+        };
         entry.ids.push(bundle.id);
         for (const category of categories) entry.categories.add(category);
-        skipped.set(locale, entry);
+        incomplete.set(locale, entry);
       }
       for (const locale of plan.unknownPluralRules) {
         unknownPluralRules.add(locale);
@@ -236,11 +239,11 @@ export async function translateCommandAction(args: {
       }
     }
 
-    if (skipped.size > 0) {
+    if (incomplete.size > 0) {
       log.warn(
         [
-          "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.",
-          ...[...skipped].map(
+          "Some plurals have only the source's forms, but their language needs more. Until those forms are added by hand, their numbers show the catch-all form:",
+          ...[...incomplete].map(
             ([locale, { ids, categories }]) =>
               `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
           ),
