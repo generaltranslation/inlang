@@ -1,4 +1,5 @@
 import type { MachineTranslateProvider, TranslateTextArgs } from "./types.js";
+import { rateLimitOf } from "./rateLimit.js";
 
 export function createGoogleTranslateProvider(
   apiKey: string,
@@ -23,6 +24,7 @@ export function createGoogleTranslateProvider(
           scope: [400, 413, 422].includes(response.status)
             ? "text"
             : "provider",
+          ...rateLimitOf(response),
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
       }
