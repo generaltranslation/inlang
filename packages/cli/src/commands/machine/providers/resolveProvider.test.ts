@@ -205,9 +205,34 @@ test("signs in to General Translation in an interactive terminal without credent
   });
 });
 
-test("fails fast without credentials outside an interactive terminal", async () => {
+test.each([undefined, "", "  "])(
+  "unconfigured noninteractive runs use the community service without saving a preference (%j)",
+  async (selection) => {
+    const { dir, projectPath } = projectIn();
+    const prompt = vi.spyOn(log, "prompt");
+    const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const provider = await resolve({
+      projectPath,
+      env: { INLANG_MACHINE_TRANSLATE_PROVIDER: selection },
+    });
+    expect((await firstRequest(provider)).url).toMatch(
+      /^https:\/\/translate\.demosjarco\.dev\//,
+    );
+    expect(prompt).not.toHaveBeenCalled();
+    expect(npxCalls()).toEqual([]);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(info).toHaveBeenCalledWith(
+      "No translation provider configured. Using the community service. Set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco to make this explicit, or configure General Translation.",
+    );
+  },
+);
+
+test("an explicit GT provider fails without credentials outside an interactive terminal", async () => {
   const { dir, projectPath } = projectIn({}, "bob's app");
-  await expect(resolve({ projectPath })).rejects.toThrowError(
+  await expect(
+    resolve({ projectPath, env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" } }),
+  ).rejects.toThrowError(
     new MachineTranslateError(
       [
         "Machine translation needs a General Translation API key.",
@@ -229,7 +254,10 @@ test("the gt init command for agents keeps a known project and saves the key nex
   try {
     await expect(
       resolve({
-        env: { GT_PROJECT_ID: "prj_known" },
+        env: {
+          INLANG_MACHINE_TRANSLATE_PROVIDER: "gt",
+          GT_PROJECT_ID: "prj_known",
+        },
         projectPath: "./project.inlang",
       }),
     ).rejects.toThrow(

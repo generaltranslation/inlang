@@ -1019,57 +1019,107 @@ function clearProviderEnv() {
 }
 
 test.each([
-  { stdinTTY: false, CI: "", asks: false },
-  { stdinTTY: true, CI: "1", asks: false },
-  { stdinTTY: true, CI: "", asks: true },
+  { stdinTTY: false, stdoutTTY: true, CI: "", asks: false },
+  { stdinTTY: true, stdoutTTY: false, CI: "", asks: false },
+  { stdinTTY: true, stdoutTTY: true, CI: "1", asks: false },
+  { stdinTTY: true, stdoutTTY: true, CI: "", asks: true },
 ])(
-  "without a provider, the command asks to sign in only at a terminal (%o)",
-  async ({ stdinTTY, CI, asks }) => {
+  "unconfigured runs translate unattended and ask only at a terminal (%o)",
+  async ({ stdinTTY, stdoutTTY, CI, asks }) => {
     clearProviderEnv();
     vi.stubEnv("CI", CI);
     // Linux counts as interactive only with a display.
     vi.stubEnv("DISPLAY", ":0");
     const restoreTTY = [
       stubIsTTY(process.stdin, stdinTTY),
-      stubIsTTY(process.stdout, true),
+      stubIsTTY(process.stdout, stdoutTTY),
     ];
     // Ctrl+C or Esc at the sign-in question, which consola's types leave out
     const prompt = vi
       .spyOn(log, "prompt")
       .mockResolvedValue(undefined as never);
     vi.spyOn(log, "log").mockImplementation(() => undefined);
-    // keeps the run offline if it reaches a translation service by mistake
-    vi.stubGlobal("fetch", vi.fn());
-    const { path, cleanup } = await projectOnDisk({
+    const fetch = vi.fn().mockImplementation(async () =>
+      Response.json({
+        data: { translations: [{ translatedText: "Alpha DE" }] },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const { path, read, cleanup } = await projectOnDisk({
       en: `{"alpha": "Alpha"}`,
       de: `{}`,
     });
     const root = nodePath.dirname(path);
-    // npx can't be found, so checking the gt sign-in never runs the real gt
     vi.stubEnv("PATH", nodePath.join(root, "no-npx"));
     const error = vi.spyOn(log, "error");
-    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
     try {
       await translate.parseAsync(["--project", path, "--nobar"], {
         from: "user",
       });
       expect(prompt).toHaveBeenCalledTimes(asks ? 1 : 0);
-      expect(error.mock.calls).toEqual([
-        [
-          asks
-            ? `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`
-            : [
-                "Machine translation needs a General Translation API key.",
-                "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output, with CI set, or on Linux without a display.",
-                "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-                `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name ${nodePath.basename(root)} && { echo; cat .env.local; } >> ${root}/.env.local)\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
-                "- Or use the community-operated service: set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
-                `- Or bring your own key: ${BYOK_URL}`,
-              ].join("\n"),
-        ],
-      ]);
+      expect(exit).toHaveBeenCalledWith(asks ? 1 : 0);
+      const requests = fetch.mock.calls.filter(([url]) =>
+        String(url).startsWith("https://"),
+      );
+      if (asks) {
+        expect(error.mock.calls).toEqual([
+          [
+            `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+          ],
+        ]);
+        expect(requests).toEqual([]);
+        expect(JSON.parse(read("de"))).toEqual({});
+      } else {
+        expect(error).not.toHaveBeenCalled();
+        expect(requests).toHaveLength(1);
+        expect(String(requests[0]![0])).toMatch(
+          /^https:\/\/translate\.demosjarco\.dev\//,
+        );
+        expect(JSON.parse(read("de"))).toMatchObject({ alpha: "Alpha DE" });
+        expect(fs.existsSync(nodePath.join(root, ".env.local"))).toBe(false);
+        expect(fs.existsSync(nodePath.join(root, "gt.config.json"))).toBe(
+          false,
+        );
+      }
     } finally {
       for (const restore of restoreTTY) restore();
+      await cleanup();
+    }
+  },
+);
+
+test.each([401, 402, 503])(
+  "configured GT failure (%i) never falls back to the community service",
+  async (status) => {
+    clearProviderEnv();
+    vi.stubEnv("GT_API_KEY", "gt-key");
+    vi.stubEnv("CI", "1");
+    const fetch = vi
+      .fn()
+      .mockImplementation(async () => new Response(null, { status }));
+    vi.stubGlobal("fetch", fetch);
+    const { path, read, cleanup } = await projectOnDisk({
+      en: `{"alpha":"Alpha"}`,
+      de: `{}`,
+    });
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    try {
+      await translate.parseAsync(["--project", path, "--nobar"], {
+        from: "user",
+      });
+      expect(exit).toHaveBeenCalledWith(1);
+      const requests = fetch.mock.calls.filter(([url]) =>
+        String(url).startsWith("https://"),
+      );
+      expect(requests).toHaveLength(1);
+      expect(String(requests[0]![0])).toBe("https://api.gtx.dev/v2/translate");
+      expect(JSON.parse(read("de"))).toEqual({});
+    } finally {
       await cleanup();
     }
   },

@@ -63,7 +63,8 @@ type Env = Record<string, string | undefined>;
  *
  * When `INLANG_MACHINE_TRANSLATE_PROVIDER` is set, that provider is used. When
  * it is unset, an already-configured BYOK provider (Google, DeepL or OpenAI)
- * is used if its API key is present; otherwise General Translation.
+ * is used if its API key is present; otherwise General Translation. Unconfigured
+ * noninteractive runs without GT credentials retain the community provider.
  */
 function resolveMachineTranslateProviderName(
   env: Env,
@@ -130,8 +131,17 @@ export async function resolveMachineTranslateProvider(args: {
   }
   let credentials = await readGtCredentials({ env, dir });
   if (!credentials) {
-    if (!args.interactive)
+    if (!args.interactive) {
+      // Preserve keyless automation. An explicitly selected provider must
+      // still report missing credentials rather than send text elsewhere.
+      if (!env[PROVIDER_ENV]?.trim()) {
+        log.info(
+          `No translation provider configured. Using the community service. Set ${PROVIDER_ENV}=demosjarco to make this explicit, or configure General Translation.`,
+        );
+        return createCommunityProvider(env);
+      }
       throw await missingGtKeyError(dir, args.settings, env);
+    }
     log.log(
       "Machine translation is powered by General Translation. Answer No to use the community translation service instead.",
     );
@@ -185,7 +195,7 @@ export async function resolveMachineTranslateProvider(args: {
   });
 }
 
-/** CI and agents can't sign in here, so they are told how to get a key. */
+/** Explicit GT selection in CI and agents needs instructions to get a key. */
 async function missingGtKeyError(
   dir: string,
   settings: ProjectSettings,
