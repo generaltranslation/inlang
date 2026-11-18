@@ -122,8 +122,9 @@ type PluralReport = {
   /**
    * Target locales whose plurals need categories no source variant has, with
    * those categories. The source's forms are still translated, as they were
-   * before these were reported: the target's catch-all then shows for the
-   * numbers of the categories it lacks until they are added by hand. A
+   * before these were reported; the categories stay missing until they are
+   * added by hand. Whether the runtime falls back to another form for their
+   * numbers depends on the message format: i18next shows the key. A
    * translation whose selectors aren't the source's, such as a hand-written
    * plural of a text, is left as it is: the source's forms wouldn't fit it.
    */
