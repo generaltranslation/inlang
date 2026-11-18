@@ -579,13 +579,13 @@ function missingForms(args: {
     // preferred, or stored first), so it is still missing
     const empty = covering.filter((variant) => isEmptyPattern(variant.pattern));
     if (covering.length > 0 && empty.length === 0) continue;
-    const sourceVariant = sourceVariantFor(
-      form,
-      sourceMessage.variants,
+    const sourceVariant = sourceVariantFor({
+      target: form,
+      reference: sourceMessage.variants,
       declarations,
-      args.sourceLocale,
-      target.locale,
-    );
+      referenceLocale: args.sourceLocale,
+      targetLocale: target.locale,
+    });
     // a blank source can't fill a blank variant
     if (
       !sourceVariant ||
