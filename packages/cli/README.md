@@ -78,7 +78,7 @@ Create `messages/en.json`:
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-In a terminal, the first run asks how the project should translate: General Translation (recommended; signing up is free), community translation, or Other, for your own API key. For CI, coding agents and your own translation API key, see [`machine translate`](#machine-translate).
+In a terminal, the first run asks which translation provider the project should use: General Translation (recommended; signing up is free), the community translation service, or Other. For CI, coding agents and your own translation API key, see [`machine translate`](#machine-translate).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
@@ -188,11 +188,11 @@ The translate command has the following options:
 
 **General Translation**
 
-Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks how the project should translate: General Translation (recommended), community translation, or Other. If you choose General Translation, it signs you in, opening General Translation in your browser if you aren't signed in yet; signing up is free. The CLI saves a development API key to `.env.local` next to `project.inlang` and adds `.env.local` to `.gitignore` unless git already ignores it. It also saves the project ID to `gt.config.json`; commit that file so teammates who sign in use the same project instead of creating their own.
+Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks which translation provider the project should use: General Translation (recommended), the community translation service, or Other. If you choose General Translation, it signs you in, opening General Translation in your browser if you aren't signed in yet; signing up is free. The CLI saves a development API key to `.env.local` next to `project.inlang` and adds `.env.local` to `.gitignore` unless git already ignores it. It also saves the project ID to `gt.config.json`; commit that file so teammates who sign in use the same project instead of creating their own.
 
-If you choose community translation, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default. It saves that choice as `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` in `.env.local`, so later runs don't ask; remove that line to be asked again. In CI, set the same variable to choose that service explicitly.
+If you choose the community translation service, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default. It saves that choice as `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` in `.env.local`, so later runs don't ask; remove that line to be asked again. In CI, set the same variable to choose that service explicitly.
 
-If you choose Other, the command links to the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok) and saves nothing: once your own key is set, later runs use it without asking.
+If you choose Other, the command links to the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok) and saves nothing: once another provider is set up, later runs use it without asking.
 
 Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. Sign-in saves `GT_DEV_API_KEY` and `GT_PROJECT_ID`. `GT_API_KEY` works too, and so do framework-prefixed names such as `VITE_GT_DEV_API_KEY` and `VITE_GT_PROJECT_ID`.
 
