@@ -1083,6 +1083,38 @@ test("cardinal categories under an explicit type branch: the source's forms are 
   });
 });
 
+test("a selector a source form leaves out is its catch-all: that branch is kept too", async () => {
+  const { result } = await expand(
+    formsBundle(
+      [
+        input("count"),
+        input("pluralType"),
+        plural("countPlural", "count", { type: "$pluralType" }),
+      ],
+      ["count", "pluralType", "countPlural"],
+      {
+        en: {
+          "count=0,pluralType=cardinal,countPlural=*": "No items",
+          "pluralType=cardinal,countPlural=one": "One item",
+          "pluralType=cardinal,countPlural=*": "Many items",
+          "pluralType=*,countPlural=one": "First place",
+          "pluralType=*,countPlural=*": "Other place",
+        },
+      },
+    ),
+    ["de"],
+  );
+
+  expect(result.unknownPluralRules).toEqual(["de"]);
+  expect(Object.values(formsOf(result, "de")!)).toEqual([
+    "[de] No items",
+    "[de] One item",
+    "[de] Many items",
+    "[de] First place",
+    "[de] Other place",
+  ]);
+});
+
 test("a batch provider gets every form of a locale in one request, the same source text several times", async () => {
   const calls: TranslateBatchArgs[] = [];
   const result = await machineTranslateBundle({
