@@ -1125,6 +1125,51 @@ test.each([401, 402, 503])(
   },
 );
 
+test.each(["malformed config", "unreadable config", "dot project path"])(
+  "GT configuration errors never send a translation request (%s)",
+  async (scenario) => {
+    clearProviderEnv();
+    vi.stubEnv("CI", "1");
+    // Local plugin loads also call fetch, then fall back to the filesystem.
+    const fetch = vi
+      .fn()
+      .mockImplementation(async () => new Response(null, { status: 400 }));
+    vi.stubGlobal("fetch", fetch);
+    const { path, read, cleanup } = await projectOnDisk({
+      en: '{"alpha":"Alpha"}',
+      de: "{}",
+    });
+    const configPath = nodePath.join(nodePath.dirname(path), "gt.config.json");
+    if (scenario === "unreadable config") fs.mkdirSync(configPath);
+    else
+      fs.writeFileSync(
+        configPath,
+        scenario === "malformed config"
+          ? '{"projectId":"prj_shared",}'
+          : '{"projectId":"prj_shared"}',
+      );
+    const cwd = process.cwd();
+    if (scenario === "dot project path") process.chdir(path);
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    try {
+      await translate.parseAsync(
+        ["--project", scenario === "dot project path" ? "." : path, "--nobar"],
+        { from: "user" },
+      );
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(
+        fetch.mock.calls.filter(([url]) => String(url).startsWith("https://")),
+      ).toEqual([]);
+      expect(JSON.parse(read("de"))).toEqual({});
+    } finally {
+      process.chdir(cwd);
+      await cleanup();
+    }
+  },
+);
+
 function stubIsTTY(
   stream: NodeJS.ReadStream | NodeJS.WriteStream,
   value: boolean,

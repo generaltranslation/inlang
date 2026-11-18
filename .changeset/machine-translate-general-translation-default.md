@@ -7,3 +7,5 @@ General Translation is the default machine translation provider for `inlang mach
 Bring-your-own keys keep working and still take precedence when set. `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` selects General Translation explicitly. General Translation authentication, billing and service failures never fall back to another provider. `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` still selects the community service.
 
 A run with nothing to translate no longer needs a provider.
+
+Unreadable or invalid `gt.config.json` fails instead of being treated as an unconfigured project. Equivalent project paths, including `--project .` from inside the inlang project, find the same adjacent GT configuration and credentials.

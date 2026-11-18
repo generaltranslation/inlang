@@ -244,6 +244,58 @@ test.each<{ files: Record<string, string>; env: Record<string, string> }>([
   },
 );
 
+test.each([
+  '{"projectId":"prj_shared",}',
+  "null",
+  "[]",
+  '{"projectId":false}',
+  '{"projectId":"  "}',
+])("invalid GT configuration never selects a fallback (%s)", async (config) => {
+  const { projectPath } = projectIn({ "gt.config.json": config });
+  await expect(resolve({ projectPath })).rejects.toThrow(
+    /Invalid General Translation config/,
+  );
+  expect(npxCalls()).toEqual([]);
+});
+
+test("an unreadable GT configuration is not treated as missing", async () => {
+  const { dir, projectPath } = projectIn();
+  fs.mkdirSync(nodePath.join(dir, "gt.config.json"));
+  await expect(resolve({ projectPath })).rejects.toMatchObject({
+    code: "EISDIR",
+  });
+  expect(npxCalls()).toEqual([]);
+});
+
+test("a dot project path finds the same adjacent GT configuration and credentials as an absolute path", async () => {
+  const { dir, projectPath } = projectIn({
+    "gt.config.json": '{"projectId":"prj_shared"}',
+  });
+  fs.mkdirSync(projectPath);
+  const cwd = process.cwd();
+  process.chdir(projectPath);
+  try {
+    for (const selectedPath of [projectPath, "."]) {
+      await expect(resolve({ projectPath: selectedPath })).rejects.toThrow(
+        "Machine translation needs a General Translation API key.",
+      );
+    }
+    fs.writeFileSync(
+      nodePath.join(dir, ".env.local"),
+      "GT_API_KEY=gt-local-key\nGT_PROJECT_ID=prj_shared\n",
+    );
+    for (const selectedPath of [projectPath, "."]) {
+      const provider = await resolve({ projectPath: selectedPath });
+      expect((await firstRequest(provider)).headers).toMatchObject({
+        Authorization: "Bearer gt-local-key",
+        "gt-project-id": "prj_shared",
+      });
+    }
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
 test("an explicit GT provider fails without credentials outside an interactive terminal", async () => {
   const { dir, projectPath } = projectIn({}, "bob's app");
   await expect(

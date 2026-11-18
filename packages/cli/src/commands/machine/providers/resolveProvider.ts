@@ -116,7 +116,7 @@ export async function resolveMachineTranslateProvider(args: {
   const providerName = resolveMachineTranslateProviderName(env);
   if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
-  const dir = nodePath.dirname(args.projectPath);
+  const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
   // Answering No saves the choice to .env.local. A provider or key in the
   // environment beats it.
   if (
