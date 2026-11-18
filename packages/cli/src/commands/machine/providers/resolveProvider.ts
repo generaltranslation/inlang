@@ -39,6 +39,8 @@ export type MachineTranslateProviderName =
   | "demosjarco";
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+const GT_SETUP_URL =
+  "https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";
 
@@ -143,7 +145,7 @@ export async function resolveMachineTranslateProvider(args: {
       // pull request from a fork, must not send its text to another service.
       if (!env[PROVIDER_ENV]?.trim() && !(await findGtProjectId(dir, env))) {
         log.info(
-          `No translation provider configured. Using the community service. To use General Translation, set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
+          `No translation provider configured. Using the community service. General Translation setup for CI and coding agents: ${GT_SETUP_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
         );
         return createCommunityProvider(env);
       }
@@ -228,7 +230,7 @@ async function missingGtKeyError(
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",
-      "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output, with CI set, or on Linux without a display.",
+      "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output or with CI set. Over SSH, open the printed sign-in URL in your browser.",
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
       `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
       `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,

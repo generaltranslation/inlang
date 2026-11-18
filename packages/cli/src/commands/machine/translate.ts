@@ -20,7 +20,6 @@ import {
   MachineTranslateError,
   resolveMachineTranslateProvider,
 } from "./providers/resolveProvider.js";
-import { isInteractive } from "../cloud/index.js";
 import type { AnyMachineTranslateProvider } from "./providers/types.js";
 
 export const translate = new Command()
@@ -209,11 +208,10 @@ export async function translateCommandAction(args: {
             env: process.env,
             projectPath: options.project,
             settings,
-            interactive: isInteractive({
-              // The sign-in prompt reads stdin.
-              isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-              env: process.env,
-            }),
+            // SSH terminals can use the printed sign-in URL without a display.
+            interactive: Boolean(
+              process.stdin.isTTY && process.stdout.isTTY && !process.env.CI,
+            ),
           })));
     if (provider && !provider.supportsContext) planned = planBundles(false);
     const { plans, missing } = planned;

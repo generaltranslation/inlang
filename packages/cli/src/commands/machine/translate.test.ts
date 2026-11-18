@@ -1,4 +1,4 @@
-import { afterEach, test, expect, vi } from "vitest";
+import { afterEach, beforeEach, test, expect, vi } from "vitest";
 import {
   translate,
   translateAndSave,
@@ -33,10 +33,27 @@ import {
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
 
+let providerDirectory: string;
+beforeEach(() => {
+  providerDirectory = fs.mkdtempSync(
+    nodePath.join(os.tmpdir(), "inlang-command-env-"),
+  );
+  const opts = translate.opts.bind(translate);
+  vi.spyOn(translate, "opts").mockImplementation(() => {
+    const options = opts();
+    return {
+      ...options,
+      project:
+        options.project ?? nodePath.join(providerDirectory, "project.inlang"),
+    };
+  });
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  fs.rmSync(providerDirectory, { recursive: true, force: true });
 });
 
 test("skipping the retry waits leaves other timers alone (Lix's close watchdog is 5000 ms)", async () => {
@@ -1117,16 +1134,17 @@ function clearProviderEnv() {
 }
 
 test.each([
-  { stdinTTY: false, stdoutTTY: true, asks: false },
-  { stdinTTY: true, stdoutTTY: false, asks: false },
-  { stdinTTY: true, stdoutTTY: true, asks: true },
+  { stdinTTY: false, stdoutTTY: true, ci: "", asks: false },
+  { stdinTTY: true, stdoutTTY: false, ci: "", asks: false },
+  { stdinTTY: true, stdoutTTY: true, ci: "", asks: true },
+  { stdinTTY: true, stdoutTTY: true, ci: "1", asks: false },
 ])(
   "unconfigured runs translate unattended and ask only at a terminal (%o)",
-  async ({ stdinTTY, stdoutTTY, asks }) => {
+  async ({ stdinTTY, stdoutTTY, ci, asks }) => {
     clearProviderEnv();
-    vi.stubEnv("CI", "");
-    // Linux counts as interactive only with a display.
-    vi.stubEnv("DISPLAY", ":0");
+    vi.stubEnv("CI", ci);
+    vi.stubEnv("DISPLAY", undefined);
+    vi.stubEnv("WAYLAND_DISPLAY", undefined);
     const restoreTTY = [
       stubIsTTY(process.stdin, stdinTTY),
       stubIsTTY(process.stdout, stdoutTTY),
@@ -1152,6 +1170,8 @@ test.each([
     const exit = vi
       .spyOn(process, "exit")
       .mockImplementation(() => undefined as never);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux" });
     try {
       await translate.parseAsync(["--project", path, "--nobar"], {
         from: "user",
@@ -1182,6 +1202,7 @@ test.each([
         );
       }
     } finally {
+      Object.defineProperty(process, "platform", platform);
       for (const restore of restoreTTY) restore();
       await cleanup();
     }

@@ -283,7 +283,7 @@ test.each([undefined, "  "])(
     expect(prompt).not.toHaveBeenCalled();
     expect(fs.readdirSync(dir)).toEqual([]);
     expect(info).toHaveBeenCalledWith(
-      "No translation provider configured. Using the community service. To use General Translation, set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com. To use this service without this message, set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
+      "No translation provider configured. Using the community service. General Translation setup for CI and coding agents: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate. To use this service without this message, set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
     );
   },
 );
@@ -354,7 +354,7 @@ test("an explicit GT provider fails without credentials outside an interactive t
     new MachineTranslateError(
       [
         "Machine translation needs a General Translation API key.",
-        "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output, with CI set, or on Linux without a display.",
+        "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output or with CI set. Over SSH, open the printed sign-in URL in your browser.",
         "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
         `- Agents: have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app' && { echo; cat .env.local; } >> '${nodePath.dirname(dir)}/bob'\\''s app/.env.local')\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
         "- Or use the community-operated service: set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
