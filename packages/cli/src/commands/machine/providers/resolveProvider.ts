@@ -9,6 +9,7 @@ import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
 import {
   GT_CLI,
   appendToEnvLocal,
+  findGtProjectId,
   gtInitArgs,
   readEnvFiles,
   readGtCredentials,
@@ -63,8 +64,7 @@ type Env = Record<string, string | undefined>;
  *
  * When `INLANG_MACHINE_TRANSLATE_PROVIDER` is set, that provider is used. When
  * it is unset, an already-configured BYOK provider (Google, DeepL or OpenAI)
- * is used if its API key is present; otherwise General Translation. Unconfigured
- * noninteractive runs without GT credentials retain the community provider.
+ * is used if its API key is present; otherwise General Translation.
  */
 function resolveMachineTranslateProviderName(
   env: Env,
@@ -132,11 +132,13 @@ export async function resolveMachineTranslateProvider(args: {
   let credentials = await readGtCredentials({ env, dir });
   if (!credentials) {
     if (!args.interactive) {
-      // Preserve keyless automation. An explicitly selected provider must
-      // still report missing credentials rather than send text elsewhere.
-      if (!env[PROVIDER_ENV]?.trim()) {
+      // Keyless automation keeps the community service it used before GT was
+      // the default. A project that chose GT, by name or with a project ID (a
+      // committed gt.config.json), fails instead: a missing CI secret, as in a
+      // pull request from a fork, must not send its text to another service.
+      if (!env[PROVIDER_ENV]?.trim() && !(await findGtProjectId(dir, env))) {
         log.info(
-          `No translation provider configured. Using the community service. Set ${PROVIDER_ENV}=demosjarco to make this explicit, or configure General Translation.`,
+          `No translation provider configured. Using the community service. To use General Translation, set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
         );
         return createCommunityProvider(env);
       }
@@ -195,7 +197,7 @@ export async function resolveMachineTranslateProvider(args: {
   });
 }
 
-/** Explicit GT selection in CI and agents needs instructions to get a key. */
+/** CI and agents that chose GT can't sign in here, so they are told how to get a key. */
 async function missingGtKeyError(
   dir: string,
   settings: ProjectSettings,

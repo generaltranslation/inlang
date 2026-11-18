@@ -223,7 +223,23 @@ test.each([undefined, "", "  "])(
     expect(npxCalls()).toEqual([]);
     expect(fs.readdirSync(dir)).toEqual([]);
     expect(info).toHaveBeenCalledWith(
-      "No translation provider configured. Using the community service. Set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco to make this explicit, or configure General Translation.",
+      "No translation provider configured. Using the community service. To use General Translation, set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com. To use this service without this message, set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
+    );
+  },
+);
+
+// A missing CI secret, as in a pull request from a fork, must not send the
+// text of a project that chose General Translation to another service.
+test.each<{ files: Record<string, string>; env: Record<string, string> }>([
+  { files: { "gt.config.json": `{"projectId":"prj_shared"}` }, env: {} },
+  { files: { ".env": "GT_PROJECT_ID=prj_shared" }, env: {} },
+  { files: {}, env: { GT_PROJECT_ID: "prj_shared" } },
+])(
+  "a project with a GT project ID fails without a key outside an interactive terminal (%o)",
+  async ({ files, env }) => {
+    const { projectPath } = projectIn(files);
+    await expect(resolve({ projectPath, env })).rejects.toThrow(
+      /^Machine translation needs a General Translation API key\.\n.*--project-id prj_shared/s,
     );
   },
 );

@@ -312,6 +312,26 @@ async function appendToFile(
 }
 
 /**
+ * The General Translation project that `dir`'s .env files, gt.config.json or
+ * the environment name. One in .env or .env.local comes first: a new key is
+ * saved next to it, and readGtCredentials pairs a key with the project ID from
+ * the same source.
+ */
+export async function findGtProjectId(
+  dir: string,
+  env: Record<string, string | undefined>,
+): Promise<string | undefined> {
+  const config = await fs
+    .readFile(nodePath.join(dir, "gt.config.json"), "utf8")
+    .catch(() => undefined);
+  return (
+    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
+    parseJson(config ?? "")?.projectId ||
+    findVariable(env, PROJECT_ID)
+  );
+}
+
+/**
  * `npx`'s arguments to run `gt init` in an empty folder: it signs in, creates a
  * project unless `dir`'s gt.config.json, .env files or the environment name
  * one, and saves a development key for it to the folder's .env.local.
@@ -322,16 +342,8 @@ export async function gtInitArgs(args: {
   env: Record<string, string | undefined>;
 }): Promise<string[]> {
   const { dir, settings, env } = args;
-  const config = await fs
-    .readFile(nodePath.join(dir, "gt.config.json"), "utf8")
-    .catch(() => undefined);
   // gt runs in an empty folder, so it doesn't see this folder's project ID.
-  // One in .env or .env.local comes first: the key is saved next to it, and
-  // readGtCredentials pairs a key with the project ID from the same source.
-  const projectId =
-    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
-    parseJson(config ?? "")?.projectId ||
-    findVariable(env, PROJECT_ID);
+  const projectId = await findGtProjectId(dir, env);
   return [
     "--yes",
     GT_CLI,
