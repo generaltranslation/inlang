@@ -862,7 +862,13 @@ export async function translateMissing(args: {
     Array.from({ length: MAX_CONCURRENT_REQUESTS }, () => worker()),
   );
   return errors.size > 0
-    ? { ok: false, error: [...errors].join("\n"), translations }
+    ? {
+        ok: false,
+        error: [...errors].join("\n"),
+        // whether the failures stopped the requests not yet sent
+        scope: stopped ? "provider" : "text",
+        translations,
+      }
     : { ok: true, translations };
 }
 
