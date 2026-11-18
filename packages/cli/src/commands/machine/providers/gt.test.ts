@@ -206,7 +206,7 @@ describe("createGtTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error:
-        "General Translation could not bill this request. Check your billing: https://dash.generaltranslation.com",
+        "General Translation could not bill this request. Check your billing: https://dash.generaltranslation.com\nTo use the community service, set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco. For another provider, see https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok.",
     });
   });
 
