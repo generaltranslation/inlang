@@ -94,6 +94,7 @@ describe("createDeepLTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "text",
       error: "400 Bad Request: translating from en to xx",
     });
   });
