@@ -27,7 +27,10 @@ export const translate = new Command()
   .command("translate")
   .requiredOption(projectOption.flags, projectOption.description)
   .option("-q, --quiet", "don't log every tranlation.", false)
-  .option("--locale <source>", "Locales for translation.")
+  .option(
+    "--locale <source>",
+    "Has no effect: the source locale is the project's baseLocale.",
+  )
   .option(
     "--targetLocales <targets...>",
     "Comma separated list of target locales for translation.",
