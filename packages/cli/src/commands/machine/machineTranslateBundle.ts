@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { v7 as randomUUID } from "uuid";
 import {
   isEmptyPattern,
+  isNumericKey,
   isPluralSelector,
   matchValue,
   missingVariants,
@@ -578,9 +579,9 @@ function hasUnknownPluralRules(
  * Every empty variant of a form is filled, such as an empty `other` next to
  * a `*`.
  *
- * Where a plural's category isn't the source variant's, the context says
- * which form to write and for which numbers, after the bundle description:
- * a provider gets the same text for Russian `few`, `many` and `*`.
+ * Context identifies each plural input, its target form and example numbers,
+ * even when category names match: Russian and Arabic `few` differ. Exact
+ * numbers get their own guidance instead of the plural catch-all's.
  */
 function missingForms(args: {
   target: { locale: string; variants: VariantRow[] };
@@ -615,9 +616,21 @@ function missingForms(args: {
       continue;
     const plurals = form.flatMap(({ key }) => {
       if (!isPluralSelector(key, declarations)) return [];
+      const input = resolveInputVariable(key, declarations);
+      const exact = form.find(
+        (match) =>
+          match.type === "literal-match" &&
+          isNumericKey(match.value) &&
+          !resolveAnnotation(match.key, declarations) &&
+          resolveInputVariable(match.key, declarations) === input,
+      );
+      if (exact?.type === "literal-match") {
+        return [
+          `Exact-number form for {${input}}: ${exact.value} in ${target.locale}. Preserve this exact-number meaning.`,
+        ];
+      }
       const category = categoryOf({ matches: form }, key);
       const sourceCategory = categoryOf(sourceVariant, key);
-      if (category === sourceCategory) return [];
       // of the type the form matches, for a `type=$pluralType` plural
       const rules = pluralRules(key, declarations, target.locale, form)!;
       const examples = pluralExamples(
@@ -627,7 +640,7 @@ function missingForms(args: {
         { offset: rules.offset },
       )[category];
       return [
-        `Plural form: ${category} (${rules.type}) in ${target.locale}, used for n = ${examples}. Translate as the ${category} form; the source shows the ${sourceCategory} form.`,
+        `Plural form for {${input}}: ${category} (${rules.type}) in ${target.locale}, used for n = ${examples}. Translate as the ${category} form; the source shows the ${sourceCategory} form.`,
       ];
     });
     // the matches of a variant added for the form
