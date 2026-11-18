@@ -106,11 +106,12 @@ type MissingTranslation = {
 /** What a bundle's plurals tell the user. */
 type PluralReport = {
   /**
-   * Target locales left out, with the plural categories they need that no
-   * source variant has: translating the source's forms would leave the
-   * translation without them, so they are left to be added by hand.
+   * Target locales whose plurals need categories no source variant has, with
+   * those categories. The source's forms are still translated, as they were
+   * before these were reported: the target's catch-all then shows for the
+   * numbers of the categories it lacks until they are added by hand.
    */
-  skippedPlurals: Array<{ locale: string; categories: string[] }>;
+  incompletePlurals: Array<{ locale: string; categories: string[] }>;
   /**
    * Target locales translated without known plural rules (see the SDK's
    * `pluralRules`): their plural forms are the source's.
@@ -146,7 +147,7 @@ type TranslatedBundle = {
 /**
  * Finds the translations the bundle is missing in the target locales: no
  * variant for a source variant, or an empty one.
- * Skips target locales whose plurals need categories the source lacks, see
+ * Reports target locales whose plurals need categories the source lacks, see
  * `PluralReport`.
  */
 export function planBundleTranslation(
@@ -166,7 +167,7 @@ export function planBundleTranslation(
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const report: PluralReport = {
-    skippedPlurals: [],
+    incompletePlurals: [],
     unknownPluralRules: [],
   };
 
@@ -214,11 +215,10 @@ export function planBundleTranslation(
         .forEach((category) => categories.add(category));
     }
     if (categories.size > 0) {
-      report.skippedPlurals.push({
+      report.incompletePlurals.push({
         locale: targetLocale,
         categories: [...categories],
       });
-      continue;
     }
 
     const missingBefore = missing.length;
