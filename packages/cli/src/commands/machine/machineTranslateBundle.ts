@@ -204,9 +204,9 @@ export function planBundleTranslation(
  * requests of at most `MAX_TEXTS_PER_REQUEST`; a single-text provider gets
  * one request per text.
  *
- * Stops starting requests at the first failure, returned or thrown, and
- * returns it once the requests in flight have settled, with the translations
- * that came back.
+ * A failed text does not stop unrelated requests. A provider failure (including
+ * a thrown network error) stops new requests; those in flight still settle.
+ * Returns every failure and the translations that came back.
  */
 export async function translateMissing(args: {
   provider: AnyMachineTranslateProvider;
@@ -282,28 +282,35 @@ export async function translateMissing(args: {
           }
         }
         if (!result.ok) return result;
-        if (textError !== undefined) return { ok: false, error: textError };
+        if (textError !== undefined)
+          return { ok: false, error: textError, scope: "text" };
         args.onProgress?.(chunk.length);
         return result;
       });
     }
   }
 
-  let failure: TranslateFailure | undefined;
+  const errors = new Set<string>();
+  let stopped = false;
   let next = 0;
   const worker = async () => {
-    while (!failure && next < requests.length) {
-      // e.g. a network error, or a translation that isn't a valid pattern
+    while (!stopped && next < requests.length) {
+      // Thrown errors, such as network failures, are provider-wide.
       const result = await requests[next++]!().catch(
         (error): TranslateFailure => ({ ok: false, error: String(error) }),
       );
-      if (!result.ok) failure ??= result;
+      if (!result.ok) {
+        errors.add(result.error);
+        if (result.scope !== "text") stopped = true;
+      }
     }
   };
   await Promise.all(
     Array.from({ length: MAX_CONCURRENT_REQUESTS }, () => worker()),
   );
-  return { ...(failure ?? { ok: true }), translations };
+  return errors.size > 0
+    ? { ok: false, error: [...errors].join("\n"), translations }
+    : { ok: true, translations };
 }
 
 const UUID_V7 =
