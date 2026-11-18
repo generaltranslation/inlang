@@ -105,7 +105,7 @@ function resolveMachineTranslateProviderName(
 
 export async function resolveMachineTranslateProvider(args: {
   env: Env;
-  /** The project.inlang path. General Translation credentials, and the choice made by answering No, are read from and saved to the folder that contains it. */
+  /** The project.inlang path. General Translation credentials, and a choice of community translation, are read from and saved to the folder that contains it. */
   projectPath: string;
   settings: ProjectSettings;
   /** Whether the user can be asked to sign in. */
@@ -117,7 +117,7 @@ export async function resolveMachineTranslateProvider(args: {
   if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
   const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
-  // Answering No saves the choice to .env.local. A provider or key in the
+  // Choosing community translation saves it to .env.local. A provider or key in the
   // environment beats it.
   if (
     !env[PROVIDER_ENV]?.trim() &&
@@ -144,19 +144,28 @@ export async function resolveMachineTranslateProvider(args: {
       }
       throw await missingGtKeyError(dir, args.settings, env);
     }
-    log.log(
-      "Machine translation is powered by General Translation. Answer No to use the community translation service instead.",
-    );
-    // consola otherwise resolves a cancelled confirm with `initial`, a yes.
-    const confirmed = await log.prompt(
-      "Use General Translation for this project?",
-      {
-        type: "confirm",
-        initial: true,
-        cancel: "undefined",
-      },
-    );
-    if (confirmed === false) {
+    // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
+    const choice = await log.prompt("How should this project translate?", {
+      type: "select",
+      options: [
+        { value: "gt", label: "General Translation (recommended)" },
+        {
+          value: "community",
+          label: "Community translation",
+          hint: "translate.demosjarco.dev, not operated by inlang",
+        },
+        { value: "other", label: "Other", hint: "your own API key" },
+      ],
+      initial: "gt",
+      cancel: "undefined",
+    });
+    if (choice === "other") {
+      // Nothing is saved: the provider set up from the docs is used without asking.
+      throw new MachineTranslateError(
+        `To translate with your own API key, follow ${BYOK_URL}, then run this command again.`,
+      );
+    }
+    if (choice === "community") {
       const provider = createCommunityProvider(env);
       const addedIgnoreRule = await appendToEnvLocal(
         dir,
@@ -170,7 +179,7 @@ export async function resolveMachineTranslateProvider(args: {
       );
       return provider;
     }
-    if (confirmed) {
+    if (choice === "gt") {
       credentials = await (args.signIn ?? signInToGt)({
         dir,
         settings: args.settings,

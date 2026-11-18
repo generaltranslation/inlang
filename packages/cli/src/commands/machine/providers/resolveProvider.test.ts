@@ -142,8 +142,7 @@ test("identifies the CLI in the user agent", async () => {
 });
 
 test("signs in to General Translation in an interactive terminal without credentials", async () => {
-  const notice = vi.spyOn(log, "log").mockImplementation(() => undefined);
-  const prompt = vi.spyOn(log, "prompt").mockResolvedValue(true);
+  const prompt = vi.spyOn(log, "prompt").mockResolvedValue("gt");
   const { dir, projectPath } = projectIn();
   const env = {};
   const signIn = vi.fn(async () => ({
@@ -156,16 +155,24 @@ test("signs in to General Translation in an interactive terminal without credent
     interactive: true,
     signIn,
   });
-  expect(notice.mock.calls).toEqual([
-    [
-      "Machine translation is powered by General Translation. Answer No to use the community translation service instead.",
-    ],
-  ]);
-  // consola otherwise resolves a cancelled confirm with `initial`, a yes.
+  // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
   expect(prompt.mock.calls).toEqual([
     [
-      "Use General Translation for this project?",
-      { type: "confirm", initial: true, cancel: "undefined" },
+      "How should this project translate?",
+      {
+        type: "select",
+        options: [
+          { value: "gt", label: "General Translation (recommended)" },
+          {
+            value: "community",
+            label: "Community translation",
+            hint: "translate.demosjarco.dev, not operated by inlang",
+          },
+          { value: "other", label: "Other", hint: "your own API key" },
+        ],
+        initial: "gt",
+        cancel: "undefined",
+      },
     ],
   ]);
   expect(signIn).toHaveBeenCalledWith({ dir, settings, env });
@@ -273,9 +280,8 @@ test("an explicit GT provider fails without credentials outside an interactive t
   );
 });
 
-test("answering no uses the community service and saves the choice", async () => {
-  vi.spyOn(log, "log").mockImplementation(() => undefined);
-  vi.spyOn(log, "prompt").mockResolvedValue(false);
+test("choosing community translation uses that service and saves the choice", async () => {
+  vi.spyOn(log, "prompt").mockResolvedValue("community");
   const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
   const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
   const { dir, projectPath } = projectIn({ ".env.local": "OTHER=1\n" });
@@ -293,6 +299,19 @@ test("answering no uses the community service and saves the choice", async () =>
       "Saved your choice to .env.local. To be asked again, remove INLANG_MACHINE_TRANSLATE_PROVIDER from it.\nAdded .env.local to .gitignore.",
     ],
   ]);
+});
+
+test("choosing other links to the setup for your own key, and saves nothing", async () => {
+  vi.spyOn(log, "prompt").mockResolvedValue("other");
+  const { dir, projectPath } = projectIn();
+  await expect(
+    resolve({ projectPath, interactive: true, signIn: unexpectedSignIn }),
+  ).rejects.toThrowError(
+    new MachineTranslateError(
+      `To translate with your own API key, follow ${BYOK_URL}, then run this command again.`,
+    ),
+  );
+  expect(fs.readdirSync(dir)).toEqual([]);
 });
 
 test("uses the choice saved in .env.local without asking, and says where it is", async () => {
@@ -358,8 +377,7 @@ test("shares the project ID from .env.local in gt.config.json, once", async () =
 });
 
 test("a failed sign-in is a MachineTranslateError, which prints without a stack trace", async () => {
-  vi.spyOn(log, "log").mockImplementation(() => undefined);
-  vi.spyOn(log, "prompt").mockResolvedValue(true);
+  vi.spyOn(log, "prompt").mockResolvedValue("gt");
   const error = await resolve({
     interactive: true,
     signIn: async () => {
