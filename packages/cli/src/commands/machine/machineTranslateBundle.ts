@@ -62,16 +62,28 @@ const RATE_LIMIT_BASE_DELAY_MS = 2_000;
  */
 const MAX_RATE_LIMIT_WAIT_MS = 60_000;
 
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Waits `ms`, or less if `signal` aborts. */
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 
 /**
  * Sends a request again while it is rate-limited, within
- * `MAX_RATE_LIMIT_RETRIES` and `MAX_RATE_LIMIT_WAIT_MS`.
+ * `MAX_RATE_LIMIT_RETRIES` and `MAX_RATE_LIMIT_WAIT_MS`. Once `stop` aborts,
+ * because another request failed for good, it stops waiting and doesn't
+ * send the request again.
  */
 async function retryRateLimited(
   send: () => Promise<TranslateBatchResult>,
-  wait: (ms: number) => Promise<void>,
+  wait: (ms: number, signal: AbortSignal) => Promise<void>,
+  stop: AbortSignal,
 ): Promise<TranslateBatchResult> {
   let waited = 0;
   for (let retry = 0; ; retry++) {
@@ -90,8 +102,10 @@ async function retryRateLimited(
         error: `${result.error} (still rate limited after ${retry} retries. Run again later.)`,
       };
     }
+    if (stop.aborted) return result;
     waited += delay;
-    await wait(delay);
+    await wait(delay, stop);
+    if (stop.aborted) return result;
   }
 }
 
@@ -119,8 +133,9 @@ type PluralReport = {
   /**
    * Target locales whose plurals need categories no source variant has, with
    * those categories. The source's forms are still translated, as they were
-   * before these were reported: the target's catch-all then shows for the
-   * numbers of the categories it lacks until they are added by hand. A
+   * before these were reported; the categories stay missing until they are
+   * added by hand. Whether the runtime falls back to another form for their
+   * numbers depends on the message format: i18next shows the key. A
    * translation whose selectors aren't the source's, such as a hand-written
    * plural of a text, is left as it is: the source's forms wouldn't fit it.
    */
@@ -762,7 +777,7 @@ export async function translateMissing(args: {
   /** Called with the number of texts each successful request translated. */
   onProgress?: (translated: number) => void;
   /** Waits before a rate-limited request is sent again; for tests. */
-  wait?: (ms: number) => Promise<void>;
+  wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 }): Promise<
   ({ ok: true } | TranslateFailure) & {
     translations: Map<MissingTranslation, VariantRow["pattern"]>;
@@ -796,6 +811,8 @@ export async function translateMissing(args: {
   }
 
   const translations = new Map<MissingTranslation, VariantRow["pattern"]>();
+  /** Aborts on a provider failure: no request is sent after it. */
+  const stop = new AbortController();
   /** Each sends one request and records what it translated. */
   const requests: Array<() => Promise<{ ok: true } | TranslateFailure>> = [];
   for (const [targetLocale, missing] of byLocale) {
@@ -818,6 +835,7 @@ export async function translateMissing(args: {
               ),
             }),
           args.wait ?? sleep,
+          stop.signal,
         );
         // The texts that did come back are kept, as with any failure, even
         // when one of them is missing or isn't a valid pattern.
@@ -844,17 +862,19 @@ export async function translateMissing(args: {
   }
 
   const errors = new Set<string>();
-  let stopped = false;
   let next = 0;
   const worker = async () => {
-    while (!stopped && next < requests.length) {
+    while (!stop.signal.aborted && next < requests.length) {
       // Thrown errors, such as network failures, are provider-wide.
       const result = await requests[next++]!().catch(
         (error): TranslateFailure => ({ ok: false, error: String(error) }),
       );
       if (!result.ok) {
-        errors.add(result.error);
-        if (result.scope !== "text") stopped = true;
+        // a rate limit whose retry the stop cut short isn't a cause of its own
+        if (!(result.rateLimited && stop.signal.aborted)) {
+          errors.add(result.error);
+        }
+        if (result.scope !== "text") stop.abort();
       }
     }
   };
@@ -866,7 +886,7 @@ export async function translateMissing(args: {
         ok: false,
         error: [...errors].join("\n"),
         // whether the failures stopped the requests not yet sent
-        scope: stopped ? "provider" : "text",
+        scope: stop.signal.aborted ? "provider" : "text",
         translations,
       }
     : { ok: true, translations };

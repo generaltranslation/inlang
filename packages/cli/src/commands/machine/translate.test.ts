@@ -1007,9 +1007,10 @@ test("plurals that need forms the source lacks get the source's forms and are re
     await translateCommandAction({ project });
     expect(warn.mock.calls).toEqual([
       [
-        "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
+        "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): cart, items\n" +
           "  ar (zero, two, few, many): cart, items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
           "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
@@ -1260,8 +1261,9 @@ test("a run with nothing to translate needs no provider and reports what it skip
     });
     expect(warn.mock.calls).toEqual([
       [
-        "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
-          "  ru (few, many): items",
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
       ],
     ]);
   } finally {
@@ -1338,8 +1340,9 @@ test("a provider without context that finds nothing to translate starts no trans
     // Only the incomplete plural, not that descriptions aren't used.
     expect(warn.mock.calls).toEqual([
       [
-        "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
+        "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
           "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
     ]);
