@@ -78,7 +78,7 @@ Create `messages/en.json`:
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-In a terminal, the first run asks whether to use General Translation and, if you say yes, signs you in; signing up is free. Without a terminal, as in CI and most coding agents, or on Linux without a display, as over SSH, it prints the steps to get a key. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
+In a terminal, the first run asks whether to use General Translation and, if you say yes, signs you in; signing up is free. Without a terminal, as in CI and most coding agents, or on Linux without a display, as over SSH, it doesn't ask: without a key, it uses the community-operated service, unless the project chose General Translation, in which case it prints the steps to get a key. To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
@@ -190,11 +190,11 @@ The translate command has the following options:
 
 Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks whether to use General Translation for the project. If you say yes, it signs you in, opening General Translation in your browser if you aren't signed in yet; signing up is free. The CLI saves a development API key to `.env.local` next to `project.inlang` and adds `.env.local` to `.gitignore` unless git already ignores it. It also saves the project ID to `gt.config.json`; commit that file so teammates who sign in use the same project instead of creating their own.
 
-If you answer no, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default. It saves that choice as `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` in `.env.local`, so later runs don't ask; remove that line to be asked again. In CI, set the same variable to use that service.
+If you answer no, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default. It saves that choice as `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` in `.env.local`, so later runs don't ask; remove that line to be asked again. In CI, set the same variable to choose that service explicitly.
 
 Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. Sign-in saves `GT_DEV_API_KEY` and `GT_PROJECT_ID`. `GT_API_KEY` works too, and so do framework-prefixed names such as `VITE_GT_DEV_API_KEY` and `VITE_GT_PROJECT_ID`.
 
-Without a terminal, as in CI and most coding agents, through a task runner that captures the output, or on Linux without a display, as over SSH, the command doesn't ask. Without a key, it fails and prints the steps to get one. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
+Without a terminal, as in CI and most coding agents, through a task runner that captures the output, or on Linux without a display, as over SSH, the command doesn't ask. Without a key, it uses the community-operated service, as before. A project that chose General Translation, with a project ID in `gt.config.json` or `GT_PROJECT_ID`, or with `INLANG_MACHINE_TRANSLATE_PROVIDER=gt`, fails instead and prints the steps to get a key, so a missing CI secret doesn't send its text to another service. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com).
 
 **Bring your own key**
 
