@@ -352,18 +352,20 @@ function rejectionReasons(
   const placeholders = pattern.filter((part) => part.type !== "text");
   const sourcePlaceholders = source.filter((part) => part.type !== "text");
   const changed = [
-    ...without(sourcePlaceholders, placeholders).filter(
-      (part) =>
-        // A plain count may be written in words in an exact/single-number
-        // form. Formatted expressions still carry meaning (currency, units).
-        !(
-          part.type === "expression" &&
-          part.arg.type === "variable-reference" &&
-          !part.annotation &&
-          !resolveAnnotation(part.arg.name, declarations) &&
-          spelledOut.includes(resolveInputVariable(part.arg.name, declarations))
-        ),
-    ),
+    ...without(sourcePlaceholders, placeholders).filter((part) => {
+      if (part.type !== "expression" || part.arg.type !== "variable-reference")
+        return true;
+      // Plain counts and ICU # can be written in words; currency and unit
+      // formatters still carry meaning beyond the selected number.
+      const annotation =
+        part.annotation ?? resolveAnnotation(part.arg.name, declarations);
+      return (
+        !spelledOut.includes(
+          resolveInputVariable(part.arg.name, declarations),
+        ) ||
+        (annotation !== undefined && annotation.name !== "icu:pound")
+      );
+    }),
     ...without(placeholders, sourcePlaceholders),
   ];
   // a changed placeholder says enough, while markup that only moved can

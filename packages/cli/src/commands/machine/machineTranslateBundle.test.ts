@@ -741,7 +741,7 @@ const itemCount = {
 };
 
 
-test("a German singular and an exact number may omit their own plain count", async () => {
+test("a German singular and an exact number may omit their own count", async () => {
   const singular = await translateEditing(
     withPlaceholders(
       formsBundle(countPlural, ["countPlural"], { en: itemCount }),
@@ -818,6 +818,26 @@ test("a single-number form cannot change or omit a formatted count", async () =>
       reasons: ["{count}"],
     });
   }
+});
+
+test("a single-number form may spell out ICU's #", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  for (const variant of bundle.messages[0]!.variants) {
+    for (const part of variant.pattern)
+      if (part.type === "expression") {
+        part.annotation = {
+          type: "function-reference",
+          name: "icu:pound",
+          options: [],
+        };
+      }
+  }
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+  expect(result.rejected).toEqual([]);
 });
 
 test("a new message with a rejected translation isn't created: French `one` (0 and 1) drops `{count}`", async () => {
