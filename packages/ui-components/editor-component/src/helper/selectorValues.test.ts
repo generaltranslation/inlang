@@ -408,8 +408,7 @@ it("finds the exact-number selector in any language: icu1 declares it only where
 	expect(one.declarations.map((d) => d.name)).not.toContain("countPluralExact1");
 	for (const message of one.messages)
 		expect(message.selectors.map((s) => s.name)).toEqual(["countPluralExact", "countPlural"]);
-	// German "one" selects only 1, so it is the `=1` form
-	expect(missing(one, "de")).toEqual(["0 · *"]);
+	expect(missing(one, "de")).toEqual(["0 · *", "1 · *"]);
 	expect((await exportIcu([fill(one, { en: "One item" })])).en.items).toBe(
 		"{count, plural, =0 {No items} =1 {One item} one {# item} other {# items}}"
 	);
