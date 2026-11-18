@@ -429,6 +429,29 @@ test("an exact number and the plural category that selects only it are one form"
 			)
 		)
 	).toEqual(["0 · *"]);
+	// with `offset:1`, Arabic "zero" is `=1`, not `=0`
+	const arabicMissing = (number: string) =>
+		values(
+			missingVariants(
+				message(
+					"ar",
+					["countPluralExact", "countPlural"],
+					["zero", "one", "two", "few", "many", "*"].map((category) => ({
+						countPluralExact: "*",
+						countPlural: category,
+					}))
+				),
+				offset,
+				{
+					referenceVariants: [
+						variant({ countPluralExact: number, countPlural: "*" }),
+						variant({ countPluralExact: "*", countPlural: "*" }),
+					],
+				}
+			)
+		);
+	expect(arabicMissing("1")).toEqual([]);
+	expect(arabicMissing("0")).toEqual(["0 · *"]);
 });
 
 test("an explicit other covers the catch-all, a missing match counts as catch-all", () => {
