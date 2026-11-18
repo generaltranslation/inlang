@@ -55,6 +55,7 @@ describe("createGoogleTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "provider",
       error: "403 Forbidden: translating from en to de",
     });
   });
