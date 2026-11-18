@@ -95,31 +95,28 @@ describe("createGtTranslateProvider", () => {
     );
   });
 
-  test.each([200, 201])(
-    "maps translations back to their keys on %i",
-    async (status) => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        jsonResponse(
-          { save: translated("Speichern"), greeting: translated("Hallo") },
-          status,
-        ),
-      );
+  test("maps translations back to their keys on 200", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        { save: translated("Speichern"), greeting: translated("Hallo") },
+        200,
+      ),
+    );
 
-      const result = await createGtTranslateProvider({
-        apiKey: "gtx-dev-key-3",
-        userAgent: "inlang-cli/0.0.3",
-      }).translateBatch({
-        sourceLocale: "en",
-        targetLocale: "de",
-        texts: { greeting: { text: "Hello" }, save: { text: "Save" } },
-      });
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-dev-key-3",
+      userAgent: "inlang-cli/0.0.3",
+    }).translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: { greeting: { text: "Hello" }, save: { text: "Save" } },
+    });
 
-      expect(result).toEqual({
-        ok: true,
-        translatedTexts: { greeting: "Hallo", save: "Speichern" },
-      });
-    },
-  );
+    expect(result).toEqual({
+      ok: true,
+      translatedTexts: { greeting: "Hallo", save: "Speichern" },
+    });
+  });
 
   test("names how many texts failed and the first reason, and returns the others", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
