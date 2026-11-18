@@ -11,6 +11,10 @@ export type TranslateFailure = {
   error: string;
   /** Text failures leave other requests worth trying; omitted scope means provider-wide. */
   scope?: "text" | "provider";
+  /** A 429: the request wasn't processed, so it may be sent again. */
+  rateLimited?: boolean;
+  /** How long the provider asked to wait before sending it again. */
+  retryAfterMs?: number;
 };
 
 export type TranslateTextResult =

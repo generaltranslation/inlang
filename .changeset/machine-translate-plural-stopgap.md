@@ -2,6 +2,6 @@
 "@inlang/cli": patch
 ---
 
-`inlang machine translate` no longer translates a message into a locale whose plurals need forms the source doesn't have, such as Russian `few` and `many` for an English `one` and `other`. Before, it copied the source's forms, and the translation used the wrong form for most numbers. The run reports these messages by locale; add the forms by hand, then run again.
+`inlang machine translate` reports messages whose plurals need forms the source doesn't have in a target locale, such as Russian `few` and `many` for an English `one` and `other`. It still translates the source's forms, as before, so the target's catch-all shows for those numbers until the missing forms are added by hand. A translation whose selectors aren't the source's, such as a hand-written plural of a text, is left as it is. The report lists the forms and message ids by locale.
 
 It also warns when a locale's plural rules are unknown.

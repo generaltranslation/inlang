@@ -54,6 +54,7 @@ describe("createGtTranslateProvider", () => {
         Authorization: "Bearer gtx-dev-key-2",
         "Content-Type": "application/json",
         "User-Agent": "inlang-cli/0.0.2",
+        "gt-api-version": "2026-03-06.v1",
       },
       body: JSON.stringify({
         sourceLocale: "en",
@@ -326,5 +327,29 @@ describe("createGtTranslateProvider", () => {
       scope: "text",
       error: "400 Bad Request: translating from en to xx",
     });
+  });
+});
+
+test("a 429 from General Translation is rate-limited, with its Retry-After", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(null, {
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: { "Retry-After": "12" },
+    }),
+  );
+  const result = await createGtTranslateProvider({
+    apiKey: "gtx-dev-key",
+    userAgent: "inlang-cli/0.0.2",
+  }).translateBatch({
+    sourceLocale: "en",
+    targetLocale: "de",
+    texts: { greeting: { text: "Hello" } },
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    scope: "provider",
+    rateLimited: true,
+    retryAfterMs: 12_000,
   });
 });

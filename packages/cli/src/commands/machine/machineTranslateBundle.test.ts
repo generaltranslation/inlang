@@ -371,12 +371,12 @@ test("two plurals: a category in any combination of the source counts for the ot
   const { result } = await translate(bundle, ["ru"]);
 
   // Russian `one` × `few` has a source for `one`: `one` × `one`
-  expect(result.skippedPlurals).toEqual([
+  expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["few", "many"] },
   ]);
 });
 
-test("a target complete for one gender is skipped when another lacks a category", async () => {
+test("a target complete for one gender is reported when another lacks a category", async () => {
   const bundle = formsBundle(
     [input("gender"), ...countPlural],
     ["countPlural", "gender"],
@@ -397,11 +397,14 @@ test("a target complete for one gender is skipped when another lacks a category"
   );
   const { calls, result } = await translate(bundle, ["ru"]);
 
-  // `female` is the source's
-  expect(result.skippedPlurals).toEqual([
+  // `female` is the source's; its forms are still translated
+  expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["few", "many"] },
   ]);
-  expect(calls).toEqual([]);
+  expect(calls.map((call) => call.text)).toEqual([
+    "She has one item",
+    "She has items",
+  ]);
 });
 
 test("a select value only the target has needs no category", async () => {
@@ -419,10 +422,10 @@ test("a select value only the target has needs no category", async () => {
   const { result } = await translate(bundle, ["de"]);
 
   // German lacks `one` × `diverse`, as English does
-  expect(result.skippedPlurals).toEqual([]);
+  expect(result.incompletePlurals).toEqual([]);
 });
 
-test("empty forms are missing forms: a target whose plural forms are all empty is skipped", async () => {
+test("empty forms are missing forms: a target whose plural forms are all empty is reported", async () => {
   const bundle = formsBundle(countPlural, ["countPlural"], {
     en: items,
     ru: {
@@ -434,7 +437,7 @@ test("empty forms are missing forms: a target whose plural forms are all empty i
   });
   const { result } = await translate(bundle, ["ru"]);
 
-  expect(result.skippedPlurals).toEqual([
+  expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["few", "many"] },
   ]);
 });
@@ -452,11 +455,13 @@ test("a target's own selectors decide the forms it needs", async () => {
   const en = bundle.messages.find((message) => message.locale === "en")!;
   en.selectors = [];
   en.variants[0]!.matches = [];
-  const { result } = await translate(bundle, ["ru"]);
+  const { calls, result } = await translate(bundle, ["ru"]);
 
-  expect(result.skippedPlurals).toEqual([
+  expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["many"] },
   ]);
+  // the source's text wouldn't fit the plural: it is left as it is
+  expect(calls).toEqual([]);
 });
 
 test("`other` and the catch-all are the same form", async () => {
@@ -552,7 +557,7 @@ test("a plural whose type a select chooses needs the categories of each type", a
   // German needs one and other (cardinal) and other (ordinal), Russian also
   // few and many, Brazilian Portuguese (written as some projects do) one and
   // other. Slovenian cardinal two and few aren't English ordinal two and few.
-  expect(result.skippedPlurals).toEqual([
+  expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["few", "many"] },
     { locale: "sl", categories: ["two", "few"] },
   ]);
@@ -570,14 +575,14 @@ test("a locale with nothing to translate isn't reported for unknown plural rules
   expect(result.unknownPluralRules).toEqual([]);
 });
 
-test("forms the source lacks in its own locale too don't skip a locale", async () => {
+test("forms the source lacks in its own locale too aren't reported", async () => {
   // English needs `one` as well: German is as complete as the source
   const bundle = formsBundle(countPlural, ["countPlural"], {
     en: { "countPlural=*": "{count} items" },
   });
   const { result } = await translate(bundle, ["de", "ru"]);
 
-  expect(result.skippedPlurals).toEqual([
+  expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["few", "many"] },
   ]);
 });
@@ -982,7 +987,7 @@ test("with context, a target gets every plural form its language needs, each fro
   bundle.description = "A cart";
   const { calls, result } = await expand(bundle, ["ru", "de"]);
 
-  expect(result.skippedPlurals).toEqual([]);
+  expect(result.incompletePlurals).toEqual([]);
   // in CLDR order, the catch-all last
   expect(Object.entries(formsOf(result, "ru")!)).toEqual([
     ["countPlural=one", "[ru] {count} items"],
@@ -1478,7 +1483,7 @@ test("a message without a plural gets only the source's forms, with context too"
   });
 });
 
-test("a target whose selectors aren't the source's isn't expanded: skipped and reported", async () => {
+test("a target whose selectors aren't the source's isn't expanded: reported and left as it is", async () => {
   // a target with a gender the source doesn't select
   const bundle = formsBundle(
     [input("gender"), ...countPlural],
@@ -1499,7 +1504,7 @@ test("a target whose selectors aren't the source's isn't expanded: skipped and r
   const { calls, result } = await expand(bundle, ["ru"]);
 
   expect(calls).toEqual([]);
-  expect(result.skippedPlurals).toEqual([
+  expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["few", "many"] },
   ]);
   expect(formsOf(result, "ru")).toEqual(ru);

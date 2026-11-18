@@ -986,7 +986,7 @@ function pluralBundle(id: string): NewBundleNested {
   };
 }
 
-test("plurals the run can't translate are reported once, grouped by locale", async () => {
+test("plurals that need forms the source lacks get the source's forms and are reported once, grouped by locale", async () => {
   const project = await projectWithTextBundles(
     ["en", "ru", "ar", "de", "x-foo"],
     0,
@@ -1007,12 +1007,24 @@ test("plurals the run can't translate are reported once, grouped by locale", asy
     await translateCommandAction({ project });
     expect(warn.mock.calls).toEqual([
       [
-        "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
+        "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
           "  ru (few, many): cart, items\n" +
-          "  ar (zero, two, few, many): cart, items",
+          "  ar (zero, two, few, many): cart, items\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
     ]);
+    // translated as before these were reported, rather than left out
+    const bundles = await selectBundleNested(project.db).selectAll().execute();
+    for (const bundle of bundles) {
+      for (const locale of ["ru", "ar"]) {
+        expect(
+          bundle.messages.find(
+            (message: { locale: string }) => message.locale === locale,
+          )?.variants,
+        ).toHaveLength(2);
+      }
+    }
   } finally {
     await project.close();
   }
@@ -1248,7 +1260,7 @@ test("a run with nothing to translate needs no provider and reports what it skip
     });
     expect(warn.mock.calls).toEqual([
       [
-        "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
+        "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
           "  ru (few, many): items",
       ],
     ]);
@@ -1288,12 +1300,28 @@ test("a failed request and rejected translations are reported in one error", asy
 });
 
 test("a provider without context that finds nothing to translate starts no translation", async () => {
-  // Russian needs forms the English plural lacks: missing with context,
-  // skipped without.
+  // Russian needs forms the English plural lacks: missing with context. It
+  // has the source's forms, all a provider without context could add.
   const project = await projectWithTextBundles(["en", "ru"], 0);
+  const bundle = pluralBundle("items");
+  const [en] = bundle.messages;
   await insertBundleNested(project.db, {
-    ...pluralBundle("items"),
+    ...bundle,
     description: "How many items are in the cart",
+    messages: [
+      en!,
+      {
+        ...en!,
+        id: "items_ru",
+        locale: "ru",
+        variants: en!.variants.map((variant) => ({
+          ...variant,
+          id: `${variant.id}_ru`,
+          message_id: "items_ru",
+          pattern: [{ type: "text" as const, value: "Товары" }],
+        })),
+      },
+    ],
   });
   const start = vi.spyOn(progressBar.SingleBar.prototype, "start");
   const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
@@ -1307,11 +1335,12 @@ test("a provider without context that finds nothing to translate starts no trans
     ).toEqual({ translated: 0, bundles: 1 });
     expect(start).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
-    // Only the skipped plural, not that descriptions aren't used.
+    // Only the incomplete plural, not that descriptions aren't used.
     expect(warn.mock.calls).toEqual([
       [
-        "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.\n" +
-          "  ru (few, many): items",
+        "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:\n" +
+          "  ru (few, many): items\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
     ]);
   } finally {

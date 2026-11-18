@@ -17,6 +17,7 @@ import {
   type BundleTranslationPlan,
 } from "./machineTranslateBundle.js";
 import {
+  GT_SETUP_URL,
   MachineTranslateError,
   resolveMachineTranslateProvider,
 } from "./providers/resolveProvider.js";
@@ -134,8 +135,8 @@ export async function translateCommandAction(args: {
     const planBundles = (supportsContext: boolean) => {
       const plans: BundleTranslationPlan[] = [];
       const errors: string[] = [];
-      /** bundle ids and the plural categories they need, by locale */
-      const skipped = new Map<
+      /** bundle ids and the plural categories they lack, by locale */
+      const incomplete = new Map<
         string,
         { ids: string[]; categories: Set<string> }
       >();
@@ -151,14 +152,14 @@ export async function translateCommandAction(args: {
           errors.push(plan.error);
           continue;
         }
-        for (const { locale, categories } of plan.skippedPlurals) {
-          const entry = skipped.get(locale) ?? {
+        for (const { locale, categories } of plan.incompletePlurals) {
+          const entry = incomplete.get(locale) ?? {
             ids: [],
             categories: new Set(),
           };
           entry.ids.push(bundle.id);
           for (const category of categories) entry.categories.add(category);
-          skipped.set(locale, entry);
+          incomplete.set(locale, entry);
         }
         for (const locale of plan.unknownPluralRules) {
           unknownPluralRules.add(locale);
@@ -173,14 +174,20 @@ export async function translateCommandAction(args: {
           errors.join("\n"),
         );
       }
-      if (skipped.size > 0) {
+      if (incomplete.size > 0) {
         warnings.push(
           [
-            "Some messages were skipped: their plurals need forms the source doesn't have. Add them by hand, then run again.",
-            ...[...skipped].map(
+            "Some plurals lack forms their language needs. Until those forms are added by hand, their numbers show the catch-all form:",
+            ...[...incomplete].map(
               ([locale, { ids, categories }]) =>
                 `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
             ),
+            // a provider with context writes them, unless the selectors differ
+            ...(supportsContext
+              ? []
+              : [
+                  `General Translation writes every form a language needs: ${GT_SETUP_URL}`,
+                ]),
           ].join("\n"),
         );
       }
@@ -197,11 +204,11 @@ export async function translateCommandAction(args: {
     };
 
     // Planned as if the provider uses context, as the default one does.
-    // Without context, a plural that needs forms the source lacks is skipped
-    // instead of expanded, and the only forms added beyond these are ones the
-    // target never selects. So with nothing missing there is nothing worth
-    // translating and no provider is resolved: the run doesn't ask to sign
-    // in or fail for want of a key.
+    // Without context, a plural that needs forms the source lacks gets only
+    // the source's forms instead of being expanded, and the only forms added
+    // beyond the expanded ones are ones the target never selects. So with
+    // nothing missing there is nothing worth translating and no provider is
+    // resolved: the run doesn't ask to sign in or fail for want of a key.
     let planned = planBundles(true);
     const provider =
       planned.missing.length === 0
