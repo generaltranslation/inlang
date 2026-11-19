@@ -1365,3 +1365,36 @@ test("a failed request and rejected translations are reported in one error", asy
     await project.close();
   }
 });
+
+test("a failed save still lists the rejected translations, without what it saved", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"alpha": "Alpha", "beta": "Beta"}`,
+    de: `{}`,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      const text = query.get("q") === "Beta" ? "" : `${query.get("q")} (de)`;
+      return Response.json({
+        data: { translations: [{ translatedText: text }] },
+      });
+    }),
+  );
+  const de = nodePath.join(path, "../messages/de.json");
+  fs.chmodSync(de, 0o444);
+  try {
+    const error = await translateAndSave({ project, path }).catch(
+      (error: unknown) => error as Error,
+    );
+    expect((error as Error).message).toMatch(
+      /^Some translations weren't saved: .*\n {2}de: beta \(empty\)\nThe translations couldn't be saved: .*EACCES/,
+    );
+    expect((error as Error).message).not.toContain("Saved the");
+    expect(read("de")).toBe(`{}`);
+  } finally {
+    fs.chmodSync(de, 0o644);
+    await cleanup();
+  }
+});
