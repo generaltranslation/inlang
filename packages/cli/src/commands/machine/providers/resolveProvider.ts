@@ -128,12 +128,15 @@ export async function resolveMachineTranslateProvider(args: {
   const providerName = resolveMachineTranslateProviderName(
     environmentSelectsProvider ? args.env : env,
   );
-  if (providerName === "demosjarco" && !environmentSelectsProvider) {
-    log.info(
-      `You chose this service in .env or .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
-    );
+  if (providerName !== "gt") {
+    const provider = resolveNamedProvider(providerName, env);
+    if (providerName === "demosjarco" && !environmentSelectsProvider) {
+      log.info(
+        `You chose this service in .env or .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
+      );
+    }
+    return provider;
   }
-  if (providerName !== "gt") return resolveNamedProvider(providerName, env);
 
   // Keep GT keys paired with project IDs from the same source.
   let credentials = await readGtCredentials({ env: args.env, dir });
@@ -246,12 +249,10 @@ function shellQuote(arg: string): string {
 }
 
 function createCommunityProvider(env: Env): MachineTranslateProvider {
-  log.warn(
-    [
-      "Using the community-operated translation service at translate.demosjarco.dev. Stability is not guaranteed.",
-      "This service is not owned, operated, or maintained by inlang.",
-      `Provide your own API key for higher reliability and control: ${BYOK_URL}`,
-    ].join("\n"),
+  // Names the service once per run, without arguing against a choice the
+  // user made; a run that fell back to it says why separately.
+  log.info(
+    "Translating with the community-operated service at translate.demosjarco.dev, which inlang doesn't operate.",
   );
   // Scoped to the free service only: opt in to Zero Data Retention upstream.
   const zdr = env[DEMOSJARCO_ZDR_ENV]?.trim().toLowerCase() === "true";

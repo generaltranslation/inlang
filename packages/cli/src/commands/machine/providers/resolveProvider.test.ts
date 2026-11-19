@@ -13,11 +13,8 @@ import {
 import type { AnyMachineTranslateProvider } from "./types.js";
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
-const COMMUNITY_WARNING = [
-  "Using the community-operated translation service at translate.demosjarco.dev. Stability is not guaranteed.",
-  "This service is not owned, operated, or maintained by inlang.",
-  `Provide your own API key for higher reliability and control: ${BYOK_URL}`,
-].join("\n");
+const COMMUNITY_NOTICE =
+  "Translating with the community-operated service at translate.demosjarco.dev, which inlang doesn't operate.";
 
 type ResolveArgs = Parameters<typeof resolveMachineTranslateProvider>[0];
 
@@ -366,11 +363,9 @@ test("an explicit GT provider fails without credentials outside an interactive t
 
 test("choosing community translation uses that service and saves the choice", async () => {
   vi.spyOn(log, "prompt").mockResolvedValue("community");
-  const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
   const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
   const { dir, projectPath } = projectIn({ ".env.local": "OTHER=1\n" });
   const provider = await resolve({ projectPath, interactive: true });
-  expect(warn.mock.calls).toEqual([[COMMUNITY_WARNING]]);
   expect((await firstRequest(provider)).url).toMatch(
     /^https:\/\/translate\.demosjarco\.dev\//,
   );
@@ -379,6 +374,7 @@ test("choosing community translation uses that service and saves the choice", as
   );
   // Outside a git work tree, so the rule is added.
   expect(info.mock.calls).toEqual([
+    [COMMUNITY_NOTICE],
     [
       "Saved your choice to .env.local. To be asked again, remove INLANG_MACHINE_TRANSLATE_PROVIDER from it.\nAdded .env.local to .gitignore.",
     ],
@@ -412,6 +408,7 @@ test("uses the choice saved in .env.local without asking, and says where it is",
   });
   expect(prompt).not.toHaveBeenCalled();
   expect(info.mock.calls).toEqual([
+    [COMMUNITY_NOTICE],
     [
       "You chose this service in .env or .env.local. To be asked about General Translation again, remove INLANG_MACHINE_TRANSLATE_PROVIDER from it.",
     ],
@@ -474,12 +471,14 @@ test("a failed sign-in is a MachineTranslateError, which prints without a stack 
   );
 });
 
-test("uses the community service when it is selected, and warns", async () => {
+test("uses the community service when it is selected, and only names it", async () => {
   const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
   const provider = await resolve({
     env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "demosjarco" },
   });
-  expect(warn.mock.calls).toEqual([[COMMUNITY_WARNING]]);
+  expect(info.mock.calls).toEqual([[COMMUNITY_NOTICE]]);
+  expect(warn).not.toHaveBeenCalled();
   expect((await firstRequest(provider)).url).toMatch(
     /^https:\/\/translate\.demosjarco\.dev\//,
   );
