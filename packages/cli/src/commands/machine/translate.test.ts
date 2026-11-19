@@ -424,7 +424,7 @@ test("a failed save fails the run, without claiming success", async () => {
   }
 });
 
-test("a bundle gets a locale only with all its translations", async () => {
+test("a new message gets a locale only with all its translations", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
   skipRetryDelay();
   const plural = `[{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "One item", "countPlural=*": "Many items"}}]`;
@@ -455,6 +455,56 @@ test("a bundle gets a locale only with all its translations", async () => {
     const de = JSON.parse(read("de"));
     expect(de).toMatchObject({ alpha: "Alpha (de)" });
     expect(de).not.toHaveProperty("items");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a message that exists keeps the translations that came back", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  skipRetryDelay();
+  const select = (match: string) =>
+    `[{"declarations": ["input gender"], "selectors": ["gender"], "match": {${match}}}]`;
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"greeting": ${select('"gender=male": "He", "gender=female": "She", "gender=*": "They"')}}`,
+    // a fallback written by hand
+    de: `{"greeting": ${select('"gender=*": "Sie"')}}`,
+  });
+  let failing = true;
+  const fetch = vi.fn().mockImplementation(async (url: string) => {
+    const query = new URL(url).searchParams;
+    if (query.get("q") === "She" && failing) return unavailableResponse();
+    return Response.json({
+      data: {
+        translations: [
+          { translatedText: `${query.get("q")} (${query.get("target")})` },
+        ],
+      },
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    await expect(translateAndSave({ project, path })).rejects.toThrow(
+      "Saved the 1 translation that came back.",
+    );
+    expect(JSON.parse(read("de")).greeting[0].match).toEqual({
+      "gender=male": "He (de)",
+      "gender=*": "Sie",
+    });
+    // the next run asks only for the one that failed
+    failing = false;
+    const calls = fetch.mock.calls.length;
+    await translateAndSave({ project, path });
+    expect(
+      fetch.mock.calls
+        .slice(calls)
+        .map(([url]) => new URL(url).searchParams.get("q")),
+    ).toEqual(["She"]);
+    expect(JSON.parse(read("de")).greeting[0].match).toEqual({
+      "gender=male": "He (de)",
+      "gender=female": "She (de)",
+      "gender=*": "Sie",
+    });
   } finally {
     await cleanup();
   }

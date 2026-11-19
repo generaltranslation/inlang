@@ -90,8 +90,8 @@ export async function translateAndSave(args: {
  *
  * When a translation fails, it still adds those that came back, so that the
  * next run doesn't pay for them again, and throws a `MachineTranslateError`
- * with their number. A bundle gets a locale only with all its translations:
- * half a plural would match nothing. A translation that came back empty or
+ * with their number. A bundle gets a new message only with all its
+ * translations: half a plural would match nothing. A translation that came back empty or
  * with a placeholder dropped or changed isn't added (see
  * `planBundleTranslation`), and the run throws too. A failure of the provider
  * (not of a text) stops the run after its locale is saved.
@@ -261,17 +261,18 @@ export async function translateCommandAction(args: {
       let translatedInLocale = 0;
       for (const plan of plans) {
         const ofLocale = plan.missing.filter((t) => t.targetLocale === locale);
-        // a bundle gets the locale only with all its translations
+        const returned = ofLocale.filter((t) => result.translations.has(t));
+        // a new message gets the locale only with all its translations
         if (
-          ofLocale.length === 0 ||
-          ofLocale.some((t) => !result.translations.has(t))
+          returned.length === 0 ||
+          (returned.length < ofLocale.length && plan.newLocales.has(locale))
         ) {
           continue;
         }
         const bundle = plan.apply(
-          new Map(ofLocale.map((t) => [t, result.translations.get(t)!])),
+          new Map(returned.map((t) => [t, result.translations.get(t)!])),
         );
-        translatedInLocale += ofLocale.length;
+        translatedInLocale += returned.length;
         // only this locale's message: a later locale's write would otherwise
         // put back the messages of the bundle as planned
         await upsertBundleNested(args.project.db, {
