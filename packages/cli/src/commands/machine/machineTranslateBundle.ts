@@ -182,12 +182,12 @@ export function planBundleTranslation(
         targetMessage &&
         findMatchingVariant(targetMessage.variants, sourceVariant.matches);
 
-      // A blank source can't be translated, and a provider may reject it, so
-      // it is skipped whether or not the target has the variant. A blank
-      // target variant is missing, as `inlang check` reports it.
+      // A blank variant is missing, as `inlang check` reports it, unless its
+      // source is blank too: then a translation can't fill it.
       if (
-        isEmptyPattern(sourceVariant.pattern) ||
-        (existingVariant && !isEmptyPattern(existingVariant.pattern))
+        existingVariant &&
+        (!isEmptyPattern(existingVariant.pattern) ||
+          isEmptyPattern(sourceVariant.pattern))
       ) {
         continue;
       }
@@ -326,14 +326,29 @@ export async function translateMissing(args: {
         };
   const textsPerRequest = batched ? MAX_TEXTS_PER_REQUEST : 1;
 
+  const translations = new Map<MissingTranslation, VariantRow["pattern"]>();
+  // A blank source can't be translated, and a provider may reject it, so it
+  // is copied as it is: dropping it would leave a new message without a form
+  // the source has, such as a blank catch-all.
+  const blank = args.missing.filter(({ sourceVariant }) =>
+    isEmptyPattern(sourceVariant.pattern),
+  );
+  for (const translation of blank) {
+    translations.set(
+      translation,
+      structuredClone(translation.sourceVariant.pattern),
+    );
+  }
+  if (blank.length > 0) args.onProgress?.(blank.length);
+
   const byLocale = new Map<string, MissingTranslation[]>();
   for (const translation of args.missing) {
+    if (translations.has(translation)) continue;
     const missing = byLocale.get(translation.targetLocale) ?? [];
     missing.push(translation);
     byLocale.set(translation.targetLocale, missing);
   }
 
-  const translations = new Map<MissingTranslation, VariantRow["pattern"]>();
   /** Aborts on a provider failure: no request is sent after it. */
   const stop = new AbortController();
   /** Each sends one request and records what it translated. */
