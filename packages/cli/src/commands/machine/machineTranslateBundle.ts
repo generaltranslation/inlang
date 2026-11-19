@@ -155,6 +155,11 @@ type PluralReport = {
 export type BundleTranslationPlan = PluralReport & {
   missing: MissingTranslation[];
   /**
+   * Target locales the bundle has no message in. Added with only some of its
+   * translations, such a message could match nothing: half a plural.
+   */
+  newLocales: Set<string>;
+  /**
    * Adds the translation of each of `missing` that `translations` has to a
    * copy of the bundle, except those it rejects (see `rejectionReasons`),
    * and every translation of a new message that has one of them.
@@ -375,6 +380,12 @@ export function planBundleTranslation(
   return {
     ...report,
     missing,
+    newLocales: new Set(
+      [...targetLocales].filter(
+        (locale) =>
+          !args.bundle.messages.some((message) => message.locale === locale),
+      ),
+    ),
     apply: (translations) => {
       const reasons = new Map<MissingTranslation, string[]>();
       for (const [translation, pattern] of translations) {
