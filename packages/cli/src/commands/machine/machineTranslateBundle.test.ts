@@ -1620,3 +1620,58 @@ test("an empty form its language never selects is left alone", async () => {
   );
   expect(calls).toEqual([]);
 });
+
+test("a form the source has is added where the target's language selects it", async () => {
+  // French and Spanish `many` is for millions, which the SDK doesn't require
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    es: {
+      "countPlural=one": "Un artículo",
+      "countPlural=many": "Un millón de artículos",
+      "countPlural=*": "Artículos",
+    },
+  });
+  const { calls, provider } = recordingProvider(true);
+  const result = await machineTranslateBundle({
+    bundle,
+    sourceLocale: "es",
+    targetLocales: ["fr", "de"],
+    provider,
+  });
+
+  expect(Object.entries(formsOf(result, "fr")!)).toEqual([
+    // French `one` is 0 and 1, so it comes from `*`
+    ["countPlural=one", "[fr] Artículos"],
+    ["countPlural=many", "[fr] Un millón de artículos"],
+    ["countPlural=*", "[fr] Artículos"],
+  ]);
+  // German never selects `many`
+  expect(formsOf(result, "de")).toEqual({
+    "countPlural=one": "[de] Un artículo",
+    "countPlural=*": "[de] Artículos",
+  });
+  expect(calls).toHaveLength(5);
+});
+
+test("a form the source has goes before the catch-all of a target that has the others", async () => {
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    es: {
+      "countPlural=one": "Un artículo",
+      "countPlural=many": "Un millón de artículos",
+      "countPlural=*": "Artículos",
+    },
+    fr: { "countPlural=one": "Un article", "countPlural=*": "Articles" },
+  });
+  const { provider } = recordingProvider(true);
+  const result = await machineTranslateBundle({
+    bundle,
+    sourceLocale: "es",
+    targetLocales: ["fr"],
+    provider,
+  });
+
+  expect(Object.entries(formsOf(result, "fr")!)).toEqual([
+    ["countPlural=one", "Un article"],
+    ["countPlural=many", "[fr] Un millón de artículos"],
+    ["countPlural=*", "Articles"],
+  ]);
+});
