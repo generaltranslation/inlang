@@ -381,7 +381,7 @@ export function planBundleTranslation(
     ...report,
     missing,
     newLocales: new Set(
-      [...targetLocales].filter(
+      args.targetLocales.filter(
         (locale) =>
           !args.bundle.messages.some((message) => message.locale === locale),
       ),
