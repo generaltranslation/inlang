@@ -1851,3 +1851,18 @@ test.each<[string, Array<[string, string]> | undefined]>([
   const translated = result.data!.messages.find((m) => m.locale === "de")!;
   expect(valuesOf(translated)).toEqual(["*"]);
 });
+
+test.each<[string, Record<string, string> | undefined]>([
+  ["a new message", undefined],
+  ["a message without that form", { "countPlural=*": "Dinge" }],
+])("an expanded plural doesn't send a blank source, for %s", async (_, de) => {
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=one": "", "countPlural=*": "Many items" },
+    ...(de && { de }),
+  });
+  const { calls, result } = await expand(bundle, ["de"]);
+
+  // German `one` would come from the blank English `one`
+  expect(calls.map((call) => call.text)).toEqual(de ? [] : ["Many items"]);
+  expect(Object.keys(formsOf(result, "de")!)).toEqual(["countPlural=*"]);
+});
