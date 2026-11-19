@@ -116,6 +116,7 @@ test.each([null, "", undefined])(
       text: "Save",
       sourceLocale: "en",
       targetLocale: "de",
+      signal: expect.any(AbortSignal),
     });
   },
 );

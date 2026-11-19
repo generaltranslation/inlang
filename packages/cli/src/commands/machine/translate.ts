@@ -97,7 +97,8 @@ export async function translateAndSave(args: {
  * translations: half a plural would match nothing. A translation that came back empty or
  * with a placeholder dropped or changed isn't added (see
  * `planBundleTranslation`), and the run throws too. A failure of the provider
- * (not of a text) stops the run after its locale is saved.
+ * (not of a text) stops the run after its locale is saved. A save that fails
+ * after a translation failed or was rejected says so too.
  */
 export async function translateCommandAction(args: {
   project: InlangProject;
@@ -269,6 +270,19 @@ export async function translateCommandAction(args: {
     const rejected = new Map<string, Map<string, Set<string>>>();
     const errors = new Set<string>();
     let translated = 0;
+    /** why translation stopped so far, without what was saved */
+    const failureLines = () => [
+      ...errors,
+      ...(rejected.size > 0
+        ? [
+            "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:",
+            ...[...rejected].map(
+              ([locale, byId]) =>
+                `  ${locale}: ${[...byId].map(([id, reasons]) => `${id} (${[...reasons].join(", ")})`).join(", ")}`,
+            ),
+          ]
+        : []),
+    ];
     // One locale at a time, saved when it is done: a run that is stopped,
     // or whose provider fails, keeps every locale it finished.
     for (const locale of new Set(missing.map((t) => t.targetLocale))) {
@@ -321,23 +335,24 @@ export async function translateCommandAction(args: {
         }
       }
       translated += translatedInLocale;
-      if (translatedInLocale > 0) await args.save?.();
+      if (translatedInLocale > 0) {
+        await args.save?.().catch((saveError: Error) => {
+          // a failed save mustn't hide why translation stopped
+          const lines = failureLines();
+          throw lines.length > 0
+            ? new MachineTranslateError(
+                [...lines, saveError.message].join("\n"),
+              )
+            : saveError;
+        });
+      }
       // a provider failure: the locales after this one would fail too
       if (!result.ok && result.scope === "provider") break;
     }
     bar?.stop();
 
-    if (errors.size > 0 || rejected.size > 0) {
-      const lines = [...errors];
-      if (rejected.size > 0) {
-        lines.push(
-          "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:",
-          ...[...rejected].map(
-            ([locale, byId]) =>
-              `  ${locale}: ${[...byId].map(([id, reasons]) => `${id} (${[...reasons].join(", ")})`).join(", ")}`,
-          ),
-        );
-      }
+    const lines = failureLines();
+    if (lines.length > 0) {
       if (translated > 0) {
         lines.push(
           `Saved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back${rejected.size > 0 ? " intact" : ""}. Run again to translate the rest.`,

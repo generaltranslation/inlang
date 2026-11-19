@@ -44,6 +44,14 @@ export function retryDelayMs(retry: number) {
   return RETRY_BASE_DELAY_MS * 2 ** retry;
 }
 
+/** A request not sent because the run stopped. */
+const stopped = {
+  ok: false,
+  error: "Not sent: the run stopped.",
+  scope: "text",
+  stopped: true,
+} as const;
+
 /**
  * Shown when the community-operated service at translate.demosjarco.dev can't
  * be reached, is throttling requests, or returns a response the CLI can't
@@ -162,7 +170,12 @@ export function createDemosjarcoTranslateProvider(
       for (let retry = 0; retry <= MAX_RETRIES; retry++) {
         // The concurrency slot is only held while a request is in flight, not
         // while backing off, so waiting retries don't block fresh requests.
-        const outcome = await limiter(() => attempt(url, args));
+        // Once the run stops, queued requests and retries aren't sent.
+        const outcome = await limiter(async () =>
+          args.signal?.aborted
+            ? { done: true as const, result: stopped }
+            : attempt(url, args),
+        );
         if (outcome.done) {
           return outcome.result;
         }
