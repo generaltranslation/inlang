@@ -253,26 +253,29 @@ export function planBundleTranslation(
           })
         : undefined;
     // The SDK requires no category only millions select, such as French
-    // `many`. An empty one the target has would still show a blank there, so
-    // it is translated too.
-    const forms = required && [
-      ...required,
-      ...target.variants
-        .filter(
-          (variant) =>
-            isEmptyPattern(variant.pattern) &&
-            !isUnreachableVariant(variant, declarations, targetLocale) &&
-            !required.some((form) =>
-              variantCovers(variant, form, declarations, targetLocale),
-            ),
-        )
-        .map((variant) => variant.matches),
-    ];
+    // `many`. One the source has is added too, or a million would show the
+    // catch-all's text, and an empty one the target has, or it would show a
+    // blank.
+    const forms =
+      required &&
+      [
+        ...sourceMessage.variants,
+        ...target.variants.filter((variant) => isEmptyPattern(variant.pattern)),
+      ].reduce(
+        (forms, variant) =>
+          isUnreachableVariant(variant, declarations, targetLocale) ||
+          forms.some((form) =>
+            variantCovers(variant, form, declarations, targetLocale),
+          )
+            ? forms
+            : withForm(forms, variant.matches),
+        required,
+      );
     // The SDK plans plural types as i18next lays them out, with cardinal
     // categories under the catch-all type. A source form in a branch the plan
     // lacks, such as `pluralType=cardinal` with its own categories, would be
     // dropped, so the source's forms are copied instead.
-    if (forms && dropsSourceBranch(sourceMessage, forms, declarations))
+    if (required && dropsSourceBranch(sourceMessage, required, declarations))
       unknownRules = true;
     else if (forms) {
       formsByLocale.set(targetLocale, forms);
@@ -774,6 +777,26 @@ function missingForms(args: {
     }
   }
   return missing;
+}
+
+/**
+ * `forms` with `matches` before the first form that matches its inputs too:
+ * runtimes like Paraglide JS select the first variant that matches, so
+ * French `many` goes before the catch-all.
+ */
+function withForm(
+  forms: VariantRow["matches"][],
+  matches: VariantRow["matches"],
+): VariantRow["matches"][] {
+  let index = forms.findIndex((form) =>
+    form.every(
+      ({ key }) =>
+        matchValue({ matches: form }, key) === "*" ||
+        matchValue({ matches: form }, key) === matchValue({ matches }, key),
+    ),
+  );
+  if (index === -1) index = forms.length;
+  return [...forms.slice(0, index), matches, ...forms.slice(index)];
 }
 
 /** A variant's plural category for a selector: its catch-all is `other`. */

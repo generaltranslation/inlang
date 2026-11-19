@@ -141,22 +141,10 @@ export async function signInToGt(args: {
     prompt = (message, options) => log.prompt(message, options),
     openUrl = openInBrowser,
   } = args;
-  if (
-    (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")).code ===
-    0
-  ) {
+  const problem = await envLocalProblem(dir);
+  if (problem) {
     throw new Error(
-      "Can't save the General Translation key: .env.local is tracked by git. Untrack it with `git rm --cached .env.local`, then run again.",
-    );
-  }
-  // The key is appended through a symlink, so an ignored .env.local could
-  // still write it to a tracked file.
-  const envLocal = await fs
-    .lstat(nodePath.join(dir, ".env.local"))
-    .catch(() => undefined);
-  if (envLocal?.isSymbolicLink()) {
-    throw new Error(
-      "Can't save the General Translation key: .env.local is a symbolic link. Replace it with a regular file, then run again.",
+      `Can't save the General Translation key: ${problem}, then run again.`,
     );
   }
 
@@ -241,6 +229,29 @@ export async function signInToGt(args: {
   } finally {
     await fs.rm(cwd, { recursive: true, force: true });
   }
+}
+
+/**
+ * Why a key must not be saved to `dir/.env.local`, as the start of a
+ * sentence that says how to fix it: git tracks it, or it is a symlink, through
+ * which an ignored .env.local could still write the key to a tracked file.
+ */
+export async function envLocalProblem(
+  dir: string,
+): Promise<string | undefined> {
+  if (
+    (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")).code ===
+    0
+  ) {
+    return ".env.local is tracked by git. Untrack it with `git rm --cached .env.local`";
+  }
+  const envLocal = await fs
+    .lstat(nodePath.join(dir, ".env.local"))
+    .catch(() => undefined);
+  if (envLocal?.isSymbolicLink()) {
+    return ".env.local is a symbolic link. Replace it with a regular file";
+  }
+  return undefined;
 }
 
 /**
