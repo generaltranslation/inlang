@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import type { BundleNested } from "@inlang/sdk";
 import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
+import {
+  planBundleTranslation,
+  translateMissing,
+} from "./machineTranslateBundle.js";
 
 test("translated variants get ids in the order of the source variants", async () => {
   const values = Array.from({ length: 20 }, (_, index) => `v${index}`);
@@ -228,10 +232,41 @@ test("a target locale given twice is translated once", async () => {
 test.each<[string, Array<[string, string]> | undefined]>([
   ["a new message", undefined],
   ["a message without that variant", [["*", "Viele Dinge"]]],
-])("a blank source isn't sent for translation, for %s", async (_, de) => {
-  const bundle = pluralBundle(de ?? []);
-  bundle.messages[0]!.variants[0]!.pattern = [];
-  if (!de) bundle.messages.pop();
+])(
+  "a blank source is copied, not sent for translation, for %s",
+  async (_, de) => {
+    const bundle = pluralBundle(de ?? []);
+    bundle.messages[0]!.variants[0]!.pattern = [];
+    if (!de) bundle.messages.pop();
+    const texts: string[] = [];
+    const result = await machineTranslateBundle({
+      bundle,
+      sourceLocale: "en",
+      targetLocales: ["de"],
+      provider: {
+        translateText: async ({ text }) => {
+          texts.push(text);
+          // as a provider that rejects empty text
+          return text
+            ? { ok: true, translatedText: "Viele Dinge" }
+            : { ok: false, error: "empty text" };
+        },
+      },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(texts).toEqual(de ? [] : ["Many items"]);
+    const translated = result.data!.messages.find((m) => m.locale === "de")!;
+    // `one` stays blank, as in the source, instead of showing `*`
+    expect(valuesOf(translated)).toEqual(["one", "*"]);
+    expect(translated.variants[0]!.pattern).toEqual([]);
+  },
+);
+
+test("a blank catch-all is copied, so a new message matches every number", async () => {
+  const bundle = pluralBundle([]);
+  bundle.messages[0]!.variants[1]!.pattern = [];
+  bundle.messages.pop();
   const texts: string[] = [];
   const result = await machineTranslateBundle({
     bundle,
@@ -240,16 +275,36 @@ test.each<[string, Array<[string, string]> | undefined]>([
     provider: {
       translateText: async ({ text }) => {
         texts.push(text);
-        // as a provider that rejects empty text
-        return text
-          ? { ok: true, translatedText: "Viele Dinge" }
-          : { ok: false, error: "empty text" };
+        return { ok: true, translatedText: "Ein Ding" };
       },
     },
   });
 
-  expect(result.error).toBeUndefined();
-  expect(texts).toEqual(de ? [] : ["Many items"]);
+  expect(texts).toEqual(["One item"]);
   const translated = result.data!.messages.find((m) => m.locale === "de")!;
-  expect(valuesOf(translated)).toEqual(["*"]);
+  expect(valuesOf(translated)).toEqual(["one", "*"]);
+  expect(translated.variants[1]!.pattern).toEqual([]);
+});
+
+test("copied blank sources count toward progress", async () => {
+  const bundle = pluralBundle([]);
+  bundle.messages[0]!.variants[0]!.pattern = [];
+  bundle.messages.pop();
+  const plan = planBundleTranslation({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+  });
+  if ("error" in plan) throw new Error(plan.error);
+  let progress = 0;
+  await translateMissing({
+    provider: {
+      translateText: async () => ({ ok: true, translatedText: "Viele Dinge" }),
+    },
+    sourceLocale: "en",
+    missing: plan.missing,
+    onProgress: (count) => (progress += count),
+  });
+
+  expect(progress).toBe(plan.missing.length);
 });
