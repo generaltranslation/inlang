@@ -136,16 +136,8 @@ export async function translateCommandAction(args: {
     }
 
     const planBundles = (supportsContext: boolean) => {
-      const plans: BundleTranslationPlan[] = [];
+      const plans: Array<{ id: string; plan: BundleTranslationPlan }> = [];
       const errors: string[] = [];
-      /** bundle ids and the plural categories they lack, by locale */
-      const incomplete = new Map<
-        string,
-        { ids: string[]; categories: Set<string> }
-      >();
-      /** bundle ids whose message has other selectors than the source's, by locale */
-      const differentSelectors = new Map<string, string[]>();
-      const unknownPluralRules = new Set<string>();
       for (const bundle of bundles) {
         const plan = planBundleTranslation({
           bundle,
@@ -157,72 +149,12 @@ export async function translateCommandAction(args: {
           errors.push(plan.error);
           continue;
         }
-        for (const { locale, categories } of plan.incompletePlurals) {
-          const entry = incomplete.get(locale) ?? {
-            ids: [],
-            categories: new Set(),
-          };
-          entry.ids.push(bundle.id);
-          for (const category of categories) entry.categories.add(category);
-          incomplete.set(locale, entry);
-        }
-        for (const locale of plan.differentSelectors) {
-          differentSelectors.set(locale, [
-            ...(differentSelectors.get(locale) ?? []),
-            bundle.id,
-          ]);
-        }
-        for (const locale of plan.unknownPluralRules) {
-          unknownPluralRules.add(locale);
-        }
-        // Unchanged bundles aren't written back.
-        if (plan.missing.length > 0) plans.push(plan);
-      }
-      const warnings: string[] = [];
-      if (errors.length > 0) {
-        warnings.push(
-          "Some bundles could not be translated.",
-          errors.join("\n"),
-        );
-      }
-      if (incomplete.size > 0) {
-        warnings.push(
-          [
-            "Some plurals lack forms their language needs; add them by hand:",
-            ...[...incomplete].map(
-              ([locale, { ids, categories }]) =>
-                `  ${locale} (${[...categories].join(", ")}): ${shortList(ids)}`,
-            ),
-            "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
-            // a provider with context writes them, unless the selectors differ
-            // or the target has a select value the source lacks
-            ...(supportsContext
-              ? []
-              : [
-                  `General Translation writes every form a language needs: ${GT_SETUP_URL}`,
-                ]),
-          ].join("\n"),
-        );
-      }
-      if (differentSelectors.size > 0) {
-        warnings.push(
-          [
-            "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:",
-            ...[...differentSelectors].map(
-              ([locale, ids]) => `  ${locale}: ${shortList(ids)}`,
-            ),
-          ].join("\n"),
-        );
-      }
-      if (unknownPluralRules.size > 0) {
-        warnings.push(
-          `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
-        );
+        plans.push({ id: bundle.id, plan });
       }
       return {
         plans,
-        missing: plans.flatMap((plan) => plan.missing),
-        warnings,
+        errors,
+        missing: plans.flatMap(({ plan }) => plan.missing),
       };
     };
 
@@ -248,10 +180,24 @@ export async function translateCommandAction(args: {
           })));
     if (provider && !provider.supportsContext) planned = planBundles(false);
     const { plans, missing } = planned;
-    for (const warning of planned.warnings) log.warn(warning);
+    if (planned.errors.length > 0) {
+      log.warn("Some bundles could not be translated.");
+      log.warn(planned.errors.join("\n"));
+    }
+    /** the locales a new message was created in, by plan */
+    const created = new Map<BundleTranslationPlan, Set<string>>();
+    // a provider with context writes every form, unless the selectors differ
+    // or the target has a select value the source lacks
+    const warnPlurals = () =>
+      warnAboutPlurals(
+        plans,
+        created,
+        !provider || provider.supportsContext === true,
+      );
     // A provider without context finds nothing when only plural forms it
     // can't add are missing.
     if (!provider || missing.length === 0) {
+      warnPlurals();
       return { translated: 0, bundles: bundles.length };
     }
     if (
@@ -285,71 +231,83 @@ export async function translateCommandAction(args: {
     ];
     // One locale at a time, saved when it is done: a run that is stopped,
     // or whose provider fails, keeps every locale it finished.
-    for (const locale of new Set(missing.map((t) => t.targetLocale))) {
-      const result = await translateMissing({
-        provider,
-        sourceLocale: settings.baseLocale,
-        missing: missing.filter((t) => t.targetLocale === locale),
-        onProgress: (count) => bar?.increment(count),
-      });
-      if (!result.ok) errors.add(result.error);
+    try {
+      for (const locale of new Set(missing.map((t) => t.targetLocale))) {
+        const result = await translateMissing({
+          provider,
+          sourceLocale: settings.baseLocale,
+          missing: missing.filter((t) => t.targetLocale === locale),
+          onProgress: (count) => bar?.increment(count),
+        });
+        if (!result.ok) errors.add(result.error);
 
-      let translatedInLocale = 0;
-      for (const plan of plans) {
-        const ofLocale = plan.missing.filter((t) => t.targetLocale === locale);
-        const returned = ofLocale.filter((t) => result.translations.has(t));
-        // a new message gets the locale only with all its translations
-        if (
-          returned.length === 0 ||
-          (returned.length < ofLocale.length && plan.newLocales.has(locale))
-        ) {
-          continue;
+        let translatedInLocale = 0;
+        for (const { plan } of plans) {
+          const ofLocale = plan.missing.filter(
+            (t) => t.targetLocale === locale,
+          );
+          const returned = ofLocale.filter((t) => result.translations.has(t));
+          // a new message gets the locale only with all its translations
+          if (
+            returned.length === 0 ||
+            (returned.length < ofLocale.length && plan.newLocales.has(locale))
+          ) {
+            continue;
+          }
+          const bundle = plan.apply(
+            new Map(returned.map((t) => [t, result.translations.get(t)!])),
+          );
+          translatedInLocale += returned.length;
+          // before the write: a failed write still reports the plurals. A
+          // rejected translation drops a new message (see `apply`).
+          if (plan.newLocales.has(locale) && bundle.rejected.length === 0) {
+            created.set(plan, (created.get(plan) ?? new Set()).add(locale));
+          }
+          // only this locale's message: a later locale's write would otherwise
+          // put back the messages of the bundle as planned
+          await upsertBundleNested(args.project.db, {
+            ...bundle.data,
+            messages: bundle.data.messages.filter(
+              (message) => message.locale === locale,
+            ),
+          });
+          // variants that got a new id to keep the order of the source
+          // message; deleted after the write, so that nothing is lost if it
+          // fails
+          if (bundle.replacedVariantIds?.length) {
+            await args.project.db
+              .deleteFrom("inlang_variant")
+              .where("id", "in", bundle.replacedVariantIds)
+              .execute();
+          }
+          for (const { reasons } of bundle.rejected) {
+            const byId = rejected.get(locale) ?? new Map<string, Set<string>>();
+            const bundleReasons = byId.get(bundle.data.id!) ?? new Set();
+            for (const reason of reasons) bundleReasons.add(reason);
+            rejected.set(locale, byId.set(bundle.data.id!, bundleReasons));
+            translatedInLocale--;
+          }
         }
-        const bundle = plan.apply(
-          new Map(returned.map((t) => [t, result.translations.get(t)!])),
-        );
-        translatedInLocale += returned.length;
-        // only this locale's message: a later locale's write would otherwise
-        // put back the messages of the bundle as planned
-        await upsertBundleNested(args.project.db, {
-          ...bundle.data,
-          messages: bundle.data.messages.filter(
-            (message) => message.locale === locale,
-          ),
-        });
-        // variants that got a new id to keep the order of the source
-        // message; deleted after the write, so that nothing is lost if it
-        // fails
-        if (bundle.replacedVariantIds?.length) {
-          await args.project.db
-            .deleteFrom("inlang_variant")
-            .where("id", "in", bundle.replacedVariantIds)
-            .execute();
+        translated += translatedInLocale;
+        if (translatedInLocale > 0) {
+          await args.save?.().catch((saveError: Error) => {
+            // a failed save mustn't hide why translation stopped
+            const lines = failureLines();
+            throw lines.length > 0
+              ? new MachineTranslateError(
+                  [...lines, saveError.message].join("\n"),
+                )
+              : saveError;
+          });
         }
-        for (const { reasons } of bundle.rejected) {
-          const byId = rejected.get(locale) ?? new Map<string, Set<string>>();
-          const bundleReasons = byId.get(bundle.data.id!) ?? new Set();
-          for (const reason of reasons) bundleReasons.add(reason);
-          rejected.set(locale, byId.set(bundle.data.id!, bundleReasons));
-          translatedInLocale--;
-        }
+        // a provider failure: the locales after this one would fail too
+        if (!result.ok && result.scope === "provider") break;
       }
-      translated += translatedInLocale;
-      if (translatedInLocale > 0) {
-        await args.save?.().catch((saveError: Error) => {
-          // a failed save mustn't hide why translation stopped
-          const lines = failureLines();
-          throw lines.length > 0
-            ? new MachineTranslateError(
-                [...lines, saveError.message].join("\n"),
-              )
-            : saveError;
-        });
-      }
-      // a provider failure: the locales after this one would fail too
-      if (!result.ok && result.scope === "provider") break;
+    } finally {
+      bar?.stop();
+      // However the run ends, so that a failed write doesn't lose them.
+      warnPlurals();
     }
-    bar?.stop();
 
     const lines = failureLines();
     if (lines.length > 0) {
@@ -364,6 +322,83 @@ export async function translateCommandAction(args: {
   } catch (error) {
     bar?.stop();
     throw error;
+  }
+}
+
+/**
+ * Warns about the plurals of each bundle (see `PluralReport`), but not about a
+ * new message that wasn't created, because one of its translations failed or
+ * was rejected, or its locale wasn't reached: the next run translates it
+ * whole.
+ */
+function warnAboutPlurals(
+  plans: Array<{ id: string; plan: BundleTranslationPlan }>,
+  created: Map<BundleTranslationPlan, Set<string>>,
+  supportsContext: boolean,
+): void {
+  const reported = (plan: BundleTranslationPlan, locale: string) =>
+    !plan.newLocales.has(locale) || Boolean(created.get(plan)?.has(locale));
+  /** bundle ids and the plural categories they lack, by locale */
+  const incomplete = new Map<
+    string,
+    { ids: string[]; categories: Set<string> }
+  >();
+  /** bundle ids whose message has other selectors than the source's, by locale */
+  const differentSelectors = new Map<string, string[]>();
+  const unknownPluralRules = new Set<string>();
+  for (const { id, plan } of plans) {
+    for (const { locale, categories } of plan.incompletePlurals) {
+      if (!reported(plan, locale)) continue;
+      const entry = incomplete.get(locale) ?? {
+        ids: [],
+        categories: new Set(),
+      };
+      entry.ids.push(id);
+      for (const category of categories) entry.categories.add(category);
+      incomplete.set(locale, entry);
+    }
+    for (const locale of plan.differentSelectors) {
+      differentSelectors.set(locale, [
+        ...(differentSelectors.get(locale) ?? []),
+        id,
+      ]);
+    }
+    for (const locale of plan.unknownPluralRules) {
+      if (reported(plan, locale)) unknownPluralRules.add(locale);
+    }
+  }
+
+  if (incomplete.size > 0) {
+    log.warn(
+      [
+        "Some plurals lack forms their language needs; add them by hand:",
+        ...[...incomplete].map(
+          ([locale, { ids, categories }]) =>
+            `  ${locale} (${[...categories].join(", ")}): ${shortList(ids)}`,
+        ),
+        "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+        ...(supportsContext
+          ? []
+          : [
+              `General Translation writes every form a language needs: ${GT_SETUP_URL}`,
+            ]),
+      ].join("\n"),
+    );
+  }
+  if (differentSelectors.size > 0) {
+    log.warn(
+      [
+        "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:",
+        ...[...differentSelectors].map(
+          ([locale, ids]) => `  ${locale}: ${shortList(ids)}`,
+        ),
+      ].join("\n"),
+    );
+  }
+  if (unknownPluralRules.size > 0) {
+    log.warn(
+      `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
+    );
   }
 }
 

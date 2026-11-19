@@ -1866,3 +1866,21 @@ test.each<[string, Record<string, string> | undefined]>([
   expect(calls.map((call) => call.text)).toEqual(de ? [] : ["Many items"]);
   expect(Object.keys(formsOf(result, "de")!)).toEqual(["countPlural=*"]);
 });
+
+test("a message without forms isn't filled when one of its translations is rejected", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount, fr: {} }),
+  );
+  // as an editor adds it
+  bundle.messages[1]!.selectors = [];
+  const result = await translateEditing(bundle, ["fr"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+
+  expect(result.rejected).toEqual([
+    { locale: "fr", reasons: ["{count}"] },
+    { locale: "fr", reasons: [] },
+  ]);
+  const fr = result.data!.messages.find((m) => m.locale === "fr")!;
+  expect(fr.variants).toEqual([]);
+});
