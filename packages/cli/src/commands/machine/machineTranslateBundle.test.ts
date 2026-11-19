@@ -1440,7 +1440,7 @@ test("a source with both `other` and the catch-all: every empty variant of the t
   ]);
 });
 
-test("a select value only the target has gets no forms; its variant stays where it is", async () => {
+test("a select value only the target has: the source's forms are copied, as added forms would take its numbers", async () => {
   const bundle = formsBundle(
     [input("gender"), ...countPlural],
     ["countPlural", "gender"],
@@ -1457,13 +1457,16 @@ test("a select value only the target has gets no forms; its variant stays where 
   );
   const { calls, result } = await expand(bundle, ["ru"]);
 
-  expect(calls.map((call) => call.text)).toEqual(["Items", "Items", "Items"]);
+  // `few, *` would take 2 from the hand-written `*, neuter`, and nothing can
+  // be translated for `few, neuter`
+  expect(calls.map((call) => call.text)).toEqual(["One item"]);
   expect(Object.entries(formsOf(result, "ru")!)).toEqual([
     ["countPlural=*,gender=neuter", "Оно"],
-    ["countPlural=one,gender=*", "[ru] Items"],
-    ["countPlural=few,gender=*", "[ru] Items"],
-    ["countPlural=many,gender=*", "[ru] Items"],
+    ["countPlural=one,gender=*", "[ru] One item"],
     ["countPlural=*,gender=*", "Товары"],
+  ]);
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
   ]);
 });
 

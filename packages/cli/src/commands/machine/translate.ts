@@ -186,6 +186,7 @@ export async function translateCommandAction(args: {
             ),
             "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
             // a provider with context writes them, unless the selectors differ
+            // or the target has a select value the source lacks
             ...(supportsContext
               ? []
               : [
