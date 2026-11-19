@@ -102,8 +102,8 @@ export async function translateAndSave(args: {
  *
  * When a translation fails, it still adds those that came back, so that the
  * next run doesn't pay for them again, and throws a `MachineTranslateError`
- * with their number. A bundle gets a locale only with all its translations:
- * half a plural would match nothing.
+ * with their number. A bundle gets a new message only with all its
+ * translations: half a plural would match nothing.
  */
 export async function translateCommandAction(args: {
   project: InlangProject;
@@ -200,14 +200,20 @@ export async function translateCommandAction(args: {
 
     let translated = 0;
     for (const plan of plans) {
-      const failedLocales = new Set(
+      // a new message gets a locale only with all its translations
+      const incompleteNewLocales = new Set(
         plan.missing
           .filter((translation) => !result.translations.has(translation))
-          .map((translation) => translation.targetLocale),
+          .map((translation) => translation.targetLocale)
+          .filter((locale) => plan.newLocales.has(locale)),
       );
       const translations = new Map(
         plan.missing
-          .filter((translation) => !failedLocales.has(translation.targetLocale))
+          .filter(
+            (translation) =>
+              result.translations.has(translation) &&
+              !incompleteNewLocales.has(translation.targetLocale),
+          )
           .map((translation) => [
             translation,
             result.translations.get(translation)!,
