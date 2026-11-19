@@ -355,16 +355,11 @@ export function planBundleTranslation(
       }
       // a new message missing a form can match nothing and show the bundle
       // id, while for a missing message the runtime falls back to another
-      // locale
+      // locale. A message without forms is new too (see `newLocales`).
       const rejectedNewMessages = new Set(
         [...reasons.keys()]
           .map((translation) => translation.targetLocale)
-          .filter(
-            (locale) =>
-              !args.bundle.messages.some(
-                (message) => message.locale === locale,
-              ),
-          ),
+          .filter((locale) => newLocales.has(locale)),
       );
       const rejected = missing.filter(
         (translation) =>

@@ -1055,3 +1055,21 @@ test.each<[string, Array<[string, string]> | undefined]>([
   const translated = result.data!.messages.find((m) => m.locale === "de")!;
   expect(valuesOf(translated)).toEqual(["*"]);
 });
+
+test("a message without forms isn't filled when one of its translations is rejected", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount, fr: {} }),
+  );
+  // as an editor adds it
+  bundle.messages[1]!.selectors = [];
+  const result = await translateEditing(bundle, ["fr"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+
+  expect(result.rejected).toEqual([
+    { locale: "fr", reasons: ["{count}"] },
+    { locale: "fr", reasons: [] },
+  ]);
+  const fr = result.data!.messages.find((m) => m.locale === "fr")!;
+  expect(fr.variants).toEqual([]);
+});
