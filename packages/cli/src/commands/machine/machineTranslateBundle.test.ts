@@ -1909,17 +1909,23 @@ test("copied blank sources count toward progress", async () => {
 test.each<[string, Record<string, string> | undefined]>([
   ["a new message", undefined],
   ["a message without that form", { "countPlural=*": "Dinge" }],
-])("an expanded plural doesn't send a blank source, for %s", async (_, de) => {
-  const bundle = formsBundle(countPlural, ["countPlural"], {
-    en: { "countPlural=one": "", "countPlural=*": "Many items" },
-    ...(de && { de }),
-  });
-  const { calls, result } = await expand(bundle, ["de"]);
+])(
+  "an expanded plural copies a blank source instead of sending it, for %s",
+  async (_, de) => {
+    const bundle = formsBundle(countPlural, ["countPlural"], {
+      en: { "countPlural=one": "", "countPlural=*": "Many items" },
+      ...(de && { de }),
+    });
+    const { calls, result } = await expand(bundle, ["de"]);
 
-  // German `one` would come from the blank English `one`
-  expect(calls.map((call) => call.text)).toEqual(de ? [] : ["Many items"]);
-  expect(Object.keys(formsOf(result, "de")!)).toEqual(["countPlural=*"]);
-});
+    // German `one` comes from the blank English `one`: it is copied, blank
+    expect(calls.map((call) => call.text)).toEqual(de ? [] : ["Many items"]);
+    expect(formsOf(result, "de")).toEqual({
+      "countPlural=one": "",
+      "countPlural=*": de ? "Dinge" : "[de] Many items",
+    });
+  },
+);
 
 test("a message without forms isn't filled when one of its translations is rejected", async () => {
   const bundle = withPlaceholders(

@@ -778,9 +778,13 @@ function missingForms(args: {
       referenceLocale: args.sourceLocale,
       targetLocale: target.locale,
     });
-    // A blank source can't be translated, and a provider may reject it, so
-    // the form is left out, whether or not the target has a variant for it.
-    if (!sourceVariant || isEmptyPattern(sourceVariant.pattern)) continue;
+    // A blank source can't fill a blank variant. For a form the target lacks
+    // it is planned, and `translateMissing` copies it without a request.
+    if (
+      !sourceVariant ||
+      (empty.length > 0 && isEmptyPattern(sourceVariant.pattern))
+    )
+      continue;
     const plurals = form.flatMap(({ key }) => {
       if (!isPluralSelector(key, declarations)) return [];
       const input = resolveInputVariable(key, declarations);
