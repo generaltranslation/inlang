@@ -73,7 +73,8 @@ export function pluralExamples(
 			continue;
 		}
 		const decimal = DECIMALS.find(
-			(value) => !exclude.has(value + offset) && rules.select(value) === category
+			(value) =>
+				!exclude.has(value + offset) && rules.select(value) === category
 		);
 		if (decimal !== undefined) result[category] = String(decimal + offset);
 	}

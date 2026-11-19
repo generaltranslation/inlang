@@ -59,6 +59,11 @@ it("returns a copy: changing the result does not change the next call", () => {
 });
 
 it("shifts examples by an ICU offset; excluded numbers are the numbers themselves", () => {
-	expect(pluralExamples("en", "cardinal", { offset: 1 })).toEqual({ one: "2", other: "1, 3, 4…" });
-	expect(pluralExamples("en", "cardinal", { offset: 1, exclude: [0, 1] })).toEqual({ one: "2", other: "3, 4, 5…" });
+	expect(pluralExamples("en", "cardinal", { offset: 1 })).toEqual({
+		one: "2",
+		other: "1, 3, 4…",
+	});
+	expect(
+		pluralExamples("en", "cardinal", { offset: 1, exclude: [0, 1] })
+	).toEqual({ one: "2", other: "3, 4, 5…" });
 });
