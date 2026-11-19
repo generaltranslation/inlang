@@ -130,6 +130,15 @@ type PluralReport = {
    */
   incompletePlurals: Array<{ locale: string; categories: string[] }>;
   /**
+   * Target locales whose message has other selectors than the source's, in
+   * any order, such as a hand-written text without the source's plural. The
+   * source's forms match on selectors such a message doesn't have, so it is
+   * left as it is. It is reported when it lacks a form its own selectors
+   * need, or has it empty, also when `incompletePlurals` has it: the source
+   * can't fill any of its forms.
+   */
+  differentSelectors: string[];
+  /**
    * Target locales translated without known plural rules (see the SDK's
    * `pluralRules`): their plural forms are the source's.
    */
@@ -190,6 +199,7 @@ export function planBundleTranslation(
   const missing: MissingTranslation[] = [];
   const report: PluralReport = {
     incompletePlurals: [],
+    differentSelectors: [],
     unknownPluralRules: [],
   };
 
@@ -210,7 +220,8 @@ export function planBundleTranslation(
     const categories = new Set<string>();
     // The forms are the target's, so without a plural in the target no
     // category can be missing. `missingVariants` takes seconds on a message
-    // with several selects, so it isn't called then.
+    // with several selects, so it isn't called then (but for the rare target
+    // with other selectors than the source's, below).
     if (
       target.selectors.some(({ name }) => isPluralSelector(name, declarations))
     ) {
@@ -236,14 +247,32 @@ export function planBundleTranslation(
         )
         .forEach((category) => categories.add(category));
     }
+    // in any order; a message without forms gets the source's forms, as before
+    const names = (selectors: typeof target.selectors) =>
+      selectors
+        .map(({ name }) => name)
+        .sort()
+        .join();
+    const sameSelectors =
+      target.variants.length === 0 ||
+      names(target.selectors) === names(sourceMessage.selectors);
     if (categories.size > 0) {
       report.incompletePlurals.push({
         locale: targetLocale,
         categories: [...categories],
       });
-      const names = (selectors: typeof target.selectors) =>
-        selectors.map(({ name }) => name).join();
-      if (names(target.selectors) !== names(sourceMessage.selectors)) continue;
+    }
+    // The source's forms would be added with selectors the message doesn't
+    // have, so it could never select them. It is reported when it lacks a
+    // form its own selectors need, or has it empty.
+    if (!sameSelectors) {
+      const filled = target.variants.filter(
+        (variant) => !isEmptyPattern(variant.pattern),
+      );
+      if (missingVariants(target, declarations, { variants: filled }).length) {
+        report.differentSelectors.push(targetLocale);
+      }
+      continue;
     }
 
     const missingBefore = missing.length;

@@ -433,8 +433,150 @@ test("a target's own selectors decide the forms it needs", async () => {
   expect(result.incompletePlurals).toEqual([
     { locale: "ru", categories: ["many"] },
   ]);
+  // and that the source can't fill it, many and the catch-all alike
+  expect(result.differentSelectors).toEqual(["ru"]);
   // the source's text wouldn't fit the plural: it is left as it is
   expect(calls).toEqual([]);
+  // complete but for an empty form, it is reported too
+  const ru = bundle.messages.find((message) => message.locale === "ru")!;
+  ru.variants.push(
+    {
+      ...ru.variants[0]!,
+      id: "many",
+      matches: [{ type: "literal-match", key: "countPlural", value: "many" }],
+    },
+    {
+      ...ru.variants[0]!,
+      id: "other",
+      matches: [{ type: "catchall-match", key: "countPlural" }],
+    },
+  );
+  ru.variants[0]!.pattern = [];
+  expect(
+    planBundleTranslation({
+      bundle,
+      sourceLocale: "en",
+      targetLocales: ["ru"],
+    }),
+  ).toMatchObject({ missing: [], differentSelectors: ["ru"] });
+});
+
+test("a complete translation with other selectors than the source's isn't reported", async () => {
+  // a source without a plural, and a hand-written Russian plural with every form
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=*": "Items" },
+    ru: {
+      "countPlural=one": "Один товар",
+      "countPlural=few": "Несколько товаров",
+      "countPlural=many": "Много товаров",
+      "countPlural=*": "Товары",
+    },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["ru"]);
+
+  expect(result.incompletePlurals).toEqual([]);
+  expect(result.differentSelectors).toEqual([]);
+  expect(calls).toEqual([]);
+});
+
+test("a translation with other selectors than the source's is left as it is", async () => {
+  // a Japanese text written by hand without the source's plural: the
+  // source's forms would match on a selector it doesn't have
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: items,
+    ja: { "countPlural=*": "" },
+  });
+  const ja = bundle.messages.find((message) => message.locale === "ja")!;
+  ja.selectors = [];
+  ja.variants[0]!.matches = [];
+  ja.variants[0]!.pattern = [{ type: "text", value: "アイテム" }];
+  const { calls, result } = await translate(bundle, ["ja", "de"]);
+
+  // it lacks no translation, so it isn't reported
+  expect(result.differentSelectors).toEqual([]);
+  expect(result.incompletePlurals).toEqual([]);
+  // German, without a message, gets the source's forms
+  expect(calls).toEqual(["One item", "Many items"]);
+  expect(
+    result.data!.messages.find((message) => message.locale === "ja"),
+  ).toMatchObject({ selectors: [], variants: [{ matches: [] }] });
+
+  // an empty one is reported, as it lacks a translation
+  ja.variants[0]!.pattern = [];
+  expect(
+    planBundleTranslation({
+      bundle,
+      sourceLocale: "en",
+      targetLocales: ["ja"],
+    }),
+  ).toMatchObject({
+    missing: [],
+    differentSelectors: ["ja"],
+  });
+  // one without forms gets the source's, as a new message does
+  ja.variants = [];
+  const plan = planBundleTranslation({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["ja"],
+  });
+  if ("error" in plan) throw new Error(plan.error);
+  expect(plan.missing.map(({ text }) => text)).toEqual([
+    "One item",
+    "Many items",
+  ]);
+  expect(plan.differentSelectors).toEqual([]);
+});
+
+test("selectors in another order are the source's", async () => {
+  const bundle = formsBundle(
+    [...countPlural, input("gender")],
+    ["countPlural", "gender"],
+    {
+      en: {
+        "countPlural=one,gender=*": "One item",
+        "countPlural=*,gender=*": "Items",
+      },
+      de: {
+        "countPlural=one,gender=*": "",
+        "countPlural=*,gender=*": "Artikel",
+      },
+    },
+  );
+  const de = bundle.messages.find((message) => message.locale === "de")!;
+  de.selectors.reverse();
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual(["One item"]);
+  expect(result.differentSelectors).toEqual([]);
+});
+
+test("a translation with other selectors that lacks a form is reported", async () => {
+  // a German plural with a gender written by hand, without `one`, which the
+  // source has
+  const bundle = formsBundle(
+    [...countPlural, input("gender")],
+    ["countPlural", "gender"],
+    {
+      en: {
+        "countPlural=one,gender=*": "One item",
+        "countPlural=*,gender=*": "Items",
+      },
+      de: { "countPlural=*,gender=*": "Artikel" },
+    },
+  );
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = en.selectors.slice(0, 1);
+  for (const variant of en.variants)
+    variant.matches = variant.matches.slice(0, 1);
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual([]);
+  expect(result.incompletePlurals).toEqual([]);
+  expect(result.differentSelectors).toEqual(["de"]);
 });
 
 test("`other` and the catch-all are the same form", async () => {
