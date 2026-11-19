@@ -189,7 +189,9 @@ type TranslatedBundle = {
  * Finds the translations the bundle is missing in the target locales: no
  * variant for a source variant, or an empty one.
  * With a provider that uses context, a target with the source's selectors
- * gets every plural form its language needs instead, see `missingForms`.
+ * gets every plural form its language needs instead, see `missingForms`,
+ * unless one it lacks can't be translated, as for a select value only the
+ * target has.
  * Otherwise the source's forms are translated, and target locales whose
  * plurals need categories the source lacks are reported, see `PluralReport`.
  */
@@ -280,9 +282,27 @@ export function planBundleTranslation(
     // categories under the catch-all type. A source form in a branch the plan
     // lacks, such as `pluralType=cardinal` with its own categories, would be
     // dropped, so the source's forms are copied instead.
+    // A form the target lacks and nothing can be translated from, such as
+    // Russian `few` with a select value only the target has, would leave its
+    // numbers to the forms added next to it: `few, *` would take 2 from a
+    // hand-written `*, neuter`. Such a target keeps the source's forms, and
+    // the ones it lacks are reported.
+    const unfillable = forms?.some(
+      (form) =>
+        !target.variants.some((variant) =>
+          variantCovers(variant, form, declarations, targetLocale),
+        ) &&
+        !sourceVariantFor({
+          target: form,
+          reference: sourceMessage.variants,
+          declarations,
+          referenceLocale: args.sourceLocale,
+          targetLocale,
+        }),
+    );
     if (required && dropsSourceBranch(sourceMessage, required, declarations))
       unknownRules = true;
-    else if (forms) {
+    else if (forms && !unfillable) {
       formsByLocale.set(targetLocale, forms);
       missing.push(
         ...missingForms({
