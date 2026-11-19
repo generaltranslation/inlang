@@ -159,16 +159,8 @@ export async function translateCommandAction(args: {
       );
     }
 
-    const plans: BundleTranslationPlan[] = [];
+    const plans: Array<{ id: string; plan: BundleTranslationPlan }> = [];
     const errors: string[] = [];
-    /** bundle ids and the plural categories they lack, by locale */
-    const incomplete = new Map<
-      string,
-      { ids: string[]; categories: Set<string> }
-    >();
-    /** bundle ids whose message has other selectors than the source's, by locale */
-    const differentSelectors = new Map<string, string[]>();
-    const unknownPluralRules = new Set<string>();
     for (const bundle of bundles) {
       const plan = planBundleTranslation({
         bundle,
@@ -179,32 +171,13 @@ export async function translateCommandAction(args: {
         errors.push(plan.error);
         continue;
       }
-      for (const { locale, categories } of plan.incompletePlurals) {
-        const entry = incomplete.get(locale) ?? {
-          ids: [],
-          categories: new Set(),
-        };
-        entry.ids.push(bundle.id);
-        for (const category of categories) entry.categories.add(category);
-        incomplete.set(locale, entry);
-      }
-      for (const locale of plan.differentSelectors) {
-        differentSelectors.set(locale, [
-          ...(differentSelectors.get(locale) ?? []),
-          bundle.id,
-        ]);
-      }
-      for (const locale of plan.unknownPluralRules) {
-        unknownPluralRules.add(locale);
-      }
-      // Unchanged bundles aren't written back.
-      if (plan.missing.length > 0) plans.push(plan);
+      plans.push({ id: bundle.id, plan });
     }
     if (errors.length > 0) {
       log.warn("Some bundles could not be translated.");
       log.warn(errors.join("\n"));
     }
-    const missing = plans.flatMap((plan) => plan.missing);
+    const missing = plans.flatMap(({ plan }) => plan.missing);
 
     bar?.start(missing.length, 0);
     const result = await translateMissing({
@@ -215,12 +188,9 @@ export async function translateCommandAction(args: {
     });
     bar?.stop();
 
-    /** why translations were rejected, by bundle id, by locale */
-    const rejected = new Map<string, Map<string, Set<string>>>();
-    let translated = 0;
-    for (const plan of plans) {
+    const writes = plans.map(({ id, plan }) => {
       // a new message gets a locale only with all its translations
-      const incompleteNewLocales = new Set(
+      const notCreated = new Set(
         plan.missing
           .filter((translation) => !result.translations.has(translation))
           .map((translation) => translation.targetLocale)
@@ -231,13 +201,24 @@ export async function translateCommandAction(args: {
           .filter(
             (translation) =>
               result.translations.has(translation) &&
-              !incompleteNewLocales.has(translation.targetLocale),
+              !notCreated.has(translation.targetLocale),
           )
           .map((translation) => [
             translation,
             result.translations.get(translation)!,
           ]),
       );
+      return { id, plan, notCreated, translations };
+    });
+
+    // Before writing, so that a failed write doesn't lose them.
+    warnAboutPlurals(writes);
+
+    /** why translations were rejected, by bundle id, by locale */
+    const rejected = new Map<string, Map<string, Set<string>>>();
+    let translated = 0;
+    for (const { plan, translations } of writes) {
+      // Unchanged bundles aren't written back.
       if (translations.size === 0) continue;
       translated += translations.size;
       const bundle = plan.apply(translations);
@@ -260,33 +241,6 @@ export async function translateCommandAction(args: {
       }
     }
 
-    if (incomplete.size > 0) {
-      log.warn(
-        [
-          "Some plurals lack forms their language needs; add them by hand:",
-          ...[...incomplete].map(
-            ([locale, { ids, categories }]) =>
-              `  ${locale} (${[...categories].join(", ")}): ${shortList(ids)}`,
-          ),
-          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
-        ].join("\n"),
-      );
-    }
-    if (differentSelectors.size > 0) {
-      log.warn(
-        [
-          "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:",
-          ...[...differentSelectors].map(
-            ([locale, ids]) => `  ${locale}: ${shortList(ids)}`,
-          ),
-        ].join("\n"),
-      );
-    }
-    if (unknownPluralRules.size > 0) {
-      log.warn(
-        `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
-      );
-    }
     if (!result.ok || rejected.size > 0) {
       const lines = result.ok ? [] : [result.error];
       if (rejected.size > 0) {
@@ -312,6 +266,77 @@ export async function translateCommandAction(args: {
   } catch (error) {
     bar?.stop();
     throw error;
+  }
+}
+
+/**
+ * Warns about the plurals of each bundle (see `PluralReport`), but not about a
+ * new message that isn't created because one of its translations failed: the
+ * next run translates it whole.
+ */
+function warnAboutPlurals(
+  writes: Array<{
+    id: string;
+    plan: BundleTranslationPlan;
+    notCreated: Set<string>;
+  }>,
+): void {
+  /** bundle ids and the plural categories they lack, by locale */
+  const incomplete = new Map<
+    string,
+    { ids: string[]; categories: Set<string> }
+  >();
+  /** bundle ids whose message has other selectors than the source's, by locale */
+  const differentSelectors = new Map<string, string[]>();
+  const unknownPluralRules = new Set<string>();
+  for (const { id, plan, notCreated } of writes) {
+    for (const { locale, categories } of plan.incompletePlurals) {
+      if (notCreated.has(locale)) continue;
+      const entry = incomplete.get(locale) ?? {
+        ids: [],
+        categories: new Set(),
+      };
+      entry.ids.push(id);
+      for (const category of categories) entry.categories.add(category);
+      incomplete.set(locale, entry);
+    }
+    for (const locale of plan.differentSelectors) {
+      differentSelectors.set(locale, [
+        ...(differentSelectors.get(locale) ?? []),
+        id,
+      ]);
+    }
+    for (const locale of plan.unknownPluralRules) {
+      if (!notCreated.has(locale)) unknownPluralRules.add(locale);
+    }
+  }
+
+  if (incomplete.size > 0) {
+    log.warn(
+      [
+        "Some plurals lack forms their language needs; add them by hand:",
+        ...[...incomplete].map(
+          ([locale, { ids, categories }]) =>
+            `  ${locale} (${[...categories].join(", ")}): ${shortList(ids)}`,
+        ),
+        "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ].join("\n"),
+    );
+  }
+  if (differentSelectors.size > 0) {
+    log.warn(
+      [
+        "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:",
+        ...[...differentSelectors].map(
+          ([locale, ids]) => `  ${locale}: ${shortList(ids)}`,
+        ),
+      ].join("\n"),
+    );
+  }
+  if (unknownPluralRules.size > 0) {
+    log.warn(
+      `Plural rules unknown for ${[...unknownPluralRules].join(", ")}; copied the source's forms.`,
+    );
   }
 }
 

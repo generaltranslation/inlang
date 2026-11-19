@@ -165,7 +165,8 @@ type PluralReport = {
 export type BundleTranslationPlan = PluralReport & {
   missing: MissingTranslation[];
   /**
-   * Target locales the bundle has no message in. Added with only some of its
+   * Target locales the bundle has no message in, or a message without forms,
+   * which gets the source's selectors. Added with only some of its
    * translations, such a message could match nothing: half a plural.
    */
   newLocales: Set<string>;
@@ -217,6 +218,7 @@ export function planBundleTranslation(
   const { declarations } = args.bundle;
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
+  const newLocales = new Set<string>();
   const report: PluralReport = {
     incompletePlurals: [],
     differentSelectors: [],
@@ -232,9 +234,13 @@ export function planBundleTranslation(
     const targetMessage = args.bundle.messages.find(
       (message) => message.locale === targetLocale,
     );
+    // A message without forms gets the source's, with the source's selectors
+    // (see `apply`), like a new one: its own select nothing.
+    const isNew = !targetMessage || targetMessage.variants.length === 0;
+    if (isNew) newLocales.add(targetLocale);
     const target = {
       locale: targetLocale,
-      selectors: targetMessage?.selectors ?? sourceMessage.selectors,
+      selectors: isNew ? sourceMessage.selectors : targetMessage.selectors,
       variants: targetMessage?.variants ?? [],
     };
     const categories = new Set<string>();
@@ -267,14 +273,13 @@ export function planBundleTranslation(
         )
         .forEach((category) => categories.add(category));
     }
-    // in any order; a message without forms gets the source's forms, as before
+    // in any order
     const names = (selectors: typeof target.selectors) =>
       selectors
         .map(({ name }) => name)
         .sort()
         .join();
     const sameSelectors =
-      target.variants.length === 0 ||
       names(target.selectors) === names(sourceMessage.selectors);
     if (categories.size > 0) {
       report.incompletePlurals.push({
@@ -332,12 +337,7 @@ export function planBundleTranslation(
   return {
     ...report,
     missing,
-    newLocales: new Set(
-      args.targetLocales.filter(
-        (locale) =>
-          !args.bundle.messages.some((message) => message.locale === locale),
-      ),
-    ),
+    newLocales,
     apply: (translations) => {
       const reasons = new Map<MissingTranslation, string[]>();
       for (const [translation, pattern] of translations) {
@@ -402,6 +402,11 @@ export function planBundleTranslation(
           if (existingVariant) {
             existingVariant.pattern = pattern;
           } else {
+            if (targetMessage.variants.length === 0) {
+              targetMessage.selectors = structuredClone(
+                sourceMessage.selectors,
+              );
+            }
             const variant = {
               id: randomUUID(),
               message_id: targetMessage.id,
