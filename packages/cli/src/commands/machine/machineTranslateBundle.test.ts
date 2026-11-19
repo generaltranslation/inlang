@@ -1509,3 +1509,114 @@ test("a target whose selectors aren't the source's isn't expanded: reported and 
   ]);
   expect(formsOf(result, "ru")).toEqual(ru);
 });
+
+test("an empty form the target has is translated even when its language doesn't require it", async () => {
+  // French `many` is for millions, which the SDK doesn't require; left empty,
+  // a million shows a blank.
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    es: {
+      "countPlural=one": "Un artículo",
+      "countPlural=many": "Un millón de artículos",
+      "countPlural=*": "Artículos",
+    },
+    fr: {
+      "countPlural=one": "Un article",
+      "countPlural=many": "",
+      "countPlural=*": "Articles",
+    },
+  });
+  const { calls, provider } = recordingProvider(true);
+  const result = await machineTranslateBundle({
+    bundle,
+    sourceLocale: "es",
+    targetLocales: ["fr"],
+    provider,
+  });
+
+  expect(calls.map((call) => call.text)).toEqual(["Un millón de artículos"]);
+  expect(formsOf(result, "fr")).toEqual({
+    "countPlural=one": "Un article",
+    "countPlural=many": "[fr] Un millón de artículos",
+    "countPlural=*": "Articles",
+  });
+});
+
+test("an empty Arabic `zero` is translated once, from the exact 0 form", async () => {
+  const { calls, result } = await expand(
+    formsBundle(countPlural, ["count", "countPlural"], {
+      en: {
+        "count=0,countPlural=*": "No items",
+        "count=*,countPlural=one": "One item",
+        "count=*,countPlural=*": "Items",
+      },
+      ar: {
+        "count=*,countPlural=zero": "",
+        ...Object.fromEntries(
+          ["one", "two", "few", "many", "*"].map((category) => [
+            `count=*,countPlural=${category}`,
+            `[ar] ${category}`,
+          ]),
+        ),
+      },
+    }),
+    ["ar"],
+  );
+
+  expect(calls.map((call) => call.text)).toEqual(["No items"]);
+  expect(formsOf(result, "ar")!["count=*,countPlural=zero"]).toBe(
+    "[ar] No items",
+  );
+});
+
+test("an empty Arabic `zero` with ordinal forms too is translated once, from the exact 0 form", async () => {
+  const { calls, result } = await expand(
+    formsBundle(
+      [
+        input("count"),
+        input("pluralType"),
+        plural("countPlural", "count", { type: "$pluralType" }),
+      ],
+      ["pluralType", "count", "countPlural"],
+      {
+        en: {
+          "pluralType=cardinal,count=0,countPlural=*": "No items",
+          "pluralType=*,count=*,countPlural=one": "One item",
+          "pluralType=*,count=*,countPlural=*": "Items",
+          "pluralType=ordinal,count=*,countPlural=*": "Nth",
+        },
+        ar: {
+          "pluralType=*,count=*,countPlural=zero": "",
+          ...Object.fromEntries(
+            ["one", "two", "few", "many", "*"].map((category) => [
+              `pluralType=*,count=*,countPlural=${category}`,
+              `[ar] ${category}`,
+            ]),
+          ),
+          "pluralType=ordinal,count=*,countPlural=*": "[ar] Nth",
+        },
+      },
+    ),
+    ["ar"],
+  );
+
+  expect(calls.map((call) => call.text)).toEqual(["No items"]);
+  expect(formsOf(result, "ar")!["pluralType=*,count=*,countPlural=zero"]).toBe(
+    "[ar] No items",
+  );
+});
+
+test("an empty form its language never selects is left alone", async () => {
+  // German never selects `zero`, as from an empty i18next `_zero`
+  const { calls } = await expand(
+    formsBundle(countPlural, ["countPlural"], {
+      en: items,
+      de: {
+        "countPlural=zero": "",
+        "countPlural=one": "Ein Artikel",
+        "countPlural=*": "Artikel",
+      },
+    }),
+    ["de"],
+  );
+  expect(calls).toEqual([]);
+});
