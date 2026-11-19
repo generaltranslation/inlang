@@ -34,10 +34,18 @@ import type {
 const MAX_TEXTS_PER_REQUEST = 50;
 
 /**
- * Requests in flight at once, for every provider. Sending every request at
- * once runs into the providers' rate limits on large projects.
+ * Batch requests in flight at once. Sending every request at once runs into
+ * the providers' rate limits on large projects.
  */
 const MAX_CONCURRENT_REQUESTS = 4;
+
+/**
+ * Requests in flight at once for a provider that translates one text per
+ * request (Google, DeepL, OpenAI; the community service sends at most 6 of
+ * them at once). With only 4, a large project would take minutes;
+ * rate-limited requests are sent again.
+ */
+const MAX_CONCURRENT_TEXT_REQUESTS = 16;
 
 /**
  * A rate-limited request (429) is sent again at most this many times, after
@@ -457,10 +465,10 @@ function hasUnknownPluralRules(
 }
 
 /**
- * Translates the missing translations with at most `MAX_CONCURRENT_REQUESTS`
- * requests in flight. A batch provider gets the texts of each target locale in
- * requests of at most `MAX_TEXTS_PER_REQUEST`; a single-text provider gets
- * one request per text.
+ * Translates the missing translations. A batch provider gets the texts of each
+ * target locale in requests of at most `MAX_TEXTS_PER_REQUEST`, with at most
+ * `MAX_CONCURRENT_REQUESTS` in flight; a single-text provider gets one request
+ * per text, with at most `MAX_CONCURRENT_TEXT_REQUESTS` in flight.
  *
  * A failed text does not stop unrelated requests. A rate-limited request is
  * sent again (see `MAX_RATE_LIMIT_RETRIES`). A provider failure (including a
@@ -494,6 +502,7 @@ export async function translateMissing(args: {
             text,
             ...locales,
             ...(context ? { context } : {}),
+            signal: stop.signal,
           });
           return result.ok
             ? { ok: true, translatedTexts: { [key]: result.translatedText } }
@@ -568,8 +577,9 @@ export async function translateMissing(args: {
         (error): TranslateFailure => ({ ok: false, error: String(error) }),
       );
       if (!result.ok) {
-        // a rate limit whose retry the stop cut short isn't a cause of its own
-        if (!(result.rateLimited && stop.signal.aborted)) {
+        // a rate limit whose retry the stop cut short, or a request the stop
+        // kept from being sent, isn't a cause of its own
+        if (!((result.rateLimited || result.stopped) && stop.signal.aborted)) {
           errors.add(result.error);
         }
         if (result.scope !== "text") stop.abort();
@@ -577,7 +587,14 @@ export async function translateMissing(args: {
     }
   };
   await Promise.all(
-    Array.from({ length: MAX_CONCURRENT_REQUESTS }, () => worker()),
+    Array.from(
+      {
+        length: batched
+          ? MAX_CONCURRENT_REQUESTS
+          : MAX_CONCURRENT_TEXT_REQUESTS,
+      },
+      () => worker(),
+    ),
   );
   return errors.size > 0
     ? { ok: false, error: [...errors].join("\n"), translations }
