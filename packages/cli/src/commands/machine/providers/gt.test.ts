@@ -207,7 +207,129 @@ describe("createGtTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error:
-        "General Translation could not bill this request. Check your billing: https://dash.generaltranslation.com\nTo use the community service, set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco. For another provider, see https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok.",
+        "General Translation could not bill this request. Check your billing: https://dash.generaltranslation.com",
+    });
+  });
+
+  test("reports a key without the Runtime translation permission", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        {
+          error:
+            "API key is missing required permission: project:translations:generate",
+        },
+        403,
+      ),
+    );
+
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-api-key-3",
+      userAgent: "inlang-cli/0.0.3",
+    }).translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: { greeting: { text: "Hello" } },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        "General Translation rejected the request: this API key needs the Runtime translation permission. Edit the key at https://dash.generaltranslation.com.",
+    });
+  });
+
+  test.each([
+    {
+      name: "JSON",
+      body: JSON.stringify({
+        error:
+          "Target locale(s) not authorized: de. Please contact support@generaltranslation.com to add them to your project.",
+      }),
+      error:
+        "General Translation rejected the request: Target locale(s) not authorized: de. Please contact support@generaltranslation.com to add them to your project.",
+    },
+    {
+      name: "plain text",
+      body: "Key gtx-api-key-4 is blocked\nfrom this network\n",
+      error:
+        "General Translation rejected the request: Key *** is blocked from this network.",
+    },
+    {
+      name: "text with terminal escapes",
+      body: "\x1b]0;title\x07\x1b[2JForbidden!",
+      error: "General Translation rejected the request: ]0;title[2JForbidden!",
+    },
+  ])(
+    "reports another 403 with its reason from $name, without the key",
+    async ({ body, error }) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(body, { status: 403, statusText: "Forbidden" }),
+      );
+
+      const result = await createGtTranslateProvider({
+        apiKey: "gtx-api-key-4",
+        userAgent: "inlang-cli/0.0.4",
+      }).translateBatch({
+        sourceLocale: "en",
+        targetLocale: "de",
+        texts: { greeting: { text: "Hello" } },
+      });
+
+      expect(result).toEqual({ ok: false, error });
+    },
+  );
+
+  test.each([
+    {
+      name: "an HTML page",
+      body: "<!DOCTYPE html><html><body>Forbidden</body></html>",
+    },
+    { name: "an empty body", body: "" },
+    { name: "a body too long to quote", body: "Forbidden. ".repeat(30) },
+    { name: "JSON without a reason", body: JSON.stringify({ error: null }) },
+  ])("points a 403 with $name to the API key", async ({ body }) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(body, { status: 403, statusText: "Forbidden" }),
+    );
+
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-api-key-5",
+      userAgent: "inlang-cli/0.0.5",
+    }).translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: { greeting: { text: "Hello" } },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        "General Translation rejected the request. Check the API key at https://dash.generaltranslation.com.",
+    });
+  });
+
+  test("gives up on a 403 whose body doesn't finish", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      status: 403,
+      ok: false,
+      text: () =>
+        Promise.reject(
+          new DOMException("The operation timed out.", "TimeoutError"),
+        ),
+    } as Response);
+
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-api-key-6",
+      userAgent: "inlang-cli/0.0.6",
+    }).translateBatch({
+      sourceLocale: "en",
+      targetLocale: "de",
+      texts: { greeting: { text: "Hello" } },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "General Translation didn't answer within 5 minutes.",
     });
   });
 
