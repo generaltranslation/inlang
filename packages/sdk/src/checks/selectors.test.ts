@@ -593,3 +593,84 @@ test("only an exact or single-number selector's input may be spelled out", () =>
 		)
 	).toEqual([]);
 });
+
+test("a category is translated from the reference's category for its numbers, not the one of the same name", () => {
+	// French `many` is for millions ("1 million de fichiers"); Russian `many` (5–20, 25…) is French `other`
+	const french = [
+		variant({ countPlural: "one" }),
+		variant({ countPlural: "many" }),
+		variant({ countPlural: "*" }),
+	];
+	expect(sources(message("ru", ["countPlural"]), plural, french, "fr")).toEqual(
+		["one <- *", "few <- *", "many <- *", "* <- *"]
+	);
+	// Arabic `few` (3–10) is Russian `few` (2–4) for 3 and 4 only, so it is the catch-all's;
+	// Arabic `zero` (0) and `two` (2) are one number each, Russian `many` and `few`
+	const russian = [
+		variant({ countPlural: "one" }),
+		variant({ countPlural: "few" }),
+		variant({ countPlural: "many" }),
+		variant({ countPlural: "*" }),
+	];
+	expect(
+		sources(message("ar", ["countPlural"]), plural, russian, "ru")
+	).toEqual([
+		"zero <- many",
+		"one <- one",
+		"two <- few",
+		"few <- *",
+		"many <- *",
+		"* <- *",
+	]);
+	// the same numbers keep their category: Polish `few` is Russian `few`, but Polish
+	// `many` also has 21, 31…, Russian `one`
+	expect(
+		sources(message("pl", ["countPlural"]), plural, russian, "ru")
+	).toEqual(["one <- one", "few <- few", "many <- *", "* <- *"]);
+	// only whole numbers are compared: Croatian `one` has 1.1, Russian `one` doesn't
+	expect(
+		sources(message("hr", ["countPlural"]), plural, russian, "ru")
+	).toEqual(["one <- one", "few <- few", "* <- *"]);
+});
+
+test("a category without numbers keeps its name, and `other` is the catch-all", () => {
+	const source = (
+		target: Record<string, string>,
+		reference: { matches: Match[] }[],
+		referenceLocale: string,
+		targetLocale: string
+	) =>
+		sourceVariantFor({
+			target: variant(target).matches,
+			reference,
+			declarations: plural,
+			referenceLocale,
+			targetLocale,
+		});
+	// only millions select French `many`: Spanish `many` is for millions too
+	const spanish = [
+		variant({ countPlural: "one" }),
+		variant({ countPlural: "many" }),
+		variant({ countPlural: "*" }),
+	];
+	expect(source({ countPlural: "many" }, spanish, "es", "fr")).toBe(spanish[1]);
+	// English has no `many`
+	const english = [
+		variant({ countPlural: "one" }),
+		variant({ countPlural: "other" }),
+	];
+	expect(source({ countPlural: "many" }, english, "en", "fr")).toBe(english[1]);
+	// unknown plural rules in the reference's locale
+	expect(source({ countPlural: "one" }, english, "zz", "de")).toBe(english[0]);
+	// every Lithuanian `other` number (0, 10–20…) is Latvian `zero`, but `other`
+	// is the catch-all, as `*` is
+	const latvian = [
+		variant({ countPlural: "zero" }),
+		variant({ countPlural: "one" }),
+		variant({ countPlural: "*" }),
+	];
+	expect(source({ countPlural: "other" }, latvian, "lv", "lt")).toBe(
+		latvian[2]
+	);
+	expect(source({ countPlural: "*" }, latvian, "lv", "lt")).toBe(latvian[2]);
+});

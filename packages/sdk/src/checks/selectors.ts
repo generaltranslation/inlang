@@ -121,6 +121,12 @@ export type PluralRules = {
 	requiredCategories: string[];
 	/** Categories that select exactly one number, e.g. German "one" (1) but not Russian "one" (1, 21, 31, …). */
 	singleNumberCategories: string[];
+	/**
+	 * Sample numbers (0–1000 and some decimals up to 10.1, before the offset) each category
+	 * selects, to compare categories across locales. Categories that only
+	 * millions or compact exponents select have none.
+	 */
+	sampleNumbers: ReadonlyMap<string, ReadonlySet<number>>;
 	/** `Intl.PluralRules` with the selector's options, to choose a category for a number. */
 	rules: Intl.PluralRules;
 };
@@ -219,6 +225,7 @@ function rulesOf(
 							([category, values]) => category !== "other" && values.size === 1
 						)
 						.map(([category]) => category),
+					sampleNumbers: numbers,
 					rules,
 				};
 			}
@@ -891,13 +898,17 @@ export function missingVariants(
  * selectors.
  *
  * - Exact numbers (ICU `=0`) must match.
- * - The form's numbers have the form's category in the reference, unless
- *   the reference's locale lacks it: then they are `other` there, matched by
- *   an explicit `other` or the catch-all. Russian `few` comes from English
- *   `*`, and so does the translation's catch-all.
- * - So are the numbers of a category that is one number in the reference but
- *   more in the translation, most of which are `other` there: Russian `one`
- *   (1, 21, 31…) is not translated from English `one` ("One file").
+ * - A plural category comes from the category the reference's locale
+ *   selects for the category's whole numbers (its decimals, if it has none),
+ *   not the one of the same name. When they fall in more than one, it comes
+ *   from `other`, matched by an explicit `other` or the catch-all. German
+ *   `one` (1) comes from English `one`, but Russian `one` (1, 21, 31…) and
+ *   `few` come from English `*`, and Russian `many` (5–20, 25…) from French
+ *   `*` rather than French `many` (millions). The translation's `other` and
+ *   catch-all come from the reference's.
+ * - A category without numbers (only millions select it), or with unknown
+ *   plural rules in either locale, comes from the reference's category of the
+ *   same name, or from `other` if the reference's locale lacks it.
  * - A plural with a variable type (`type=$pluralType`) has the type the form
  *   matches, see {@link pluralRules}.
  * - Of the variants whose keys all hold, the runtime shows the one with
@@ -955,19 +966,39 @@ export function sourceVariantFor<V extends WithMatches>({
 			referenceLocale,
 			target
 		);
-		// the reference's text for one number may spell it out ("One file")
-		const spelledOut =
-			(rules?.singleNumberCategories.includes(key) ?? false) &&
-			!pluralRules(
+		const samples = [
+			...(pluralRules(
 				group.selector,
 				declarations,
 				targetLocale,
 				target
-			)?.singleNumberCategories.includes(key);
+			)?.sampleNumbers.get(key) ?? []),
+		];
+		// Whole numbers, if the category has any: languages that agree on them
+		// can still put decimals in different categories (Croatian `one` has
+		// 1.1, Russian `one` doesn't), and counts are mostly whole.
+		const integers = samples.filter(Number.isInteger);
+		const numbers = integers.length > 0 ? integers : samples;
+		// The reference shows the text of the category its locale selects for
+		// the form's numbers. Numbers in more than one category have no one
+		// text, so they take the catch-all's.
+		const selected =
+			rules && numbers.length > 0
+				? new Set(numbers.map((number) => rules.rules.select(number)))
+				: undefined;
 		const category =
-			key === "*" || spelledOut || (rules && !rules.categories.includes(key))
+			key === "*" || key === "other"
 				? "other"
-				: key;
+				: selected
+					? selected.size === 1
+						? [...selected][0]!
+						: "other"
+					: // Without the form's numbers (unknown rules in the
+						// translation, or a category only millions select), it
+						// keeps its name, if the reference's locale has it.
+						rules && !rules.categories.includes(key)
+						? "other"
+						: key;
 		return [category, "*"];
 	});
 	// Paraglide checks the variants with a literal key on an earlier selector first
