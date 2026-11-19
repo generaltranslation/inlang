@@ -208,7 +208,14 @@ export async function translateCommandAction(args: {
             result.translations.get(translation)!,
           ]),
       );
-      return { id, plan, notCreated, translations };
+      // Applied before the warnings, which writes nothing: a new message
+      // with a rejected translation isn't created either.
+      const bundle =
+        translations.size > 0 ? plan.apply(translations) : undefined;
+      for (const { locale } of bundle?.rejected ?? []) {
+        if (plan.newLocales.has(locale)) notCreated.add(locale);
+      }
+      return { id, plan, notCreated, translations, bundle };
     });
 
     // Before writing, so that a failed write doesn't lose them.
@@ -217,11 +224,10 @@ export async function translateCommandAction(args: {
     /** why translations were rejected, by bundle id, by locale */
     const rejected = new Map<string, Map<string, Set<string>>>();
     let translated = 0;
-    for (const { plan, translations } of writes) {
+    for (const { translations, bundle } of writes) {
       // Unchanged bundles aren't written back.
-      if (translations.size === 0) continue;
+      if (!bundle) continue;
       translated += translations.size;
-      const bundle = plan.apply(translations);
       await upsertBundleNested(args.project.db, bundle.data);
       // variants that got a new id to keep the order of the source
       // message; deleted after the write, so that nothing is lost if it
@@ -271,8 +277,8 @@ export async function translateCommandAction(args: {
 
 /**
  * Warns about the plurals of each bundle (see `PluralReport`), but not about a
- * new message that isn't created because one of its translations failed: the
- * next run translates it whole.
+ * new message that isn't created because one of its translations failed or
+ * was rejected: the next run translates it whole.
  */
 function warnAboutPlurals(
   writes: Array<{

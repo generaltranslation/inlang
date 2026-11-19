@@ -1536,3 +1536,63 @@ test("plurals are reported before anything is written, so a failed write keeps t
     await project.close();
   }
 });
+
+test("a new message with a rejected translation isn't created, and isn't reported then", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  const withCatchAll = (bundle: NewBundleNested, text: string) => {
+    bundle.messages[0]!.variants[1]!.pattern = [{ type: "text", value: text }];
+    return bundle;
+  };
+  await insertBundleNested(
+    project.db,
+    withCatchAll(pluralBundle("cart"), "Carts"),
+  );
+  // a Russian message that exists, with its `one`
+  const bag = withCatchAll(pluralBundle("bag"), "Bags");
+  bag.messages.push({
+    id: "bag_ru",
+    bundle_id: "bag",
+    locale: "ru",
+    selectors: bag.messages[0]!.selectors,
+    variants: [
+      {
+        id: "bag_ru_one",
+        message_id: "bag_ru",
+        matches: bag.messages[0]!.variants[0]!.matches,
+        pattern: [{ type: "text", value: "Сумка" }],
+      },
+    ],
+  } as never);
+  await insertBundleNested(project.db, bag);
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const warn = vi.spyOn(log, "warn");
+  // "Carts" and "Bags" come back empty, so they are rejected
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: true,
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts).map(([key, { text }]) => [
+        key,
+        text === "Carts" || text === "Bags"
+          ? ""
+          : `${text} (${args.targetLocale})`,
+      ]),
+    ),
+  }));
+  try {
+    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
+      "Some translations weren't saved",
+    );
+    // the message that exists is still reported; the one not created isn't
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): bag, items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+    expect(await russianMessage(project, "cart")).toBeUndefined();
+    expect((await russianMessage(project, "bag")).variants).toHaveLength(1);
+  } finally {
+    await project.close();
+  }
+});
