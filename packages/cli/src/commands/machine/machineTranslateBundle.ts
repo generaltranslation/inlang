@@ -707,9 +707,14 @@ export async function translateMissing(args: {
         // when one of them is missing or isn't a valid pattern.
         let textError: string | undefined;
         for (const [index, translation] of chunk.entries()) {
-          const text = result.translatedTexts?.[String(index)];
+          const text: unknown = result.translatedTexts?.[String(index)];
           if (text === undefined) {
             textError ??= `No translation was returned for "${translation.text}".`;
+            continue;
+          }
+          // a malformed answer, such as 42 or {}, would parse as a blank text
+          if (typeof text !== "string") {
+            textError ??= `The translation of "${translation.text}" isn't text.`;
             continue;
           }
           try {

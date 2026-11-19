@@ -1127,3 +1127,35 @@ test("a message without forms isn't filled when one of its translations is rejec
   const fr = result.data!.messages.find((m) => m.locale === "fr")!;
   expect(fr.variants).toEqual([]);
 });
+
+test.each([[42], [false], [{}], [[]]])(
+  "a translation that isn't text (%j) fails instead of being saved blank",
+  async (value) => {
+    const bundle = pluralBundle([]);
+    bundle.messages.pop();
+    const plan = planBundleTranslation({
+      bundle,
+      sourceLocale: "en",
+      targetLocales: ["de"],
+    });
+    if ("error" in plan) throw new Error(plan.error);
+    const result = await translateMissing({
+      provider: {
+        translateBatch: async ({ texts }) => ({
+          ok: true,
+          translatedTexts: Object.fromEntries(
+            Object.keys(texts).map((key) => [key, value as never]),
+          ),
+        }),
+      },
+      sourceLocale: "en",
+      missing: plan.missing,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'The translation of "One item" isn\'t text.',
+    });
+    expect(result.translations.size).toBe(0);
+  },
+);
