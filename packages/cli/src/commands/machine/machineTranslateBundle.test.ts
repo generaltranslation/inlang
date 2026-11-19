@@ -701,3 +701,32 @@ test("forms the source lacks in its own locale too aren't reported", async () =>
     { locale: "ru", categories: ["few", "many"] },
   ]);
 });
+
+test.each<[string, Array<[string, string]> | undefined]>([
+  ["a new message", undefined],
+  ["a message without that variant", [["*", "Viele Dinge"]]],
+])("a blank source isn't sent for translation, for %s", async (_, de) => {
+  const bundle = pluralBundle(de ?? []);
+  bundle.messages[0]!.variants[0]!.pattern = [];
+  if (!de) bundle.messages.pop();
+  const texts: string[] = [];
+  const result = await machineTranslateBundle({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+    provider: {
+      translateText: async ({ text }) => {
+        texts.push(text);
+        // as a provider that rejects empty text
+        return text
+          ? { ok: true, translatedText: "Viele Dinge" }
+          : { ok: false, error: "empty text" };
+      },
+    },
+  });
+
+  expect(result.error).toBeUndefined();
+  expect(texts).toEqual(de ? [] : ["Many items"]);
+  const translated = result.data!.messages.find((m) => m.locale === "de")!;
+  expect(valuesOf(translated)).toEqual(["*"]);
+});
