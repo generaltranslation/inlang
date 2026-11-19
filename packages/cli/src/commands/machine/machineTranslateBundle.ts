@@ -700,7 +700,8 @@ function hasUnknownPluralRules(
  * a `*`.
  *
  * Context identifies each plural input, its target form and example numbers,
- * even when category names match: Russian and Arabic `few` differ. Exact
+ * even when the source's form has the same name, as English `one` has for
+ * German `one`. Exact
  * numbers get their own guidance instead of the plural catch-all's.
  */
 function missingForms(args: {

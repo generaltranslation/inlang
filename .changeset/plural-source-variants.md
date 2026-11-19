@@ -3,9 +3,9 @@
 "@inlang/editor-component": patch
 ---
 
-Add `sourceVariantFor`: the reference variant a form of a translation is translated from, the one the reference shows at runtime for the form's inputs (Russian `few` from English `*`).
+Add `sourceVariantFor`: the reference variant a form of a translation is translated from, the one the reference shows at runtime for the form's inputs. A plural category comes from the reference's category for the same numbers, not the one with the same name: Russian `few` from English `*`, and Russian `many` from French `*` rather than French `many` (millions).
 
-`pluralRules` takes a form's matches to resolve a plural whose type is a variable (i18next's `type=$pluralType`).
+`pluralRules` takes a form's matches to resolve a plural whose type is a variable (i18next's `type=$pluralType`), and gives each category's sample numbers (`sampleNumbers`).
 
 Move `pluralExamples` from `@inlang/editor-component` (which still exports it) to `@inlang/sdk`.
 
