@@ -414,12 +414,12 @@ export function planBundleTranslation(
             ) && !variantCovers(variant, sourceVariant.matches, declarations),
         );
 
-      // A blank variant is missing, as `inlang check` reports it, unless its
-      // source is blank too: then a translation can't fill it.
+      // A blank source can't be translated, and a provider may reject it, so
+      // it is skipped whether or not the target has the variant. A blank
+      // target variant is missing, as `inlang check` reports it.
       if (
-        existingVariant &&
-        (!isEmptyPattern(existingVariant.pattern) ||
-          isEmptyPattern(sourceVariant.pattern))
+        isEmptyPattern(sourceVariant.pattern) ||
+        (existingVariant && !isEmptyPattern(existingVariant.pattern))
       ) {
         continue;
       }
@@ -776,12 +776,9 @@ function missingForms(args: {
       referenceLocale: args.sourceLocale,
       targetLocale: target.locale,
     });
-    // a blank source can't fill a blank variant
-    if (
-      !sourceVariant ||
-      (empty.length > 0 && isEmptyPattern(sourceVariant.pattern))
-    )
-      continue;
+    // A blank source can't be translated, and a provider may reject it, so
+    // the form is left out, whether or not the target has a variant for it.
+    if (!sourceVariant || isEmptyPattern(sourceVariant.pattern)) continue;
     const plurals = form.flatMap(({ key }) => {
       if (!isPluralSelector(key, declarations)) return [];
       const input = resolveInputVariable(key, declarations);
