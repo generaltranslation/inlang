@@ -14,6 +14,7 @@ import type {
   TranslateTextResult,
 } from "./providers/types.js";
 import {
+  createDemosjarcoTranslateProvider,
   retryWait,
   SERVICE_UNAVAILABLE_ERROR,
 } from "./providers/demosjarco.js";
@@ -429,6 +430,47 @@ test("a failed save fails the run, without claiming success", async () => {
   }
 });
 
+test("a failed save still says why translation stopped", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  skipRetryDelay();
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"alpha": "Alpha", "beta": "Beta"}`,
+    de: `{}`,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      if (query.get("q") === "Beta") return unavailableResponse();
+      return Response.json({
+        data: {
+          translations: [
+            { translatedText: `${query.get("q")} (${query.get("target")})` },
+          ],
+        },
+      });
+    }),
+  );
+  const de = nodePath.join(path, "../messages/de.json");
+  fs.chmodSync(de, 0o444);
+  try {
+    const error = await translateAndSave({ project, path }).catch(
+      (error: unknown) => error as Error,
+    );
+    expect(error).toBeInstanceOf(MachineTranslateError);
+    // the provider's failure, then the save's, without "Saved the 1 translation"
+    expect((error as Error).message).toMatch(
+      new RegExp(
+        `^${SERVICE_UNAVAILABLE_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\nThe translations couldn't be saved: .*EACCES`,
+      ),
+    );
+    expect(read("de")).toBe(`{}`);
+  } finally {
+    fs.chmodSync(de, 0o644);
+    await cleanup();
+  }
+});
+
 test("a new message gets a locale only with all its translations", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
   skipRetryDelay();
@@ -717,8 +759,8 @@ test("a blank translation is missing unless its source is blank too", async () =
   }
 });
 
-test("at most 4 requests are in flight and provider failures stop new requests", async () => {
-  const project = await projectWithTextBundles(["en", "de"], 7);
+test("at most 16 single-text requests are in flight and provider failures stop new requests", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 20);
   /** Settles a request in flight, successfully or not. */
   const pending: Array<(failure?: TranslateFailure) => void> = [];
   const provider = {
@@ -734,15 +776,15 @@ test("at most 4 requests are in flight and provider failures stop new requests",
       () => undefined,
       (error: unknown) => error,
     );
-    await vi.waitFor(() => expect(pending).toHaveLength(4));
+    await vi.waitFor(() => expect(pending).toHaveLength(16));
     await settle();
-    expect(pending).toHaveLength(4);
+    expect(pending).toHaveLength(16);
     // a finished request makes room for one more
     pending[0]!();
-    await vi.waitFor(() => expect(pending).toHaveLength(5));
+    await vi.waitFor(() => expect(pending).toHaveLength(17));
     pending[1]!({ ok: false, error: "First failure." });
     await settle();
-    expect(pending).toHaveLength(5);
+    expect(pending).toHaveLength(17);
     // a request in flight that fails after the first failure
     pending[2]!({ ok: false, error: "Another failure." });
     for (const settleRequest of pending.slice(3)) settleRequest();
@@ -750,9 +792,80 @@ test("at most 4 requests are in flight and provider failures stop new requests",
     const error = await run;
     expect(error).toBeInstanceOf(MachineTranslateError);
     expect((error as Error).message).toBe(
-      "First failure.\nAnother failure.\nSaved the 3 translations that came back. Run again to translate the rest.",
+      "First failure.\nAnother failure.\nSaved the 15 translations that came back. Run again to translate the rest.",
     );
-    expect(pending).toHaveLength(5);
+    expect(pending).toHaveLength(17);
+  } finally {
+    await project.close();
+  }
+});
+
+test("a provider failure stops requests the community service has queued", async () => {
+  // 16 requests in flight, of which the service sends 6 at once
+  const project = await projectWithTextBundles(["en", "de"], 20);
+  const sent: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      sent.push(query.get("q")!);
+      if (query.get("q") === "Text 0") {
+        return new Response(null, { status: 401, statusText: "Unauthorized" });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return Response.json({
+        data: { translations: [{ translatedText: "x" }] },
+      });
+    }),
+  );
+  try {
+    const error = (await translateCommandAction({
+      project,
+      provider: createDemosjarcoTranslateProvider(),
+    }).catch((error: unknown) => error)) as Error;
+    // the 6 sent at once, and at most the one that got the failure's slot
+    // before the run stopped; without the stop, all 20 would be sent
+    expect(sent.length).toBeLessThanOrEqual(7);
+    // the requests the stop kept from being sent aren't failures of their own
+    expect(error.message).toMatch(
+      /^401 Unauthorized: translating from en to de\nSaved the \d+ translations that came back\./,
+    );
+  } finally {
+    await project.close();
+  }
+});
+
+test("at most 4 batch requests are in flight", async () => {
+  // a batch per target locale
+  const project = await projectWithTextBundles(
+    ["en", "de", "fr", "es", "it", "nl", "pt"],
+    1,
+  );
+  const pending: Array<() => void> = [];
+  const provider = {
+    translateBatch: ({ texts }: { texts: Record<string, unknown> }) =>
+      new Promise<{ ok: true; translatedTexts: Record<string, string> }>(
+        (resolve) =>
+          pending.push(() =>
+            resolve({
+              ok: true,
+              translatedTexts: Object.fromEntries(
+                Object.keys(texts).map((key) => [key, "x"]),
+              ),
+            }),
+          ),
+      ),
+  };
+  try {
+    const run = translateCommandAction({ project, provider });
+    await vi.waitFor(() => expect(pending).toHaveLength(4));
+    await settle();
+    expect(pending).toHaveLength(4);
+    for (let index = 0; index < 6; index++) {
+      await vi.waitFor(() => expect(pending.length).toBeGreaterThan(index));
+      pending[index]!();
+    }
+    expect(await run).toMatchObject({ translated: 6 });
   } finally {
     await project.close();
   }
