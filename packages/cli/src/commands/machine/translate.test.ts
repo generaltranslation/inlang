@@ -1398,3 +1398,269 @@ test("a failed save still lists the rejected translations, without what it saved
     await cleanup();
   }
 });
+
+/** A Russian message with neither selectors nor forms, such as an editor adds. */
+function withEmptyRussianMessage(bundle: NewBundleNested): NewBundleNested {
+  bundle.messages.push({
+    id: `${bundle.id}_ru`,
+    bundle_id: bundle.id,
+    locale: "ru",
+    selectors: [],
+    variants: [],
+  } as never);
+  return bundle;
+}
+
+const russianMessage = async (project: { db: any }, id: string) =>
+  (await selectBundleNested(project.db).selectAll().execute())
+    .find((bundle: { id: string }) => bundle.id === id)
+    ?.messages.find((message: { locale: string }) => message.locale === "ru");
+
+test("a translation without forms gets the source's selectors with its forms, and is reported", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(
+    project.db,
+    withEmptyRussianMessage(pluralBundle("cart")),
+  );
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({
+      project,
+      // without context, so Russian gets the source's forms and is reported
+      provider: { ...provider, supportsContext: false },
+    });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): cart\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+    const ru = await russianMessage(project, "cart");
+    expect(ru.id).toBe("cart_ru");
+    // without them, its forms would match on a selector it doesn't have
+    expect(ru.selectors).toEqual([
+      { type: "variable-reference", name: "countPlural" },
+    ]);
+    // the source's forms, in its order
+    const [bundle] = await selectBundleNested(project.db).selectAll().execute();
+    const en = bundle.messages.find(
+      (message: { locale: string }) => message.locale === "en",
+    );
+    type Variant = { matches: unknown; pattern: Array<{ value: string }> };
+    expect(
+      ru.variants.map((variant: Variant) => [variant.matches, variant.pattern]),
+    ).toEqual(
+      en.variants.map((variant: Variant) => [
+        variant.matches,
+        [{ type: "text", value: `${variant.pattern[0]!.value} (ru)` }],
+      ]),
+    );
+  } finally {
+    await project.close();
+  }
+});
+
+test("a message isn't created, or filled, without all its translations, and isn't reported then", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  const withCatchAll = (bundle: NewBundleNested, text: string) => {
+    bundle.messages[0]!.variants[1]!.pattern = [{ type: "text", value: text }];
+    return bundle;
+  };
+  // no Russian message
+  await insertBundleNested(
+    project.db,
+    withCatchAll(pluralBundle("cart"), "Carts"),
+  );
+  // a Russian message without forms
+  await insertBundleNested(
+    project.db,
+    withEmptyRussianMessage(withCatchAll(pluralBundle("bag"), "Bags")),
+  );
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider(async (args) => {
+    const translatedTexts = Object.fromEntries(
+      Object.entries(args.texts)
+        .filter(([, { text }]) => text !== "Carts" && text !== "Bags")
+        .map(([key, { text }]) => [key, `${text} (${args.targetLocale})`]),
+    );
+    return {
+      ok: false,
+      scope: "text",
+      error: "Carts and Bags failed",
+      translatedTexts,
+    };
+  });
+  try {
+    await expect(
+      translateCommandAction({
+        project,
+        // without context, so Russian gets the source's forms and is reported
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).rejects.toThrow("Carts and Bags failed");
+    // only the message that was created lacks forms
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+    expect(await russianMessage(project, "cart")).toBeUndefined();
+    expect(await russianMessage(project, "bag")).toMatchObject({
+      selectors: [],
+      variants: [],
+    });
+    expect((await russianMessage(project, "items")).variants).toHaveLength(2);
+  } finally {
+    await project.close();
+  }
+});
+
+test("unknown plural rules aren't reported for a message that isn't created", async () => {
+  const project = await projectWithTextBundles(["en", "x-foo"], 0);
+  const cart = pluralBundle("cart");
+  cart.messages[0]!.variants[1]!.pattern = [{ type: "text", value: "Carts" }];
+  await insertBundleNested(project.db, cart);
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: false,
+    scope: "text",
+    error: "Carts failed",
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts)
+        .filter(([, { text }]) => text !== "Carts")
+        .map(([key, { text }]) => [key, `${text} (${args.targetLocale})`]),
+    ),
+  }));
+  try {
+    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
+      "Carts failed",
+    );
+    // nothing was copied
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    await project.close();
+  }
+});
+
+test("plurals are reported before anything is written, so a failed write keeps the report", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(project.db, pluralBundle("cart"));
+  const warn = vi.spyOn(log, "warn");
+  vi.spyOn(project.db, "insertInto").mockImplementation(() => {
+    throw new Error("database is locked");
+  });
+  const { provider } = fakeBatchProvider();
+  try {
+    await expect(
+      translateCommandAction({
+        project,
+        // without context, so Russian gets the source's forms and is reported
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).rejects.toThrow("database is locked");
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): cart\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+  } finally {
+    vi.restoreAllMocks();
+    await project.close();
+  }
+});
+
+test("a new message with a rejected translation isn't created, and isn't reported then", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  const withCatchAll = (bundle: NewBundleNested, text: string) => {
+    bundle.messages[0]!.variants[1]!.pattern = [{ type: "text", value: text }];
+    return bundle;
+  };
+  await insertBundleNested(
+    project.db,
+    withCatchAll(pluralBundle("cart"), "Carts"),
+  );
+  // a Russian message that exists, with its `one`
+  const bag = withCatchAll(pluralBundle("bag"), "Bags");
+  bag.messages.push({
+    id: "bag_ru",
+    bundle_id: "bag",
+    locale: "ru",
+    selectors: bag.messages[0]!.selectors,
+    variants: [
+      {
+        id: "bag_ru_one",
+        message_id: "bag_ru",
+        matches: bag.messages[0]!.variants[0]!.matches,
+        pattern: [{ type: "text", value: "Сумка" }],
+      },
+    ],
+  } as never);
+  await insertBundleNested(project.db, bag);
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const warn = vi.spyOn(log, "warn");
+  // "Carts" and "Bags" come back empty, so they are rejected
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: true,
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts).map(([key, { text }]) => [
+        key,
+        text === "Carts" || text === "Bags"
+          ? ""
+          : `${text} (${args.targetLocale})`,
+      ]),
+    ),
+  }));
+  try {
+    await expect(
+      translateCommandAction({
+        project,
+        // without context, so Russian gets the source's forms and is reported
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).rejects.toThrow("Some translations weren't saved");
+    // the message that exists is still reported; the one not created isn't
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): bag, items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+    expect(await russianMessage(project, "cart")).toBeUndefined();
+    expect((await russianMessage(project, "bag")).variants).toHaveLength(1);
+  } finally {
+    await project.close();
+  }
+});
+
+test("with a provider that uses context, a translation without forms gets every form and the source's selectors", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(
+    project.db,
+    withEmptyRussianMessage(pluralBundle("cart")),
+  );
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    const ru = await russianMessage(project, "cart");
+    expect(ru.id).toBe("cart_ru");
+    expect(ru.selectors).toEqual([
+      { type: "variable-reference", name: "countPlural" },
+    ]);
+    expect(
+      ru.variants.map(
+        (variant: { matches: Array<{ value?: string }> }) =>
+          variant.matches[0]!.value ?? "*",
+      ),
+    ).toEqual(["one", "few", "many", "*"]);
+  } finally {
+    await project.close();
+  }
+});
