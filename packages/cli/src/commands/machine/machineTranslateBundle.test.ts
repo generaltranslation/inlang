@@ -1097,13 +1097,14 @@ test("two plurals: the context identifies each input and category", async () => 
   );
 });
 
-test("matching category names still describe the target's numbers", () => {
+test("a form whose numbers are several categories in the source is translated from its catch-all", () => {
+  // Arabic `few` (3–10) is Russian `few` and `many`, despite the name
   const plan = planBundleTranslation({
     bundle: formsBundle(countPlural, ["countPlural"], {
       ru: {
         "countPlural=one": "Один товар",
-        "countPlural=few": "Товары",
-        "countPlural=many": "Товары",
+        "countPlural=few": "Несколько товаров",
+        "countPlural=many": "Много товаров",
         "countPlural=*": "Товары",
       },
     }),
@@ -1117,8 +1118,9 @@ test("matching category names still describe the target's numbers", () => {
       (match) => match.type === "literal-match" && match.value === "few",
     ),
   )!;
+  expect(few.text).toBe("Товары");
   expect(few.context).toBe(
-    "Plural form for {count}: few (cardinal) in ar, used for n = 3–10, 103…. Translate as the few form; the source shows the few form.",
+    "Plural form for {count}: few (cardinal) in ar, used for n = 3–10, 103…. Translate as the few form; the source shows the other form.",
   );
 });
 
