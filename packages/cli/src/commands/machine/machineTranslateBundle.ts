@@ -182,12 +182,12 @@ export function planBundleTranslation(
         targetMessage &&
         findMatchingVariant(targetMessage.variants, sourceVariant.matches);
 
-      // A blank variant is missing, as `inlang check` reports it, unless its
-      // source is blank too: then a translation can't fill it.
+      // A blank source can't be translated, and a provider may reject it, so
+      // it is skipped whether or not the target has the variant. A blank
+      // target variant is missing, as `inlang check` reports it.
       if (
-        existingVariant &&
-        (!isEmptyPattern(existingVariant.pattern) ||
-          isEmptyPattern(sourceVariant.pattern))
+        isEmptyPattern(sourceVariant.pattern) ||
+        (existingVariant && !isEmptyPattern(existingVariant.pattern))
       ) {
         continue;
       }
