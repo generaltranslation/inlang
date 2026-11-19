@@ -6,6 +6,7 @@ import {
   isEmptyPattern,
   isNumericKey,
   isPluralSelector,
+  isUnreachableVariant,
   matchValue,
   missingVariants,
   pluralExamples,
@@ -240,7 +241,7 @@ export function planBundleTranslation(
     // without known rules only the catch-all is needed: the source's forms
     // are copied instead
     let unknownRules = hasUnknownPluralRules(target, declarations);
-    const forms =
+    const required =
       args.supportsContext &&
       hasPlural &&
       !unknownRules &&
@@ -251,6 +252,22 @@ export function planBundleTranslation(
             referenceVariants: sourceMessage.variants,
           })
         : undefined;
+    // The SDK requires no category only millions select, such as French
+    // `many`. An empty one the target has would still show a blank there, so
+    // it is translated too.
+    const forms = required && [
+      ...required,
+      ...target.variants
+        .filter(
+          (variant) =>
+            isEmptyPattern(variant.pattern) &&
+            !isUnreachableVariant(variant, declarations, targetLocale) &&
+            !required.some((form) =>
+              variantCovers(variant, form, declarations, targetLocale),
+            ),
+        )
+        .map((variant) => variant.matches),
+    ];
     // The SDK plans plural types as i18next lays them out, with cardinal
     // categories under the catch-all type. A source form in a branch the plan
     // lacks, such as `pluralType=cardinal` with its own categories, would be
@@ -662,14 +679,21 @@ function missingForms(args: {
 }): MissingTranslation[] {
   const { target, forms, sourceMessage, declarations } = args;
   const missing: MissingTranslation[] = [];
+  /** empty variants a form before took: each is translated once */
+  const taken = new Set<VariantRow>();
   for (const form of forms) {
     const covering = target.variants.filter((variant) =>
       variantCovers(variant, form, declarations, target.locale),
     );
-    // an empty `other` can be shown instead of a filled `*` (a literal key is
-    // preferred, or stored first), so it is still missing
-    const empty = covering.filter((variant) => isEmptyPattern(variant.pattern));
+    // An empty `other` can be shown instead of a filled `*` (a literal key is
+    // preferred, or stored first), so it is still missing. An empty variant
+    // can be the form of two: Arabic `zero` is `=0` too. Exact numbers come
+    // first in `forms`, so it keeps the exact number's meaning.
+    const empty = covering.filter(
+      (variant) => isEmptyPattern(variant.pattern) && !taken.has(variant),
+    );
     if (covering.length > 0 && empty.length === 0) continue;
+    for (const variant of empty) taken.add(variant);
     const sourceVariant = sourceVariantFor({
       target: form,
       reference: sourceMessage.variants,
