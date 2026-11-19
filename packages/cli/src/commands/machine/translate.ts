@@ -139,6 +139,8 @@ export async function translateCommandAction(args: {
         string,
         { ids: string[]; categories: Set<string> }
       >();
+      /** bundle ids whose message has other selectors than the source's, by locale */
+      const differentSelectors = new Map<string, string[]>();
       const unknownPluralRules = new Set<string>();
       for (const bundle of bundles) {
         const plan = planBundleTranslation({
@@ -160,6 +162,12 @@ export async function translateCommandAction(args: {
           for (const category of categories) entry.categories.add(category);
           incomplete.set(locale, entry);
         }
+        for (const locale of plan.differentSelectors) {
+          differentSelectors.set(locale, [
+            ...(differentSelectors.get(locale) ?? []),
+            bundle.id,
+          ]);
+        }
         for (const locale of plan.unknownPluralRules) {
           unknownPluralRules.add(locale);
         }
@@ -179,7 +187,7 @@ export async function translateCommandAction(args: {
             "Some plurals lack forms their language needs; add them by hand:",
             ...[...incomplete].map(
               ([locale, { ids, categories }]) =>
-                `  ${locale} (${[...categories].join(", ")}): ${ids.join(", ")}`,
+                `  ${locale} (${[...categories].join(", ")}): ${shortList(ids)}`,
             ),
             "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
             // a provider with context writes them, unless the selectors differ
@@ -189,6 +197,16 @@ export async function translateCommandAction(args: {
               : [
                   `General Translation writes every form a language needs: ${GT_SETUP_URL}`,
                 ]),
+          ].join("\n"),
+        );
+      }
+      if (differentSelectors.size > 0) {
+        warnings.push(
+          [
+            "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:",
+            ...[...differentSelectors].map(
+              ([locale, ids]) => `  ${locale}: ${shortList(ids)}`,
+            ),
           ].join("\n"),
         );
       }
@@ -329,4 +347,11 @@ export async function translateCommandAction(args: {
     bar?.stop();
     throw error;
   }
+}
+
+/** The first ids, and how many more there are: a project can have thousands. */
+function shortList(ids: string[], shown = 5): string {
+  return ids.length <= shown
+    ? ids.join(", ")
+    : `${ids.slice(0, shown).join(", ")}, … and ${ids.length - shown} more`;
 }
