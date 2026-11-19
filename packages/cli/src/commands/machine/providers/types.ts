@@ -4,6 +4,11 @@ export type TranslateTextArgs = {
   targetLocale: string;
   /** Shared translator guidance; never part of the text to translate. */
   context?: string;
+  /**
+   * Aborts when the run stops: a provider that queues or retries requests
+   * sends none after it, and returns a failure with `stopped`.
+   */
+  signal?: AbortSignal;
 };
 
 export type TranslateFailure = {
@@ -15,6 +20,8 @@ export type TranslateFailure = {
   rateLimited?: boolean;
   /** How long the provider asked to wait before sending it again. */
   retryAfterMs?: number;
+  /** Not sent, as the run stopped (see `TranslateTextArgs.signal`). */
+  stopped?: boolean;
 };
 
 export type TranslateTextResult =
