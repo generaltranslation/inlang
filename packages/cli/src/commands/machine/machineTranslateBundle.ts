@@ -116,6 +116,11 @@ type MissingTranslation = {
 export type BundleTranslationPlan = {
   missing: MissingTranslation[];
   /**
+   * Target locales the bundle has no message in. Added with only some of its
+   * translations, such a message could match nothing: half a plural.
+   */
+  newLocales: Set<string>;
+  /**
    * Adds the translation of each of `missing` that `translations` has to a
    * copy of the bundle.
    */
@@ -190,6 +195,12 @@ export function planBundleTranslation(
 
   return {
     missing,
+    newLocales: new Set(
+      [...targetLocales].filter(
+        (locale) =>
+          !args.bundle.messages.some((message) => message.locale === locale),
+      ),
+    ),
     apply: (translations) => {
       const copy = structuredClone(args.bundle);
       const sourceMessage = copy.messages.find(
