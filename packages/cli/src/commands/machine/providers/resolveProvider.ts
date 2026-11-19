@@ -9,6 +9,7 @@ import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
 import {
   GT_CLI,
   appendToEnvLocal,
+  envLocalProblem,
   findGtProjectId,
   gtInitArgs,
   readEnvFiles,
@@ -226,16 +227,22 @@ async function missingGtKeyError(
     .join(" ");
   const envLocal = shellQuote(nodePath.join(dir, ".env.local"));
   // gt init adds gt to a package.json in its folder, so it runs in an empty
-  // one, and the .env.local it saves there is appended to the project's. The
-  // subshell keeps the caller's working directory: an agent's shell keeps it
-  // between commands, and this command must then run again from where it was.
-  const command = `(d=$(mktemp -d) && cd "$d" && ${init} && { echo; cat .env.local; } >> ${envLocal})`;
+  // one, and the .env.local it saves there is appended to the project's, which
+  // only the user can read if it is new. The subshell keeps the caller's
+  // working directory: an agent's shell keeps it between commands, and this
+  // command must then run again from where it was.
+  const command = `(umask 077 && d=$(mktemp -d) && cd "$d" && ${init} && { echo; cat .env.local; } >> ${envLocal})`;
+  // The command appends the key as sign-in does, so it is held back where
+  // sign-in would refuse to save it.
+  const problem = await envLocalProblem(dir);
   return new MachineTranslateError(
     [
       "Machine translation needs a General Translation API key.",
       "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output or with CI set. Over SSH, open the printed sign-in URL in your browser.",
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
-      `- Agents: have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, check that git ignores .env.local, and run this command again.`,
+      problem
+        ? `- Agents: a development key can't be saved: ${problem}, then run this command again.`
+        : `- Agents: check that git ignores .env.local, have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, and run this command again.`,
       `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,
       `- Or bring your own key: ${BYOK_URL}`,
     ].join("\n"),
