@@ -1041,6 +1041,56 @@ function pluralBundle(id: string): NewBundleNested {
   };
 }
 
+test("a long list of messages is shortened, and translations with other selectors are reported", async () => {
+  const project = await projectWithTextBundles(["en", "ru", "ja"], 0);
+  const ids = ["a", "b", "c", "d", "e", "f", "g"];
+  for (const id of ids) {
+    const bundle = pluralBundle(id);
+    // a Japanese message without the plural, and with no text yet
+    bundle.messages.push({
+      id: `${id}_ja`,
+      bundle_id: id,
+      locale: "ja",
+      selectors: [],
+      variants: [
+        {
+          id: `${id}_ja_text`,
+          message_id: `${id}_ja`,
+          matches: [],
+          pattern: [],
+        },
+      ],
+    } as never);
+    await insertBundleNested(project.db, bundle);
+  }
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): a, b, c, d, e, … and 2 more\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+      [
+        "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:\n" +
+          "  ja: a, b, c, d, e, … and 2 more",
+      ],
+    ]);
+    const bundles = await selectBundleNested(project.db).selectAll().execute();
+    for (const bundle of bundles) {
+      expect(
+        bundle.messages.find(
+          (message: { locale: string }) => message.locale === "ja",
+        )?.variants,
+      ).toHaveLength(1);
+    }
+  } finally {
+    await project.close();
+  }
+});
+
 test("plurals that need forms the source lacks get the source's forms and are reported once, grouped by locale", async () => {
   const project = await projectWithTextBundles(
     ["en", "ru", "ar", "de", "x-foo"],
