@@ -54,6 +54,8 @@ export class MachineTranslateError extends Error {
   constructor(
     message: string,
     readonly translated = 0,
+    /** Why translation stopped, without what was saved. */
+    readonly failure = message,
   ) {
     super(message);
   }
@@ -83,7 +85,12 @@ export async function translateAndSave(args: {
   const { translated, bundles } = await translateCommandAction(args).catch(
     async (error) => {
       if (error instanceof MachineTranslateError && error.translated > 0) {
-        await save();
+        // a failed save mustn't hide why translation stopped
+        await save().catch((saveError: Error) => {
+          throw new MachineTranslateError(
+            `${error.failure}\n${saveError.message}`,
+          );
+        });
       }
       throw error;
     },
@@ -292,12 +299,15 @@ export async function translateCommandAction(args: {
           ),
         );
       }
+      // why translation stopped, without what was saved: a failed save
+      // reports it next to its own error
+      const failure = lines.join("\n");
       if (translated > 0) {
         lines.push(
           `Saved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back${rejected.size > 0 ? " intact" : ""}. Run again to translate the rest.`,
         );
       }
-      throw new MachineTranslateError(lines.join("\n"), translated);
+      throw new MachineTranslateError(lines.join("\n"), translated, failure);
     }
     return { translated, bundles: bundles.length };
   } catch (error) {
