@@ -423,7 +423,8 @@ export function planBundleTranslation(
 
       missing.push({
         sourceVariant,
-        matches: sourceVariant.matches,
+        // an empty Arabic `zero` for the source's `=0` is filled, not added again
+        matches: existingVariant?.matches ?? sourceVariant.matches,
         targetLocale,
         text: serializePattern(sourceVariant.pattern, {}),
         context: args.bundle.description || undefined,
@@ -831,12 +832,40 @@ function missingForms(args: {
       const sourceCategory = categoryOf(sourceVariant, key);
       // of the type the form matches, for a `type=$pluralType` plural
       const rules = pluralRules(key, declarations, target.locale, form)!;
-      const examples = pluralExamples(
-        // `pt_BR` as written in some projects: Intl needs `pt-BR`
-        target.locale.replace(/_/g, "-"),
-        rules.type,
-        { offset: rules.offset },
-      )[category];
+      // `pt_BR` as written in some projects: Intl needs `pt-BR`
+      const locale = target.locale.replace(/_/g, "-");
+      // A number with its own exact form (ICU `=0`) in this form's branch
+      // (its values for the other selectors, such as the plural type) isn't
+      // shown by this category, unless it's the category's only number
+      // (Arabic `zero`).
+      const isExactOfInput = (match: VariantRow["matches"][number]) =>
+        !resolveAnnotation(match.key, declarations) &&
+        resolveInputVariable(match.key, declarations) === input;
+      const exactNumbers = forms
+        .filter((other) =>
+          other.every(
+            (match) =>
+              match.key === key ||
+              isExactOfInput(match) ||
+              matchValue({ matches: other }, match.key) ===
+                matchValue({ matches: form }, match.key),
+          ),
+        )
+        .flatMap((other) =>
+          other.flatMap((match) =>
+            match.type === "literal-match" &&
+            isNumericKey(match.value) &&
+            isExactOfInput(match)
+              ? [match.value]
+              : [],
+          ),
+        );
+      const examples =
+        pluralExamples(locale, rules.type, {
+          offset: rules.offset,
+          exclude: exactNumbers,
+        })[category] ??
+        pluralExamples(locale, rules.type, { offset: rules.offset })[category];
       return [
         `Plural form for {${input}}: ${category} (${rules.type}) in ${target.locale}, used for n = ${examples}. Translate as the ${category} form; the source shows the ${sourceCategory} form.`,
       ];

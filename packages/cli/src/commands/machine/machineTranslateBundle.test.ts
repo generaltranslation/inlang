@@ -2114,3 +2114,51 @@ test("an added form doesn't move before a variant whose literal it has only unde
 
   expect(message.variants).toEqual([oneGuest, oneItem]);
 });
+
+test("without context, an empty Arabic `zero` is filled from the exact 0 form, not added again as `=0`", async () => {
+  const { calls, result } = await translate(
+    formsBundle(countPlural, ["count", "countPlural"], {
+      en: {
+        "count=0,countPlural=*": "No items",
+        "count=*,countPlural=one": "One item",
+        "count=*,countPlural=*": "Items",
+      },
+      ar: {
+        "count=*,countPlural=zero": "",
+        "count=*,countPlural=one": "[ar] one",
+        "count=*,countPlural=*": "[ar] *",
+      },
+    }),
+    ["ar"],
+  );
+
+  expect(calls.map((call) => call.text)).toEqual(["No items"]);
+  expect(formsOf(result, "ar")).toEqual({
+    "count=*,countPlural=zero": "[ar] No items",
+    "count=*,countPlural=one": "[ar] one",
+    "count=*,countPlural=*": "[ar] *",
+  });
+});
+
+test("a plural form's example numbers leave out the numbers an exact form takes", async () => {
+  const { calls } = await expand(
+    formsBundle(countPlural, ["count", "countPlural"], {
+      en: {
+        "count=0,countPlural=*": "No items",
+        "count=*,countPlural=one": "One item",
+        "count=*,countPlural=*": "Items",
+      },
+    }),
+    ["ru", "ar"],
+  );
+  const contexts = calls.map((call) => call.context ?? "");
+
+  // 0 is the `=0` form, not Russian `many`
+  expect(contexts).toContain(
+    "Plural form for {count}: many (cardinal) in ru, used for n = 5–20, 25…. Translate as the many form; the source shows the other form.",
+  );
+  // Arabic `zero` selects only 0, so it keeps it
+  expect(contexts).toContain(
+    "Plural form for {count}: zero (cardinal) in ar, used for n = 0. Translate as the zero form; the source shows the other form.",
+  );
+});
