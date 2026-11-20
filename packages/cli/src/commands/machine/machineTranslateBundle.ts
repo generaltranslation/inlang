@@ -1100,22 +1100,25 @@ export function orderLikeSource(
   const ordered = [...keyed]
     .sort((a, b) => a.key - b.key || a.position - b.position)
     .map(({ variant }) => variant);
-  // before the first variant that matches its inputs too, such as the target's
-  // catch-all, or a runtime that takes the first match never gets to it
+  // before the first variant that matches all its inputs too, such as the
+  // target's catch-all, or a runtime that takes the first match never gets to
+  // it: one whose every literal the added form has (`count=0` matches less)
   for (const variant of ordered.filter((each) => added.has(each))) {
     const at = ordered.indexOf(variant);
-    const before = ordered.slice(0, at).findIndex((other) =>
-      variant.matches.every((match) => {
-        const value = other.matches.find((each) => each.key === match.key);
-        return (
-          value === undefined ||
-          value.type === "catchall-match" ||
-          (match.type === "literal-match" &&
-            value.type === "literal-match" &&
-            value.value === match.value)
-        );
-      }),
-    );
+    const before = ordered
+      .slice(0, at)
+      .findIndex((other) =>
+        other.matches.every(
+          (match) =>
+            match.type !== "literal-match" ||
+            variant.matches.some(
+              (each) =>
+                each.type === "literal-match" &&
+                each.key === match.key &&
+                each.value === match.value,
+            ),
+        ),
+      );
     if (before !== -1) ordered.splice(before, 0, ...ordered.splice(at, 1));
   }
   // the first variant whose place changes, or whose id doesn't sort after
