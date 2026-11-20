@@ -1177,9 +1177,13 @@ test("a long list of messages is shortened, and translations with other selector
     await insertBundleNested(project.db, bundle);
   }
   const warn = vi.spyOn(log, "warn");
+  // without context, so Russian gets the source's forms and is reported
   const { provider } = fakeBatchProvider();
   try {
-    await translateCommandAction({ project, provider });
+    await translateCommandAction({
+      project,
+      provider: { ...provider, supportsContext: false },
+    });
     expect(warn.mock.calls).toEqual([
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
@@ -1214,6 +1218,8 @@ test("plurals that need forms the source lacks get the source's forms and are re
   }
   const warn = vi.spyOn(log, "warn");
   const { provider } = fakeBatchProvider();
+  // a provider that uses context gets every form instead
+  provider.supportsContext = false;
   try {
     await translateCommandAction({ project, provider });
     expect(warn.mock.calls).toEqual([
@@ -1236,6 +1242,27 @@ test("plurals that need forms the source lacks get the source's forms and are re
         ).toHaveLength(2);
       }
     }
+  } finally {
+    await project.close();
+  }
+});
+
+test("with a provider that uses context, every plural form is translated", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    const [bundle] = await selectBundleNested(project.db).execute();
+    expect(
+      bundle!.messages
+        .find((message) => message.locale === "ru")!
+        .variants.map((variant) =>
+          variant.matches[0]!.type === "literal-match"
+            ? variant.matches[0]!.value
+            : "*",
+        ),
+    ).toEqual(["one", "few", "many", "*"]);
   } finally {
     await project.close();
   }
@@ -1398,7 +1425,11 @@ test("a translation without forms gets the source's selectors with its forms, an
   const warn = vi.spyOn(log, "warn");
   const { provider } = fakeBatchProvider();
   try {
-    await translateCommandAction({ project, provider });
+    await translateCommandAction({
+      project,
+      // without context, so Russian gets the source's forms and is reported
+      provider: { ...provider, supportsContext: false },
+    });
     expect(warn.mock.calls).toEqual([
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
@@ -1463,9 +1494,13 @@ test("a message isn't created, or filled, without all its translations, and isn'
     };
   });
   try {
-    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
-      "Carts and Bags failed",
-    );
+    await expect(
+      translateCommandAction({
+        project,
+        // without context, so Russian gets the source's forms and is reported
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).rejects.toThrow("Carts and Bags failed");
     // only the message that was created lacks forms
     expect(warn.mock.calls).toEqual([
       [
@@ -1521,9 +1556,13 @@ test("plurals are reported before anything is written, so a failed write keeps t
   });
   const { provider } = fakeBatchProvider();
   try {
-    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
-      "database is locked",
-    );
+    await expect(
+      translateCommandAction({
+        project,
+        // without context, so Russian gets the source's forms and is reported
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).rejects.toThrow("database is locked");
     expect(warn.mock.calls).toEqual([
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
@@ -1579,9 +1618,13 @@ test("a new message with a rejected translation isn't created, and isn't reporte
     ),
   }));
   try {
-    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
-      "Some translations weren't saved",
-    );
+    await expect(
+      translateCommandAction({
+        project,
+        // without context, so Russian gets the source's forms and is reported
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).rejects.toThrow("Some translations weren't saved");
     // the message that exists is still reported; the one not created isn't
     expect(warn.mock.calls).toEqual([
       [
@@ -1592,6 +1635,31 @@ test("a new message with a rejected translation isn't created, and isn't reporte
     ]);
     expect(await russianMessage(project, "cart")).toBeUndefined();
     expect((await russianMessage(project, "bag")).variants).toHaveLength(1);
+  } finally {
+    await project.close();
+  }
+});
+
+test("with a provider that uses context, a translation without forms gets every form and the source's selectors", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(
+    project.db,
+    withEmptyRussianMessage(pluralBundle("cart")),
+  );
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    const ru = await russianMessage(project, "cart");
+    expect(ru.id).toBe("cart_ru");
+    expect(ru.selectors).toEqual([
+      { type: "variable-reference", name: "countPlural" },
+    ]);
+    expect(
+      ru.variants.map(
+        (variant: { matches: Array<{ value?: string }> }) =>
+          variant.matches[0]!.value ?? "*",
+      ),
+    ).toEqual(["one", "few", "many", "*"]);
   } finally {
     await project.close();
   }

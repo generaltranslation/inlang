@@ -13,7 +13,10 @@ export async function machineTranslateBundle(
 ): Promise<
   Partial<ReturnType<BundleTranslationPlan["apply"]>> & { error?: string }
 > {
-  const plan = planBundleTranslation(args);
+  const plan = planBundleTranslation({
+    ...args,
+    supportsContext: args.provider.supportsContext,
+  });
   if ("error" in plan) return plan;
   const result = await translateMissing({ ...args, missing: plan.missing });
   return result.ok ? plan.apply(result.translations) : { error: result.error };

@@ -4,17 +4,21 @@ import { isDeepStrictEqual } from "node:util";
 import { v7 as randomUUID } from "uuid";
 import {
   isEmptyPattern,
+  isNumericKey,
   isPluralSelector,
+  isUnreachableVariant,
   matchValue,
   missingVariants,
+  pluralExamples,
   pluralRules,
+  requiredVariants,
   resolveAnnotation,
   resolveInputVariable,
   spelledOutInputs,
   selectorGroups,
+  sourceVariantFor,
   variantCovers,
   type BundleNested,
-  type Declaration,
   type MarkupEnd,
   type MarkupStart,
   type NewBundleNested,
@@ -122,11 +126,14 @@ type MachineTranslateArgs = {
 
 /** A translation that a bundle is missing. */
 type MissingTranslation = {
+  /** The variant the translation is translated from. */
   sourceVariant: VariantRow;
+  /** The matches of the translated variant: the form of the target. */
+  matches: VariantRow["matches"];
   targetLocale: string;
   /** The source pattern, serialized for the provider. */
   text: string;
-  /** The bundle description, if any. */
+  /** The bundle description, and the plural form if it isn't the source's. */
   context?: string;
 };
 
@@ -199,11 +206,18 @@ type TranslatedBundle = {
 /**
  * Finds the translations the bundle is missing in the target locales: no
  * variant for a source variant, or an empty one.
- * Reports target locales whose plurals need categories the source lacks, see
- * `PluralReport`.
+ * With a provider that uses context, a target with the source's selectors
+ * gets every plural form its language needs instead, see `missingForms`,
+ * unless one it lacks can't be translated, as for a select value only the
+ * target has.
+ * Otherwise the source's forms are translated, and target locales whose
+ * plurals need categories the source lacks are reported, see `PluralReport`.
  */
 export function planBundleTranslation(
-  args: MachineTranslateArgs,
+  args: MachineTranslateArgs & {
+    /** Whether the provider uses context, which plural expansion needs. */
+    supportsContext?: boolean;
+  },
 ): BundleTranslationPlan | { error: string } {
   const sourceMessage = args.bundle.messages.find(
     (message) => message.locale === args.sourceLocale,
@@ -216,6 +230,9 @@ export function planBundleTranslation(
   }
 
   const { declarations } = args.bundle;
+  /** the target's forms, by locale, for the locales `missingForms` planned */
+  const formsByLocale = new Map<string, VariantRow["matches"][]>();
+  const sourceSelectors = sourceMessage.selectors.map(({ name }) => name);
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const newLocales = new Set<string>();
@@ -243,14 +260,89 @@ export function planBundleTranslation(
       selectors: isNew ? sourceMessage.selectors : targetMessage.selectors,
       variants: targetMessage?.variants ?? [],
     };
+    // without a plural only the source's forms are needed (no cross product
+    // of the selects), and no category can be missing
+    const hasPlural = target.selectors.some(({ name }) =>
+      isPluralSelector(name, declarations),
+    );
+    // without known rules only the catch-all is needed: the source's forms
+    // are copied instead
+    let unknownRules = hasUnknownPluralRules(target, declarations);
+    const required =
+      args.supportsContext &&
+      hasPlural &&
+      !unknownRules &&
+      // `orderLikeSource` puts an added form before a later form the source
+      // has, which only the source's selectors guarantee
+      target.selectors.map(({ name }) => name).join() === sourceSelectors.join()
+        ? requiredVariants(target, declarations, {
+            referenceVariants: sourceMessage.variants,
+          })
+        : undefined;
+    // The SDK requires no category only millions select, such as French
+    // `many`. One the source has is added too, or a million would show the
+    // catch-all's text, and an empty one the target has, or it would show a
+    // blank.
+    const forms =
+      required &&
+      [
+        ...sourceMessage.variants,
+        ...target.variants.filter((variant) => isEmptyPattern(variant.pattern)),
+      ].reduce(
+        (forms, variant) =>
+          isUnreachableVariant(variant, declarations, targetLocale) ||
+          forms.some((form) =>
+            variantCovers(variant, form, declarations, targetLocale),
+          )
+            ? forms
+            : withForm(forms, variant.matches),
+        required,
+      );
+    // The SDK plans plural types as i18next lays them out, with cardinal
+    // categories under the catch-all type. A source form in a branch the plan
+    // lacks, such as `pluralType=cardinal` with its own categories, would be
+    // dropped, so the source's forms are copied instead.
+    // A form the target lacks and nothing can be translated from, such as
+    // Russian `few` with a select value only the target has, would leave its
+    // numbers to the forms added next to it: `few, *` would take 2 from a
+    // hand-written `*, neuter`. Such a target keeps the source's forms, and
+    // the ones it lacks are reported.
+    const unfillable = forms?.some(
+      (form) =>
+        !target.variants.some((variant) =>
+          variantCovers(variant, form, declarations, targetLocale),
+        ) &&
+        !sourceVariantFor({
+          target: form,
+          reference: sourceMessage.variants,
+          declarations,
+          referenceLocale: args.sourceLocale,
+          targetLocale,
+        }),
+    );
+    if (required && dropsSourceBranch(sourceMessage, required, declarations))
+      unknownRules = true;
+    else if (forms && !unfillable) {
+      formsByLocale.set(targetLocale, forms);
+      missing.push(
+        ...missingForms({
+          target,
+          forms,
+          sourceMessage,
+          sourceLocale: args.sourceLocale,
+          declarations,
+          description: args.bundle.description || undefined,
+        }),
+      );
+      continue;
+    }
+
     const categories = new Set<string>();
     // The forms are the target's, so without a plural in the target no
     // category can be missing. `missingVariants` takes seconds on a message
     // with several selects, so it isn't called then (but for the rare target
     // with other selectors than the source's, below).
-    if (
-      target.selectors.some(({ name }) => isPluralSelector(name, declarations))
-    ) {
+    if (hasPlural) {
       const lackedBySource = (sourceMissing ??= missingVariants(
         sourceMessage,
         declarations,
@@ -303,10 +395,21 @@ export function planBundleTranslation(
 
     const missingBefore = missing.length;
     for (const sourceVariant of sourceMessage.variants) {
-      const existingVariant = findMatchingVariant(
-        target.variants,
-        sourceVariant.matches,
-      );
+      const existingVariant =
+        findMatchingVariant(target.variants, sourceVariant.matches) ??
+        // or the category that selects only the source's exact number: Arabic
+        // "zero" is `=0`, as i18next's Arabic `_zero` is imported (see the
+        // SDK's `variantCovers`). Only that: a literal `other` isn't the
+        // catch-all to every runtime.
+        target.variants.find(
+          (variant) =>
+            variantCovers(
+              variant,
+              sourceVariant.matches,
+              declarations,
+              targetLocale,
+            ) && !variantCovers(variant, sourceVariant.matches, declarations),
+        );
 
       // A blank variant is missing, as `inlang check` reports it, unless its
       // source is blank too: then a translation can't fill it.
@@ -320,15 +423,14 @@ export function planBundleTranslation(
 
       missing.push({
         sourceVariant,
+        // an empty Arabic `zero` for the source's `=0` is filled, not added again
+        matches: existingVariant?.matches ?? sourceVariant.matches,
         targetLocale,
         text: serializePattern(sourceVariant.pattern, {}),
         context: args.bundle.description || undefined,
       });
     }
-    if (
-      missing.length > missingBefore &&
-      hasUnknownPluralRules(target, declarations)
-    ) {
+    if (missing.length > missingBefore && unknownRules) {
       report.unknownPluralRules.push(targetLocale);
     }
   }
@@ -343,11 +445,7 @@ export function planBundleTranslation(
         const found = rejectionReasons(
           pattern,
           translation.sourceVariant.pattern,
-          spelledOutInputs(
-            translation.sourceVariant,
-            declarations,
-            translation.targetLocale,
-          ),
+          spelledOutInputs(translation, declarations, translation.targetLocale),
           declarations,
         );
         if (found.length > 0) reasons.set(translation, found);
@@ -370,7 +468,7 @@ export function planBundleTranslation(
       const sourceMessage = copy.messages.find(
         (message) => message.locale === args.sourceLocale,
       )!;
-      /** variants added to messages that existed, by message */
+      /** variants added to messages of `args.bundle`, by message */
       const addedVariants = new Map<
         BundleNested["messages"][number],
         Set<VariantRow>
@@ -379,7 +477,7 @@ export function planBundleTranslation(
       for (const translation of missing) {
         const pattern = translations.get(translation);
         if (!pattern || rejected.includes(translation)) continue;
-        const { sourceVariant, targetLocale } = translation;
+        const { matches, targetLocale } = translation;
         const targetMessage = copy.messages.find(
           (message) => message.locale === targetLocale,
         );
@@ -387,7 +485,7 @@ export function planBundleTranslation(
         if (targetMessage) {
           const existingVariant = findMatchingVariant(
             targetMessage.variants,
-            sourceVariant.matches,
+            matches,
           );
 
           // only an empty variant is missing a translation
@@ -402,13 +500,16 @@ export function planBundleTranslation(
             const variant = {
               id: randomUUID(),
               message_id: targetMessage.id,
-              matches: sourceVariant.matches,
+              matches,
               pattern,
             } satisfies VariantRow;
             targetMessage.variants.push(variant);
-            const added = addedVariants.get(targetMessage) ?? new Set();
-            added.add(variant);
-            addedVariants.set(targetMessage, added);
+            // a new message, or one without forms, is written in order
+            if (!newLocales.has(targetLocale)) {
+              const added = addedVariants.get(targetMessage) ?? new Set();
+              added.add(variant);
+              addedVariants.set(targetMessage, added);
+            }
           }
         } else {
           const newMessageId = randomUUID();
@@ -420,7 +521,7 @@ export function planBundleTranslation(
               {
                 id: randomUUID(),
                 message_id: newMessageId,
-                matches: sourceVariant.matches,
+                matches,
                 pattern,
               } satisfies VariantRow,
             ],
@@ -431,7 +532,13 @@ export function planBundleTranslation(
       const replacedVariantIds: string[] = [];
       for (const [message, added] of addedVariants) {
         replacedVariantIds.push(
-          ...orderLikeSource(message, sourceMessage.variants, added),
+          ...orderLikeSource(
+            message,
+            sourceMessage.variants,
+            added,
+            copy.declarations,
+            formsByLocale.get(message.locale),
+          ),
         );
       }
       return {
@@ -575,29 +682,234 @@ function newCategories(
 }
 
 /**
+ * True when a source form is in a branch none of `forms` has. A branch is a
+ * form's value for each selector but its plurals, whose categories differ by
+ * locale; a selector a form leaves out is its catch-all.
+ */
+function dropsSourceBranch(
+  source: BundleNested["messages"][number],
+  forms: VariantRow["matches"][],
+  declarations: BundleNested["declarations"],
+): boolean {
+  const selectors = source.selectors
+    .map(({ name }) => name)
+    .filter((name) => !isPluralSelector(name, declarations));
+  return source.variants.some(
+    (variant) =>
+      !forms.some((matches) =>
+        selectors.every(
+          (name) => matchValue({ matches }, name) === matchValue(variant, name),
+        ),
+      ),
+  );
+}
+
+/**
  * True when a plural of the message has no known rules in its locale (an
  * unknown locale, or options only known at runtime), so the SDK requires only
  * its catch-all. A plural whose `type` a select chooses has known rules when
- * its cardinal rules are known.
+ * its cardinal rules are known; one whose `type` no select chooses doesn't.
  */
 function hasUnknownPluralRules(
   message: Parameters<typeof selectorGroups>[0],
   declarations: BundleNested["declarations"],
 ): boolean {
-  return selectorGroups(message, declarations).some((group) => {
-    if (!group.isPlural) return false;
-    if (!group.typeSelector) return !group.plural;
-    const annotation = resolveAnnotation(group.selector, declarations)!;
-    const cardinal: Declaration = {
-      type: "input-variable",
-      name: group.selector,
-      annotation: {
-        ...annotation,
-        options: annotation.options.filter((option) => option.name !== "type"),
-      },
-    };
-    return !pluralRules(group.selector, [cardinal], message.locale);
-  });
+  return selectorGroups(message, declarations).some(
+    (group) =>
+      group.isPlural &&
+      !pluralRules(
+        group.selector,
+        declarations,
+        message.locale,
+        // no matches: the catch-all type, cardinal; without a type selector a
+        // `type=$pluralType` plural's rules are unknown
+        group.typeSelector ? [] : undefined,
+      ),
+  );
+}
+
+/**
+ * The forms of `forms` (the target's, see the SDK's `requiredVariants`) that
+ * no non-empty variant of the target has, each translated from its source
+ * variant (see the SDK's `sourceVariantFor`): Russian `few` from English `*`.
+ * A form without one (a select value only the target has) is left missing.
+ * Every empty variant of a form is filled, such as an empty `other` next to
+ * a `*`.
+ *
+ * Context identifies each plural input, its target form and example numbers,
+ * even when the source's form has the same name, as English `one` has for
+ * German `one`. Exact
+ * numbers get their own guidance instead of the plural catch-all's.
+ */
+function missingForms(args: {
+  target: { locale: string; variants: VariantRow[] };
+  forms: VariantRow["matches"][];
+  sourceMessage: BundleNested["messages"][number];
+  sourceLocale: string;
+  declarations: BundleNested["declarations"];
+  description: string | undefined;
+}): MissingTranslation[] {
+  const { target, forms, sourceMessage, declarations } = args;
+  const missing: MissingTranslation[] = [];
+  /** empty variants a form before took: each is translated once */
+  const taken = new Set<VariantRow>();
+  for (const form of forms) {
+    const sourceVariant = sourceVariantFor({
+      target: form,
+      reference: sourceMessage.variants,
+      declarations,
+      referenceLocale: args.sourceLocale,
+      targetLocale: target.locale,
+    });
+    if (!sourceVariant) continue;
+    // the matches of a variant added for the form
+    const added = form.map((match) => {
+      const source = sourceVariant.matches.find(
+        (other) => other.key === match.key,
+      );
+      // a source that writes its catch-all as `other` keeps doing so. One
+      // with a `*` too never shows that `*` (`other` takes every number
+      // left), so the target's `*` is translated from `other`.
+      return match.type === "catchall-match" &&
+        source?.type === "literal-match" &&
+        source.value === "other" &&
+        !findMatchingVariant(
+          sourceMessage.variants,
+          sourceVariant.matches.map((other) =>
+            other === source ? match : other,
+          ),
+        )
+        ? source
+        : match;
+    });
+    const covering = target.variants.filter((variant) =>
+      variantCovers(variant, form, declarations, target.locale),
+    );
+    // An empty `other` can be shown instead of a filled `*` (a literal key is
+    // preferred, or stored first), so it is still missing. An empty variant
+    // can be the form of two: Arabic `zero` is `=0` too. Exact numbers come
+    // first in `forms`, so it keeps the exact number's meaning. A blank source
+    // can't fill a blank variant.
+    const empty = isEmptyPattern(sourceVariant.pattern)
+      ? []
+      : covering.filter(
+          (variant) => isEmptyPattern(variant.pattern) && !taken.has(variant),
+        );
+    // Paraglide selects a literal `other` only for its category, so it isn't
+    // the catch-all, unless the variant added for the form is `other` too.
+    const present = covering.some((variant) =>
+      form.every(
+        (match) =>
+          match.type === "literal-match" ||
+          matchValue(variant, match.key) !== "other" ||
+          matchValue({ matches: added }, match.key) === "other",
+      ),
+    );
+    // a blank source for a form the target lacks is copied (see
+    // `translateMissing`)
+    const writes = [
+      ...empty.map((variant) => variant.matches),
+      ...(present ? [] : [added]),
+    ];
+    if (writes.length === 0) continue;
+    for (const variant of empty) taken.add(variant);
+    const plurals = form.flatMap(({ key }) => {
+      if (!isPluralSelector(key, declarations)) return [];
+      const input = resolveInputVariable(key, declarations);
+      const exact = form.find(
+        (match) =>
+          match.type === "literal-match" &&
+          isNumericKey(match.value) &&
+          !resolveAnnotation(match.key, declarations) &&
+          resolveInputVariable(match.key, declarations) === input,
+      );
+      if (exact?.type === "literal-match") {
+        return [
+          `Exact-number form for {${input}}: ${exact.value} in ${target.locale}. Preserve this exact-number meaning.`,
+        ];
+      }
+      const category = categoryOf({ matches: form }, key);
+      const sourceCategory = categoryOf(sourceVariant, key);
+      // of the type the form matches, for a `type=$pluralType` plural
+      const rules = pluralRules(key, declarations, target.locale, form)!;
+      // `pt_BR` as written in some projects: Intl needs `pt-BR`
+      const locale = target.locale.replace(/_/g, "-");
+      // A number with its own exact form (ICU `=0`) in this form's branch
+      // (its values for the other selectors, such as the plural type) isn't
+      // shown by this category, unless it's the category's only number
+      // (Arabic `zero`).
+      const isExactOfInput = (match: VariantRow["matches"][number]) =>
+        !resolveAnnotation(match.key, declarations) &&
+        resolveInputVariable(match.key, declarations) === input;
+      const exactNumbers = forms
+        .filter((other) =>
+          other.every(
+            (match) =>
+              match.key === key ||
+              isExactOfInput(match) ||
+              matchValue({ matches: other }, match.key) ===
+                matchValue({ matches: form }, match.key),
+          ),
+        )
+        .flatMap((other) =>
+          other.flatMap((match) =>
+            match.type === "literal-match" &&
+            isNumericKey(match.value) &&
+            isExactOfInput(match)
+              ? [match.value]
+              : [],
+          ),
+        );
+      const examples =
+        pluralExamples(locale, rules.type, {
+          offset: rules.offset,
+          exclude: exactNumbers,
+        })[category] ??
+        pluralExamples(locale, rules.type, { offset: rules.offset })[category];
+      return [
+        `Plural form for {${input}}: ${category} (${rules.type}) in ${target.locale}, used for n = ${examples}. Translate as the ${category} form; the source shows the ${sourceCategory} form.`,
+      ];
+    });
+    const context =
+      [args.description, plurals.join("\n")].filter(Boolean).join("\n\n") ||
+      undefined;
+    for (const matches of writes) {
+      missing.push({
+        sourceVariant,
+        matches,
+        targetLocale: target.locale,
+        text: serializePattern(sourceVariant.pattern, {}),
+        context,
+      });
+    }
+  }
+  return missing;
+}
+
+/**
+ * `forms` with `matches` before the first form that matches its inputs too:
+ * runtimes like Paraglide JS select the first variant that matches, so
+ * French `many` goes before the catch-all.
+ */
+function withForm(
+  forms: VariantRow["matches"][],
+  matches: VariantRow["matches"],
+): VariantRow["matches"][] {
+  let index = forms.findIndex((form) =>
+    form.every(
+      ({ key }) =>
+        matchValue({ matches: form }, key) === "*" ||
+        matchValue({ matches: form }, key) === matchValue({ matches }, key),
+    ),
+  );
+  if (index === -1) index = forms.length;
+  return [...forms.slice(0, index), matches, ...forms.slice(index)];
+}
+
+/** A variant's plural category for a selector: its catch-all is `other`. */
+function categoryOf(variant: Pick<VariantRow, "matches">, selector: string) {
+  const value = matchValue(variant, selector);
+  return value === "*" ? "other" : value;
 }
 
 /**
@@ -770,22 +1082,40 @@ const UUID_V7 =
  * whose place changes on get new ids in the new order; the ids they had are
  * returned, to be deleted. Existing variants keep their matches and pattern,
  * and are put in the order of the source too.
- * A variant the source doesn't have (e.g. a plural category of the target
- * language) stays after the variant it followed. Messages whose order doesn't
- * change keep every id.
+ * An added form the source doesn't have (Russian `few`) goes before the first
+ * form after it in `forms` (the target's, in the SDK's `requiredVariants`
+ * order) that the source has, so the catch-all stays last. Any other variant
+ * the source doesn't have (one written by hand) stays after the variant it
+ * followed. Then every added form goes before the first variant that matches
+ * its inputs too: an English `other` isn't Russian `*`, so `forms` can name a
+ * form of another select branch, or none. Messages whose order doesn't change
+ * keep every id.
  */
 export function orderLikeSource(
   message: { variants: VariantRow[] },
   sourceVariants: VariantRow[],
   added: Set<VariantRow>,
+  declarations: BundleNested["declarations"],
+  forms: VariantRow["matches"][] = [],
 ): string[] {
-  const sourceIndex = (variant: VariantRow) =>
+  const sourceIndex = (variant: Pick<VariantRow, "matches">) =>
     sourceVariants.findIndex(
       (source) => findMatchingVariant([variant], source.matches) !== undefined,
     );
   let previous = -1;
   const keyed = message.variants.map((variant, position) => {
     let key = sourceIndex(variant);
+    if (key === -1 && added.has(variant)) {
+      const form = forms.findIndex((matches) =>
+        variantCovers(variant, matches, declarations),
+      );
+      const next = forms
+        .slice(form + 1)
+        .map((matches) => sourceIndex({ matches }))
+        .find((index) => index !== -1);
+      // before that form, after the variants before it; without one, last
+      key = next === undefined ? Infinity : next - 0.5;
+    }
     if (key === -1) key = previous;
     if (!added.has(variant)) previous = key;
     return { variant, key, position };
@@ -793,6 +1123,27 @@ export function orderLikeSource(
   const ordered = [...keyed]
     .sort((a, b) => a.key - b.key || a.position - b.position)
     .map(({ variant }) => variant);
+  // before the first variant that matches all its inputs too, such as the
+  // target's catch-all, or a runtime that takes the first match never gets to
+  // it: one whose every literal the added form has (`count=0` matches less)
+  for (const variant of ordered.filter((each) => added.has(each))) {
+    const at = ordered.indexOf(variant);
+    const before = ordered
+      .slice(0, at)
+      .findIndex((other) =>
+        other.matches.every(
+          (match) =>
+            match.type !== "literal-match" ||
+            variant.matches.some(
+              (each) =>
+                each.type === "literal-match" &&
+                each.key === match.key &&
+                each.value === match.value,
+            ),
+        ),
+      );
+    if (before !== -1) ordered.splice(before, 0, ...ordered.splice(at, 1));
+  }
   // the first variant whose place changes, or whose id doesn't sort after
   // the variant before it (e.g. an added variant after a non-v7 id)
   let start = ordered.findIndex(

@@ -11,10 +11,10 @@ type PlaceholderMetadata = Record<
 const escapeStart = `<span class="notranslate">`;
 const escapeEnd = "</span>";
 
-export function findMatchingVariant(
-  variants: VariantRow[],
+export function findMatchingVariant<V extends Pick<VariantRow, "matches">>(
+  variants: V[],
   matches: VariantRow["matches"],
-): VariantRow | undefined {
+): V | undefined {
   if (matches.length === 0) {
     return variants.find((variant) => variant.matches.length === 0);
   }
