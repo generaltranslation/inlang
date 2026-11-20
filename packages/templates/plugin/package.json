@@ -16,5 +16,6 @@
 		"@inlang/cli": "workspace:*",
 		"typescript": "^5.5.2",
 		"vitest": "^3.2.4"
-	}
+	},
+	"license": "MIT"
 }

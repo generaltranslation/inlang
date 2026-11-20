@@ -46,5 +46,6 @@
     "vite-plugin-static-copy": "^2.3.2",
     "vitest": "^4.0.6",
     "wrangler": "^4.54.0"
-  }
+  },
+  "license": "MIT"
 }

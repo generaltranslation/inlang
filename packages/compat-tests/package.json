@@ -34,5 +34,6 @@
 		"prettier": "^3.5.1",
 		"typescript": "^5.5.2",
 		"vitest": "^3.2.4"
-	}
+	},
+	"license": "MIT"
 }

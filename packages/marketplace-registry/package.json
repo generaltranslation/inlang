@@ -33,5 +33,5 @@
 		"prettier": "^3.5.1",
 		"typescript": "5.2.2"
 	},
-	"license": "Apache-2.0"
+	"license": "MIT"
 }
