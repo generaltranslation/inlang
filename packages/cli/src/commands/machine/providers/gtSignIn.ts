@@ -14,18 +14,17 @@ import {
   createUserTokenProvider,
   hasLogin,
   login,
+  UserAuthError,
 } from "@generaltranslation/auth";
 import type { ProjectSettings } from "@inlang/sdk";
+import { parse as parseEnvFile } from "dotenv";
 import { log } from "../../../utilities/log.js";
-import { GT_DASHBOARD_URL } from "./gt.js";
+// The API the translate provider calls. Passed to the sign-in, which
+// otherwise follows the GT_API_URL variable, so a gt developer's setting can't
+// sign this CLI in to another API than the one it translates with.
+import { GT_API_URL, GT_DASHBOARD_URL } from "./gt.js";
 
-// The API the translate provider calls too. Passed to the sign-in, which
-// otherwise follows GT_API_URL, so a gt developer's setting can't sign this
-// CLI in to another API than the one it translates with.
-const GT_API_URL = "https://api.gtx.dev";
 const KEY_NAME = "Development key (inlang machine translate)";
-// The API's limit, in UTF-16 code units.
-const MAX_PROJECT_NAME_LENGTH = 64;
 
 type GtCredentials = { apiKey: string; projectId?: string };
 
@@ -98,18 +97,6 @@ export async function readEnvFiles(
   return variables;
 }
 
-function parseEnvFile(content: string): Record<string, string> {
-  const variables: Record<string, string> = {};
-  for (const line of content.split(/\r?\n/)) {
-    const match =
-      /^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^#]*?))\s*(?:#.*)?$/.exec(
-        line,
-      );
-    if (match) variables[match[1]!] = match[2] ?? match[3] ?? match[4] ?? "";
-  }
-  return variables;
-}
-
 /** The sign-in and the user's API client; tests replace them. */
 export type GtAccount = {
   hasLogin: () => Promise<boolean>;
@@ -162,7 +149,7 @@ export async function signInToGt(args: {
     prompt = (message, options) => log.prompt(message, options),
     account = defaultAccount,
   } = args;
-  const signedIn = await account.hasLogin();
+  const signedIn = await isSignedIn(account);
   // Before the checks: CI without a key must hear how to set one, not why
   // a key can't be saved here.
   if (!interactive && !signedIn) return undefined;
@@ -208,7 +195,7 @@ export async function signInToGt(args: {
     }
     if (orgs.length > 1 && !interactive) {
       throw new Error(
-        `Your General Translation account has several organizations, so a project can't be created without asking which. Run this command in a terminal, or set GT_PROJECT_ID to a project from ${GT_DASHBOARD_URL}.`,
+        `Your General Translation account has several organizations. Run this command in a terminal to choose one, or set GT_PROJECT_ID to a project from ${GT_DASHBOARD_URL}.`,
       );
     }
     const orgId =
@@ -227,7 +214,7 @@ export async function signInToGt(args: {
       client,
       path: { orgId },
       body: {
-        name: projectName(dir),
+        name: nodePath.basename(nodePath.resolve(dir)),
         defaultLocale: settings.baseLocale,
       },
       throwOnError: true,
@@ -253,10 +240,10 @@ export async function signInToGt(args: {
     );
   });
 
-  const addedIgnoreRule = await appendToEnvLocal(
+  const addedIgnoreRule = await appendToEnvLocal({
     dir,
-    `GT_PROJECT_ID=${projectId}\nGT_DEV_API_KEY=${key.key}\n`,
-  );
+    text: `GT_PROJECT_ID=${projectId}\nGT_DEV_API_KEY=${key.key}\n`,
+  });
   log.success(
     [
       ...(createdProject ? ["Created the General Translation project."] : []),
@@ -268,16 +255,33 @@ export async function signInToGt(args: {
 }
 
 /**
+ * Whether gt's stored sign-in can still make requests. One whose refresh
+ * token expired or was revoked stays stored, and only a new sign-in replaces
+ * it. A refresh that fails offline counts as signed out too: the new sign-in
+ * then fails with its own error.
+ */
+async function isSignedIn(account: GtAccount): Promise<boolean> {
+  if (!(await account.hasLogin())) return false;
+  return account.userTokenProvider.getAccessToken().then(
+    () => true,
+    (error: unknown) => {
+      if (error instanceof UserAuthError) return false;
+      throw error;
+    },
+  );
+}
+
+/**
  * Why a key must not be saved to `dir/.env.local`, as the start of a
- * sentence that says how to fix it: git tracks it, or it is a symlink, through
- * which an ignored .env.local could still write the key to a tracked file.
+ * sentence that says how to fix it: git tracks it; it is a symlink, through
+ * which an ignored .env.local could still write the key to a tracked file; or
+ * git doesn't ignore it and can't be made to, as git doesn't read a symlinked
+ * .gitignore.
  */
 export async function envLocalProblem(
   dir: string,
 ): Promise<string | undefined> {
-  if (
-    (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) === 0
-  ) {
+  if (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) {
     return ".env.local is tracked by git. Untrack it with `git rm --cached .env.local`";
   }
   const envLocal = await fs
@@ -285,6 +289,15 @@ export async function envLocalProblem(
     .catch(() => undefined);
   if (envLocal?.isSymbolicLink()) {
     return ".env.local is a symbolic link. Replace it with a regular file";
+  }
+  const gitignore = await fs
+    .lstat(nodePath.join(dir, ".gitignore"))
+    .catch(() => undefined);
+  if (
+    gitignore?.isSymbolicLink() &&
+    !(await git(dir, "check-ignore", "-q", "--", ".env.local"))
+  ) {
+    return ".gitignore is a symbolic link, which git doesn't read, so it can't ignore .env.local. Replace it with a regular file";
   }
   return undefined;
 }
@@ -295,17 +308,22 @@ export async function envLocalProblem(
  * It does unless git ignores the file: outside a work tree too, or a later
  * `git init` would commit it.
  */
-export async function appendToEnvLocal(
-  dir: string,
-  text: string,
-): Promise<boolean> {
-  // Exit code 0: ignored.
-  const ignored =
-    (await git(dir, "check-ignore", "-q", "--", ".env.local")) === 0;
+export async function appendToEnvLocal(args: {
+  dir: string;
+  text: string;
+}): Promise<boolean> {
+  const ignored = await git(args.dir, "check-ignore", "-q", "--", ".env.local");
   if (!ignored) {
-    await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
+    await appendToFile({
+      file: nodePath.join(args.dir, ".gitignore"),
+      text: ".env.local\n",
+    });
   }
-  await appendToFile(nodePath.join(dir, ".env.local"), text, { mode: 0o600 });
+  await appendToFile({
+    file: nodePath.join(args.dir, ".env.local"),
+    text: args.text,
+    mode: 0o600,
+  });
   return !ignored;
 }
 
@@ -343,8 +361,9 @@ export async function shareGtProjectId(dir: string): Promise<boolean> {
  * The General Translation project that `dir`'s .env files, gt.config.json or
  * the environment name. One in .env or .env.local comes first: a new key is
  * saved next to it, and readGtCredentials pairs a key with the project ID from
- * the same source. Missing config is allowed; unreadable or invalid config
- * throws so provider selection cannot silently switch services.
+ * the same source. A missing gt.config.json is allowed; an unreadable or
+ * invalid one throws, rather than a second project being created or, without
+ * a key, the text being sent to the community service.
  */
 export async function findGtProjectId(
   dir: string,
@@ -357,8 +376,6 @@ export async function findGtProjectId(
   });
   let projectId: string | undefined;
   if (text !== undefined) {
-    // This lookup decides whether text may go to the community service.
-    // Invalid configuration must not count as an unconfigured project.
     let config: unknown;
     try {
       config = JSON.parse(text);
@@ -392,36 +409,27 @@ export async function findGtProjectId(
   );
 }
 
-/**
- * The folder's name, as the project's, cut to the API's length at a whole
- * character.
- */
-function projectName(dir: string): string {
-  let name = nodePath.basename(nodePath.resolve(dir));
-  while (name.length > MAX_PROJECT_NAME_LENGTH) {
-    name = [...name].slice(0, -1).join("");
-  }
-  return name;
-}
-
-/** git's exit code; null without git, where the folder is no work tree. */
-function git(dir: string, ...args: string[]): Promise<number | null> {
+/** Whether git exits with 0; false without git, where the folder is no work tree. */
+function git(dir: string, ...args: string[]): Promise<boolean> {
   return new Promise((resolve) =>
-    execFile("git", args, { cwd: dir }, (error) =>
-      resolve(!error ? 0 : typeof error.code === "number" ? error.code : null),
-    ),
+    execFile("git", args, { cwd: dir }, (error) => resolve(!error)),
   );
 }
 
 /** Appends `text` to `file` on a new line, creating the file if needed. */
-async function appendToFile(
-  file: string,
-  text: string,
-  options?: { mode: number },
-): Promise<void> {
+async function appendToFile({
+  file,
+  text,
+  mode,
+}: {
+  file: string;
+  text: string;
+  /** Only for a new file. */
+  mode?: number;
+}): Promise<void> {
   const content = await fs.readFile(file, "utf8").catch(() => "");
   const separator = content && !content.endsWith("\n") ? "\n" : "";
-  await fs.appendFile(file, separator + text, options);
+  await fs.appendFile(file, separator + text, { mode });
 }
 
 function parseJson(text: string): any {
