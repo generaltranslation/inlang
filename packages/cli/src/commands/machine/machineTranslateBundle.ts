@@ -236,12 +236,6 @@ export function planBundleTranslation(
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const newLocales = new Set<string>();
-  /**
-   * Locales whose target has a variant for every form its language needs,
-   * counting a literal `other` only for the catch-all (see
-   * `findMatchingVariant`)
-   */
-  const complete = new Set<string>();
   const report: PluralReport = {
     incompletePlurals: [],
     differentSelectors: [],
@@ -349,16 +343,6 @@ export function planBundleTranslation(
     // with several selects, so it isn't called then (but for the rare target
     // with other selectors than the source's, below).
     if (hasPlural) {
-      // With the source's forms, which the plan adds: a catch-all covers no
-      // category such as `one`. Empty variants count, as an empty `other` is
-      // filled from the catch-all.
-      if (
-        missingVariants(target, declarations, {
-          variants: [...target.variants, ...sourceMessage.variants],
-        }).length === 0
-      ) {
-        complete.add(targetLocale);
-      }
       const lackedBySource = (sourceMissing ??= missingVariants(
         sourceMessage,
         declarations,
@@ -412,17 +396,11 @@ export function planBundleTranslation(
     const missingBefore = missing.length;
     for (const sourceVariant of sourceMessage.variants) {
       const existingVariant =
-        findMatchingVariant({
-          variants: target.variants,
-          matches: sourceVariant.matches,
-          sourceVariants: sourceMessage.variants,
-          declarations,
-          otherIsCatchAll: complete.has(targetLocale),
-        }) ??
+        findMatchingVariant(target.variants, sourceVariant.matches) ??
         // or the category that selects only the source's exact number: Arabic
         // "zero" is `=0`, as i18next's Arabic `_zero` is imported (see the
-        // SDK's `variantCovers`). Only that: `findMatchingVariant` decides
-        // about `other` and the catch-all.
+        // SDK's `variantCovers`). Only that: a literal `other` isn't the
+        // catch-all to every runtime.
         target.variants.find(
           (variant) =>
             variantCovers(
@@ -504,13 +482,10 @@ export function planBundleTranslation(
         );
 
         if (targetMessage) {
-          const existingVariant = findMatchingVariant({
-            variants: targetMessage.variants,
+          const existingVariant = findMatchingVariant(
+            targetMessage.variants,
             matches,
-            sourceVariants: sourceMessage.variants,
-            declarations: copy.declarations,
-            otherIsCatchAll: complete.has(targetLocale),
-          });
+          );
 
           // only an empty variant is missing a translation
           if (existingVariant) {
@@ -844,16 +819,12 @@ function missingForms(args: {
       return match.type === "catchall-match" &&
         source?.type === "literal-match" &&
         source.value === "other" &&
-        !findMatchingVariant({
-          variants: sourceMessage.variants,
-          matches: sourceVariant.matches.map((other) =>
+        !findMatchingVariant(
+          sourceMessage.variants,
+          sourceVariant.matches.map((other) =>
             other === source ? match : other,
           ),
-          sourceVariants: sourceMessage.variants,
-          declarations,
-          // an exact `*` of the source's own
-          otherIsCatchAll: false,
-        })
+        )
         ? source
         : match;
     });
@@ -1086,15 +1057,7 @@ export function orderLikeSource(
 ): string[] {
   const sourceIndex = (variant: Pick<VariantRow, "matches">) =>
     sourceVariants.findIndex(
-      (source) =>
-        findMatchingVariant({
-          variants: [variant],
-          matches: source.matches,
-          sourceVariants,
-          declarations,
-          // only for the order: an `other` goes where the catch-all would
-          otherIsCatchAll: true,
-        }) !== undefined,
+      (source) => findMatchingVariant([variant], source.matches) !== undefined,
     );
   let previous = -1;
   const keyed = message.variants.map((variant, position) => {
