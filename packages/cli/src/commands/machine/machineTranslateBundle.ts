@@ -236,7 +236,11 @@ export function planBundleTranslation(
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const newLocales = new Set<string>();
-  /** locales whose target has a form for every number (see `findMatchingVariant`) */
+  /**
+   * Locales whose target has a variant for every form its language needs,
+   * counting a literal `other` only for the catch-all (see
+   * `findMatchingVariant`)
+   */
   const complete = new Set<string>();
   const report: PluralReport = {
     incompletePlurals: [],
@@ -345,6 +349,16 @@ export function planBundleTranslation(
     // with several selects, so it isn't called then (but for the rare target
     // with other selectors than the source's, below).
     if (hasPlural) {
+      // With the source's forms, which the plan adds: a catch-all covers no
+      // category such as `one`. Empty variants count, as an empty `other` is
+      // filled from the catch-all.
+      if (
+        missingVariants(target, declarations, {
+          variants: [...target.variants, ...sourceMessage.variants],
+        }).length === 0
+      ) {
+        complete.add(targetLocale);
+      }
       const lackedBySource = (sourceMissing ??= missingVariants(
         sourceMessage,
         declarations,
@@ -375,7 +389,6 @@ export function planBundleTranslation(
         .join();
     const sameSelectors =
       names(target.selectors) === names(sourceMessage.selectors);
-    if (categories.size === 0) complete.add(targetLocale);
     if (categories.size > 0) {
       report.incompletePlurals.push({
         locale: targetLocale,
@@ -383,18 +396,13 @@ export function planBundleTranslation(
       });
     }
     // The source's forms would be added with selectors the message doesn't
-    // have, so it could never select them. It is reported when it lacks a
-    // form its own selectors need, or has it empty.
+    // have, so it could never select them. It is reported when it has an
+    // empty form, which runtimes select before a filled catch-all, or lacks
+    // one its selectors need.
     if (!sameSelectors) {
-      const filled = target.variants.filter(
-        (variant) => !isEmptyPattern(variant.pattern),
-      );
-      // values of empty variants too, such as a select's `female`
       if (
-        missingVariants(target, declarations, {
-          variants: filled,
-          referenceVariants: target.variants,
-        }).length
+        target.variants.some((variant) => isEmptyPattern(variant.pattern)) ||
+        missingVariants(target, declarations).length > 0
       ) {
         report.differentSelectors.push(targetLocale);
       }
