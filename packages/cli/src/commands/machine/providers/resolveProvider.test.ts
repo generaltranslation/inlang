@@ -44,13 +44,21 @@ const unexpectedSignIn = async () => {
   throw new Error("signIn must not be called");
 };
 
+/** No `gt` sign-in on this machine: outside a terminal, sign-in makes no key. */
+const signedOut: NonNullable<ResolveArgs["signIn"]> = async ({
+  interactive,
+}) => {
+  if (interactive === false) return undefined;
+  throw new Error("signIn must not be called");
+};
+
 function resolve(args: Partial<ResolveArgs>) {
   return resolveMachineTranslateProvider({
     env: {},
     projectPath: projectIn().projectPath,
     settings,
     interactive: false,
-    signIn: unexpectedSignIn,
+    signIn: signedOut,
     ...args,
   });
 }
@@ -293,7 +301,7 @@ test("a project with a GT project ID fails without a key outside an interactive 
     "gt.config.json": `{"projectId":"prj_shared"}`,
   });
   await expect(resolve({ projectPath })).rejects.toThrow(
-    /^Machine translation needs a General Translation API key\.\n.*--project-id prj_shared/s,
+    /^Machine translation needs a General Translation API key\./,
   );
 });
 
@@ -345,7 +353,7 @@ test("a dot project path finds the same adjacent GT configuration and credential
 });
 
 test("an explicit GT provider fails without credentials outside an interactive terminal", async () => {
-  const { dir, projectPath } = projectIn({}, "bob's app");
+  const { projectPath } = projectIn({}, "bob's app");
   await expect(
     resolve({ projectPath, env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" } }),
   ).rejects.toThrowError(
@@ -354,7 +362,7 @@ test("an explicit GT provider fails without credentials outside an interactive t
         "Machine translation needs a General Translation API key.",
         "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output or with CI set. Over SSH, open the printed sign-in URL in your browser.",
         "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-        `- Agents: check that git ignores .env.local, have the user sign in with \`npx --yes gt@2.28.3 login --no-browser\`, then run \`(umask 077 && d=$(mktemp -d) && cd "$d" && npx --yes gt@2.28.3 init --json --no-react-setup --dev-credentials --default-locale en --locales de --file-patterns 'json=./messages/[locale].json' --create-project --project-name 'bob'\\''s app' && { echo; cat .env.local; } >> '${nodePath.dirname(dir)}/bob'\\''s app/.env.local')\` to save a development key to .env.local, and run this command again.`,
+        "- Agents: have the user run this command in their terminal, or sign in with `npx gt login --no-browser`, then run this command again. Signed in, it saves a development key to .env.local.",
         "- Or use the community-operated service: set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
         `- Or bring your own key: ${BYOK_URL}`,
       ].join("\n"),
@@ -381,7 +389,7 @@ test.each([
     problem: ".env.local is a symbolic link. Replace it with a regular file",
   },
 ])(
-  "agents get no command that saves a key to a .env.local $name",
+  "agents hear why no key can be saved to a .env.local $name",
   async ({ setUp, problem }) => {
     vi.stubEnv("GIT_CONFIG_GLOBAL", nodePath.join(os.tmpdir(), "none"));
     const { dir, projectPath } = projectIn({ ".gitignore": ".env.local\n" });
@@ -394,7 +402,7 @@ test.each([
     expect(error.message.split("\n")).toContain(
       `- Agents: a development key can't be saved: ${problem}, then run this command again.`,
     );
-    expect(error.message).not.toContain(">>");
+    expect(error.message).not.toContain("gt login");
   },
 );
 
@@ -492,6 +500,48 @@ test("shares the project ID from .env.local in gt.config.json, once", async () =
       "Saved the General Translation project ID to gt.config.json. Commit it so teammates use the same project.",
     ],
   ]);
+});
+
+test("outside an interactive terminal, a `gt` sign-in makes the key without asking", async () => {
+  const { dir, projectPath } = projectIn();
+  const signIn = vi.fn<NonNullable<ResolveArgs["signIn"]>>(async () => {
+    fs.writeFileSync(
+      nodePath.join(dir, ".env.local"),
+      "GT_PROJECT_ID=prj_1\nGT_DEV_API_KEY=gtx-dev\n",
+    );
+    return { apiKey: "gtx-dev", projectId: "prj_1" };
+  });
+  const provider = await resolve({
+    projectPath,
+    env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" },
+    signIn,
+  });
+  expect(signIn).toHaveBeenCalledWith(
+    expect.objectContaining({ dir, interactive: false }),
+  );
+  expect((await firstRequest(provider)).headers["Authorization"]).toBe(
+    "Bearer gtx-dev",
+  );
+  expect(
+    JSON.parse(fs.readFileSync(nodePath.join(dir, "gt.config.json"), "utf8")),
+  ).toEqual({
+    projectId: "prj_1",
+  });
+});
+
+test("a failed sign-in outside an interactive terminal is a MachineTranslateError too", async () => {
+  const error = await resolve({
+    env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" },
+    signIn: async () => {
+      throw new Error(
+        "Your General Translation account has several organizations.",
+      );
+    },
+  }).catch((error) => error);
+  expect(error).toBeInstanceOf(MachineTranslateError);
+  expect(error.message).toBe(
+    "Your General Translation account has several organizations.",
+  );
 });
 
 test("a failed sign-in is a MachineTranslateError, which prints without a stack trace", async () => {
