@@ -4,13 +4,13 @@ import type {
 } from "./types.js";
 import { rateLimitOf, scopeOf } from "./rateLimit.js";
 
-const GT_TRANSLATE_API_URL = "https://api.gtx.dev/v2/translate";
+export const GT_API_URL = "https://api.gtx.dev";
 /**
  * The API contract the request and the response parsing are written for.
  * Without it, the API answers with its oldest supported contract.
  */
 export const GT_API_VERSION = "2026-03-06.v1";
-const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
+export const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
 // A batch of texts can take a while; this only ends a request that hangs.
 const GT_REQUEST_TIMEOUT_MINUTES = 5;
 
@@ -46,7 +46,7 @@ export function createGtTranslateProvider(args: {
 
       let response: Response;
       try {
-        response = await fetch(GT_TRANSLATE_API_URL, {
+        response = await fetch(`${GT_API_URL}/v2/translate`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${args.apiKey}`,

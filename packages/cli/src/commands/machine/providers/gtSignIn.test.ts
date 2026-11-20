@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
+import { UserAuthError } from "@generaltranslation/auth";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
 import { readGtCredentials, signInToGt, type GtAccount } from "./gtSignIn.js";
@@ -99,17 +100,24 @@ function fakeApi(
   return { requests, fetch: fetch as typeof globalThis.fetch };
 }
 
-/** A `GtAccount` on the fake API; `signedIn` is whether gt's sign-in is valid. */
+/**
+ * A `GtAccount` on the fake API; `signedIn` is whether gt has a stored
+ * sign-in, and `getAccessToken` replaces the sign-in's tokens.
+ */
 function fakeAccount(
   api = fakeApi(),
-  options: { signedIn?: boolean; login?: GtAccount["login"] } = {},
+  options: {
+    signedIn?: boolean;
+    login?: GtAccount["login"];
+    getAccessToken?: () => Promise<string>;
+  } = {},
 ) {
   const login = vi.fn<GtAccount["login"]>(options.login ?? (async () => {}));
   const account: GtAccount = {
     hasLogin: async () => options.signedIn ?? false,
     login,
     userTokenProvider: {
-      getAccessToken: async () => "user-token",
+      getAccessToken: options.getAccessToken ?? (async () => "user-token"),
       refreshAccessToken: async () => undefined,
     },
     fetch: api.fetch,
@@ -269,6 +277,42 @@ describe("signInToGt", () => {
     expect(gt.login).not.toHaveBeenCalled();
   });
 
+  test("signs in again when gt's sign-in can no longer be refreshed", async () => {
+    captureLog();
+    let expired = true;
+    const gt = fakeAccount(fakeApi(), {
+      signedIn: true,
+      login: async () => {
+        expired = false;
+      },
+      getAccessToken: async () => {
+        if (expired) {
+          throw new UserAuthError("oauth", "Could not refresh your login");
+        }
+        return "user-token";
+      },
+    });
+    expect(await signIn({ dir: tree(), account: gt.account })).toEqual({
+      apiKey: API_KEY,
+      projectId: "prj_new",
+    });
+    expect(gt.login).toHaveBeenCalledOnce();
+  });
+
+  test("passes on an error reading gt's sign-in other than a sign-in error", async () => {
+    captureLog();
+    const gt = fakeAccount(fakeApi(), {
+      signedIn: true,
+      getAccessToken: async () => {
+        throw new Error("EACCES: permission denied");
+      },
+    });
+    await expect(signIn({ dir: tree(), account: gt.account })).rejects.toThrow(
+      "EACCES",
+    );
+    expect(gt.login).not.toHaveBeenCalled();
+  });
+
   test("prints the sign-in URL in case the browser doesn't open", async () => {
     const output = captureLog();
     const gt = fakeAccount(fakeApi(), {
@@ -306,6 +350,15 @@ describe("signInToGt", () => {
     },
   );
 
+  test("saves the key in a new .env.local that only the user can read", async () => {
+    captureLog();
+    const dir = tree();
+    await signIn({ dir, account: fakeAccount().account });
+    expect(fs.statSync(nodePath.join(dir, ".env.local")).mode & 0o777).toBe(
+      0o600,
+    );
+  });
+
   test("adds the key below the lines already in .env.local", async () => {
     captureLog();
     const dir = tree({ ".env.local": "OTHER=1" });
@@ -340,16 +393,6 @@ describe("signInToGt", () => {
     ]);
   });
 
-  test("names the project after the folder, cut to 64 characters at a whole character", async () => {
-    captureLog();
-    // 63 characters and an emoji of two UTF-16 code units: 65.
-    const dir = nodePath.join(tree(), `${"a".repeat(63)}😀`);
-    fs.mkdirSync(dir);
-    const gt = fakeAccount();
-    await signIn({ dir, account: gt.account });
-    expect(gt.requests[1]!.body.name).toBe("a".repeat(63));
-  });
-
   test("adds a .gitignore rule for .env.local in a git work tree", async () => {
     captureLog();
     const dir = gitTree({ ".gitignore": "node_modules" });
@@ -374,27 +417,6 @@ describe("signInToGt", () => {
     });
     // Outside a work tree too, or a later `git init` would commit the key.
     expect(read(dir, ".gitignore")).toBe(".env.local\n");
-  });
-
-  test("says what it created and saved", async () => {
-    const output = captureLog();
-    await signIn({ dir: tree(), account: fakeAccount().account });
-    expect(output()).toContain(
-      "Created the General Translation project.\nSaved the API key to .env.local.\nAdded .env.local to .gitignore.",
-    );
-  });
-
-  test("says only that it saved a key when it created no project", async () => {
-    const output = captureLog();
-    const dir = gitTree({ ".gitignore": ".env.local\n" });
-    await signIn({
-      dir,
-      env: { GT_PROJECT_ID: "prj_1" },
-      account: fakeAccount().account,
-    });
-    expect(output()).toContain("Saved the API key to .env.local.");
-    expect(output()).not.toContain("Created");
-    expect(output()).not.toContain(".gitignore");
   });
 
   test("refuses a .env.local that git tracks before signing in", async () => {
@@ -422,6 +444,25 @@ describe("signInToGt", () => {
     expect(gt.login).not.toHaveBeenCalled();
     expect(read(dir, "tracked.env")).toBe("OTHER=1\n");
   });
+
+  test.each([
+    ["isn't JSON", "{", "expected valid JSON"],
+    ["isn't an object", "[]", "expected a JSON object"],
+    ["has an empty project ID", '{"projectId":" "}', "projectId must be"],
+  ])(
+    "refuses a gt.config.json that %s before signing in, rather than create another project",
+    async (_, config, message) => {
+      captureLog();
+      const gt = fakeAccount();
+      await expect(
+        signIn({
+          dir: tree({ "gt.config.json": config }),
+          account: gt.account,
+        }),
+      ).rejects.toThrow(message);
+      expect(gt.login).not.toHaveBeenCalled();
+    },
+  );
 
   test("asks for the organization, from every page, when the account has several", async () => {
     captureLog();

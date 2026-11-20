@@ -14,18 +14,16 @@ import {
   createUserTokenProvider,
   hasLogin,
   login,
+  UserAuthError,
 } from "@generaltranslation/auth";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
+// The API the translate provider calls. Passed to the sign-in, which
+// otherwise follows the GT_API_URL variable, so a gt developer's setting can't
+// sign this CLI in to another API than the one it translates with.
+import { GT_API_URL, GT_DASHBOARD_URL } from "./gt.js";
 
-// The API the translate provider calls too. Passed to the sign-in, which
-// otherwise follows GT_API_URL, so a gt developer's setting can't sign this
-// CLI in to another API than the one it translates with.
-const GT_API_URL = "https://api.gtx.dev";
-const GT_DASHBOARD_URL = "https://dash.generaltranslation.com";
 const KEY_NAME = "Development key (inlang machine translate)";
-// The API's limit, in UTF-16 code units.
-const MAX_PROJECT_NAME_LENGTH = 64;
 
 type GtCredentials = { apiKey: string; projectId?: string };
 
@@ -156,35 +154,15 @@ export async function signInToGt(args: {
     prompt = (message, options) => log.prompt(message, options),
     account = defaultAccount,
   } = args;
-  if (
-    (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) === 0
-  ) {
+  const problem = await envLocalProblem(dir);
+  if (problem) {
     throw new Error(
-      "Can't save the General Translation key: .env.local is tracked by git. Untrack it with `git rm --cached .env.local`, then run again.",
+      `Can't save the General Translation key: ${problem}, then run again.`,
     );
   }
-  // The key is appended through a symlink, so an ignored .env.local could
-  // still write it to a tracked file.
-  const envLocal = await fs
-    .lstat(nodePath.join(dir, ".env.local"))
-    .catch(() => undefined);
-  if (envLocal?.isSymbolicLink()) {
-    throw new Error(
-      "Can't save the General Translation key: .env.local is a symbolic link. Replace it with a regular file, then run again.",
-    );
-  }
+  let projectId = await findGtProjectId(dir, env);
 
-  const config = await fs
-    .readFile(nodePath.join(dir, "gt.config.json"), "utf8")
-    .catch(() => undefined);
-  // One in .env or .env.local comes first: the key is saved next to it, and
-  // readGtCredentials pairs a key with the project ID from the same source.
-  let projectId: string | undefined =
-    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
-    parseJson(config ?? "")?.projectId ||
-    findVariable(env, PROJECT_ID);
-
-  if (!(await account.hasLogin())) {
+  if (!(await isSignedIn(account))) {
     await account.login({
       baseUrl: GT_API_URL,
       onWarning: warn,
@@ -232,7 +210,7 @@ export async function signInToGt(args: {
       client,
       path: { orgId },
       body: {
-        name: projectName(dir),
+        name: nodePath.basename(nodePath.resolve(dir)),
         defaultLocale: settings.baseLocale,
       },
       throwOnError: true,
@@ -258,64 +236,150 @@ export async function signInToGt(args: {
     );
   });
 
-  // Exit code 0: ignored. Outside a work tree the rule is added too, or a
-  // later `git init` would commit the key.
-  const ignored =
-    (await git(dir, "check-ignore", "-q", "--", ".env.local")) === 0;
-  if (!ignored) {
-    await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
-  }
-  await appendToFile(
-    nodePath.join(dir, ".env.local"),
-    `GT_PROJECT_ID=${projectId}\nGT_DEV_API_KEY=${key.key}\n`,
-    { mode: 0o600 },
-  );
+  const addedIgnoreRule = await appendToEnvLocal({
+    dir,
+    text: `GT_PROJECT_ID=${projectId}\nGT_DEV_API_KEY=${key.key}\n`,
+  });
   log.success(
     [
       ...(createdProject ? ["Created the General Translation project."] : []),
       "Saved the API key to .env.local.",
-      ...(ignored ? [] : ["Added .env.local to .gitignore."]),
+      ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
     ].join("\n"),
   );
   return { apiKey: key.key, projectId };
 }
 
 /**
- * The folder's name, as the project's, cut to the API's length at a whole
- * character.
+ * Whether gt's stored sign-in can still make requests. One whose refresh
+ * token expired or was revoked stays stored, and only a new sign-in replaces
+ * it. A refresh that fails offline counts as signed out too: the new sign-in
+ * then fails with its own error.
  */
-function projectName(dir: string): string {
-  let name = nodePath.basename(nodePath.resolve(dir));
-  while (name.length > MAX_PROJECT_NAME_LENGTH) {
-    name = [...name].slice(0, -1).join("");
-  }
-  return name;
+async function isSignedIn(account: GtAccount): Promise<boolean> {
+  if (!(await account.hasLogin())) return false;
+  return account.userTokenProvider.getAccessToken().then(
+    () => true,
+    (error: unknown) => {
+      if (error instanceof UserAuthError) return false;
+      throw error;
+    },
+  );
 }
 
-/** git's exit code; null without git, where the folder is no work tree. */
-function git(dir: string, ...args: string[]): Promise<number | null> {
+/**
+ * Why a key must not be saved to `dir/.env.local`, as the start of a
+ * sentence that says how to fix it: git tracks it, or it is a symlink, through
+ * which an ignored .env.local could still write the key to a tracked file.
+ */
+async function envLocalProblem(dir: string): Promise<string | undefined> {
+  if (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) {
+    return ".env.local is tracked by git. Untrack it with `git rm --cached .env.local`";
+  }
+  const envLocal = await fs
+    .lstat(nodePath.join(dir, ".env.local"))
+    .catch(() => undefined);
+  if (envLocal?.isSymbolicLink()) {
+    return ".env.local is a symbolic link. Replace it with a regular file";
+  }
+  return undefined;
+}
+
+/**
+ * Appends `text` to `dir/.env.local`, which only the user can read if it is
+ * new, and resolves whether it added a `.gitignore` rule for the file first.
+ * It does unless git ignores the file: outside a work tree too, or a later
+ * `git init` would commit it.
+ */
+async function appendToEnvLocal(args: {
+  dir: string;
+  text: string;
+}): Promise<boolean> {
+  const ignored = await git(args.dir, "check-ignore", "-q", "--", ".env.local");
+  if (!ignored) {
+    await appendToFile({
+      file: nodePath.join(args.dir, ".gitignore"),
+      text: ".env.local\n",
+    });
+  }
+  await appendToFile({
+    file: nodePath.join(args.dir, ".env.local"),
+    text: args.text,
+    mode: 0o600,
+  });
+  return !ignored;
+}
+
+/**
+ * The General Translation project that `dir`'s .env files, gt.config.json or
+ * the environment name. One in .env or .env.local comes first: a new key is
+ * saved next to it, and readGtCredentials pairs a key with the project ID from
+ * the same source. A missing gt.config.json is allowed; an unreadable or
+ * invalid one throws, rather than a second project being created.
+ */
+async function findGtProjectId(
+  dir: string,
+  env: Record<string, string | undefined>,
+): Promise<string | undefined> {
+  const configPath = nodePath.join(dir, "gt.config.json");
+  const text = await fs.readFile(configPath, "utf8").catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  let projectId: string | undefined;
+  if (text !== undefined) {
+    let config: unknown;
+    try {
+      config = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Invalid General Translation config at ${configPath}: expected valid JSON.`,
+      );
+    }
+    if (
+      typeof config !== "object" ||
+      config === null ||
+      Array.isArray(config)
+    ) {
+      throw new Error(
+        `Invalid General Translation config at ${configPath}: expected a JSON object.`,
+      );
+    }
+    if ("projectId" in config) {
+      if (typeof config.projectId !== "string" || !config.projectId.trim()) {
+        throw new Error(
+          `Invalid General Translation config at ${configPath}: projectId must be a non-empty string.`,
+        );
+      }
+      projectId = config.projectId;
+    }
+  }
+  return (
+    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
+    projectId ||
+    findVariable(env, PROJECT_ID)
+  );
+}
+
+/** Whether git exits with 0; false without git, where the folder is no work tree. */
+function git(dir: string, ...args: string[]): Promise<boolean> {
   return new Promise((resolve) =>
-    execFile("git", args, { cwd: dir }, (error) =>
-      resolve(!error ? 0 : typeof error.code === "number" ? error.code : null),
-    ),
+    execFile("git", args, { cwd: dir }, (error) => resolve(!error)),
   );
 }
 
 /** Appends `text` to `file` on a new line, creating the file if needed. */
-async function appendToFile(
-  file: string,
-  text: string,
-  options?: { mode: number },
-): Promise<void> {
+async function appendToFile({
+  file,
+  text,
+  mode,
+}: {
+  file: string;
+  text: string;
+  /** Only for a new file. */
+  mode?: number;
+}): Promise<void> {
   const content = await fs.readFile(file, "utf8").catch(() => "");
   const separator = content && !content.endsWith("\n") ? "\n" : "";
-  await fs.appendFile(file, separator + text, options);
-}
-
-function parseJson(text: string): any {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
+  await fs.appendFile(file, separator + text, { mode });
 }
