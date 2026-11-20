@@ -105,6 +105,16 @@ function fakeApi(
   return { requests, fetch: fetch as typeof globalThis.fetch };
 }
 
+/** An API error for `path`, as for an organization at its project limit. */
+const projectLimit = (path: string) => ({
+  path,
+  status: 403,
+  body: {
+    error: "The organization reached its project limit",
+    code: "project_limit_reached",
+  },
+});
+
 /**
  * A `GtAccount` on the fake API; `signedIn` is whether gt has a stored
  * sign-in, and `getAccessToken` replaces the sign-in's tokens.
@@ -441,6 +451,15 @@ describe("signInToGt", () => {
     expect(read(dir, ".gitignore")).toBe("node_modules\n.env.local\n");
   });
 
+  test("adds the rule again where a later .gitignore line un-ignores .env.local", async () => {
+    captureLog();
+    const dir = gitTree({ ".gitignore": ".env.local\n!.env.local\n" });
+    await signIn({ dir, account: fakeAccount().account });
+    expect(read(dir, ".gitignore")).toBe(
+      ".env.local\n!.env.local\n.env.local\n",
+    );
+  });
+
   test("leaves .gitignore alone when it ignores .env.local already", async () => {
     captureLog();
     const dir = gitTree({ ".gitignore": ".env*\n" });
@@ -580,40 +599,52 @@ describe("signInToGt", () => {
     );
   });
 
-  test.each([
-    [
-      "project",
-      "/v2/orgs/org_1/projects",
+  test("says why the project couldn't be created, and saves nothing", async () => {
+    captureLog();
+    const dir = tree();
+    const gt = fakeAccount(
+      fakeApi({ fail: projectLimit("/v2/orgs/org_1/projects") }),
+    );
+    await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
       "Couldn't create the General Translation project: The organization reached its project limit",
-    ],
-    [
-      "key",
-      "/v2/projects/prj_new/api-keys",
+    );
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  test("keeps a new project's ID when its key couldn't be made, and makes the key for it on the next run", async () => {
+    captureLog();
+    const dir = tree();
+    const failing = fakeAccount(
+      fakeApi({ fail: projectLimit("/v2/projects/prj_new/api-keys") }),
+    );
+    await expect(signIn({ dir, account: failing.account })).rejects.toThrow(
       "Couldn't create a General Translation API key for project prj_new: The organization reached its project limit",
-    ],
-  ])(
-    "says why the %s couldn't be created, and saves nothing",
-    async (_, path, message) => {
-      captureLog();
-      const dir = tree();
-      const gt = fakeAccount(
-        fakeApi({
-          fail: {
-            path,
-            status: 403,
-            body: {
-              error: "The organization reached its project limit",
-              code: "project_limit_reached",
-            },
-          },
-        }),
-      );
-      await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
-        message,
-      );
-      expect(fs.readdirSync(dir)).toEqual([]);
-    },
-  );
+    );
+    expect(read(dir, ".env.local")).toBe("GT_PROJECT_ID=prj_new\n");
+
+    const gt = fakeAccount();
+    await signIn({ dir, account: gt.account });
+    expect(gt.requests.map((request) => request.path)).toEqual([
+      "/v2/projects/prj_new/api-keys",
+    ]);
+    expect(read(dir, ".env.local")).toBe(
+      `GT_PROJECT_ID=prj_new\nGT_DEV_API_KEY=${API_KEY}\n`,
+    );
+  });
+
+  test("doesn't repeat a project ID the .env files have already", async () => {
+    captureLog();
+    const dir = tree({ ".env": "GT_PROJECT_ID=prj_1\n" });
+    expect(await signIn({ dir, account: fakeAccount().account })).toEqual({
+      apiKey: API_KEY,
+      projectId: "prj_1",
+    });
+    expect(read(dir, ".env.local")).toBe(`GT_DEV_API_KEY=${API_KEY}\n`);
+    expect(await readGtCredentials({ env: {}, dir })).toEqual({
+      apiKey: API_KEY,
+      projectId: "prj_1",
+    });
+  });
 
   test("passes on a failed sign-in, and saves nothing", async () => {
     captureLog();
