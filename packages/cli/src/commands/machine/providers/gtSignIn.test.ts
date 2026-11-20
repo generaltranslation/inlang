@@ -7,6 +7,7 @@ import { UserAuthError } from "@generaltranslation/auth";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
 import {
+  findGtProjectId,
   readGtCredentials,
   shareGtProjectId,
   signInToGt,
@@ -255,6 +256,33 @@ const read = (dir: string, file: string) =>
   fs.readFileSync(nodePath.join(dir, file), "utf8");
 
 describe("shareGtProjectId", () => {
+  test("after a sign-in for the project an ignored .env names, a clean checkout still uses that project", async () => {
+    captureLog();
+    const dir = gitTree({
+      ".gitignore": ".env\n.env.local\n",
+      ".env": "GT_PROJECT_ID=prj_1\n",
+    });
+    await signIn({ dir, account: fakeAccount().account });
+    expect(await shareGtProjectId(dir)).toBe(true);
+
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, { cwd });
+    git(dir, "add", "-A");
+    git(
+      dir,
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "commit",
+      "-qm",
+      "init",
+    );
+    const clone = nodePath.join(tree(), "clone");
+    git(dir, "clone", "-q", dir, clone);
+    expect(await findGtProjectId(clone, {})).toBe("prj_1");
+  });
+
   test("adds the project ID to a gt.config.json without one", async () => {
     const dir = tree({
       ".env.local": ENV_LOCAL,
