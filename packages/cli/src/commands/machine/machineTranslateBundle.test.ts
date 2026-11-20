@@ -779,3 +779,40 @@ test("a translation that isn't text, such as {}, fails instead of being saved bl
   });
   expect(result.translations.size).toBe(0);
 });
+
+test("an `other` that isn't a language's catch-all doesn't replace the source's", async () => {
+  // Russian `other` is only fractions: with `few` and `many` missing, 2 and 5
+  // need a catch-all, which runtimes such as Paraglide don't take from `other`
+  const { calls, result } = await translate(
+    formsBundle(countPlural, ["countPlural"], {
+      en: items,
+      ru: { "countPlural=one": "Один товар", "countPlural=other": "Товара" },
+    }),
+    ["ru"],
+  );
+
+  expect(calls).toEqual(["Many items"]);
+  expect(formsOf(result, "ru")).toEqual({
+    "countPlural=one": "Один товар",
+    "countPlural=other": "Товара",
+    "countPlural=*": "[ru] Many items",
+  });
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+});
+
+test("an empty select value only the translation has is reported", async () => {
+  // a source without selectors, and a hand-written translation by gender
+  const bundle = formsBundle([input("gender")], ["gender"], {
+    en: { "gender=*": "Hello" },
+    de: { "gender=female": "", "gender=*": "Hallo" },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual([]);
+  expect(result.differentSelectors).toEqual(["de"]);
+});
