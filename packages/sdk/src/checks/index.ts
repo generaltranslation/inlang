@@ -18,10 +18,12 @@ export {
 	selectorGroups,
 	requiredVariants,
 	missingVariants,
+	sourceVariantFor,
 	variantCovers,
 	pluralRules,
 	pluralCategories,
 	isSingleNumberCategory,
+	spelledOutInputs,
 	isUnreachableVariant,
 	isPluralSelector,
 	isNumericKey,
@@ -32,6 +34,7 @@ export {
 	type SelectorOptions,
 	type PluralRules,
 } from "./selectors.js";
+export { pluralExamples } from "./pluralExamples.js";
 export type {
 	SourceFile,
 	UsageAnalysis,

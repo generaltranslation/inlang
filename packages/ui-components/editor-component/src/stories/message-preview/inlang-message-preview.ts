@@ -2,7 +2,7 @@ import type { Declaration, MessageRow, Pattern, VariantRow } from "@inlang/sdk";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { tokens, partStyles } from "../../styling/tokens.js";
-import { resolveInputVariable } from "@inlang/sdk/browser";
+import { pluralExamples, resolveInputVariable } from "@inlang/sdk/browser";
 import {
 	previewInputs,
 	type PreviewInput,
@@ -10,7 +10,6 @@ import {
 import { selectVariant } from "../../helper/selectVariant.js";
 import { formatPattern } from "../../helper/formatPattern.js";
 import { languageName } from "../../helper/languageName.js";
-import { pluralExamples } from "../../helper/pluralExamples.js";
 import { renderParts, type RenderItem } from "../pattern-view/renderParts.js";
 
 export type ValuesChangeEventDetail = { values: Record<string, unknown> };
