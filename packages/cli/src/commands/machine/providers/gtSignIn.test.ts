@@ -429,6 +429,18 @@ describe("signInToGt", () => {
     );
   });
 
+  test("adds the rule again outside git where a later .gitignore line un-ignores .env.local, so a later git init ignores it", async () => {
+    captureLog();
+    vi.stubEnv("GIT_CONFIG_GLOBAL", nodePath.join(tree(), "none"));
+    vi.stubEnv("XDG_CONFIG_HOME", tree());
+    const dir = tree({ ".gitignore": ".env.local\n!.env.local\n" });
+    await signIn({ dir, account: fakeAccount().account });
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    expect(() =>
+      execFileSync("git", ["check-ignore", "-q", ".env.local"], { cwd: dir }),
+    ).not.toThrow();
+  });
+
   test("leaves .gitignore alone when it ignores .env.local already", async () => {
     captureLog();
     const dir = gitTree({ ".gitignore": ".env*\n" });
