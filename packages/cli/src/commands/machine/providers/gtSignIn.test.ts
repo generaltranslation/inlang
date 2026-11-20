@@ -45,21 +45,42 @@ const settings = {
 type Request = { method: string; path: string; body: any; auth: string | null };
 
 /**
- * A fake General Translation API: organizations in pages of `pageSize`, and
- * projects and keys made on request. `fail` answers one path with an error.
+ * A fake General Translation API: the user's organizations and projects in
+ * pages of `pageSize`, and projects and keys made on request. `fail` answers
+ * one path with an error.
  */
 function fakeApi(
   options: {
     orgs?: Array<{ id: string; name: string }>;
+    projects?: Array<{
+      id: string;
+      name: string;
+      orgId: string;
+      orgName: string;
+    }>;
     pageSize?: number;
     fail?: { path: string; status: number; body: object };
   } = {},
 ) {
-  const { orgs = [{ id: "org_1", name: "Emails" }], pageSize = 50 } = options;
+  const {
+    orgs = [{ id: "org_1", name: "Emails" }],
+    projects = [],
+    pageSize = 50,
+  } = options;
+  const page = (items: unknown[]) => {
+    const start = Number(new URL(lastUrl).searchParams.get("cursor") ?? 0);
+    const end = start + pageSize;
+    return {
+      items: items.slice(start, end),
+      nextCursor: end < items.length ? String(end) : null,
+    };
+  };
+  let lastUrl = "";
   const requests: Request[] = [];
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    lastUrl = request.url;
     const text = await request.text();
     requests.push({
       method: request.method,
@@ -74,14 +95,8 @@ function fakeApi(
       });
     if (options.fail?.path === url.pathname)
       return json(options.fail.status, options.fail.body);
-    if (url.pathname === "/v2/orgs") {
-      const start = Number(url.searchParams.get("cursor") ?? 0);
-      const end = start + pageSize;
-      return json(200, {
-        items: orgs.slice(start, end),
-        nextCursor: end < orgs.length ? String(end) : null,
-      });
-    }
+    if (url.pathname === "/v2/orgs") return json(200, page(orgs));
+    if (url.pathname === "/v2/projects") return json(200, page(projects));
     const project = /^\/v2\/orgs\/([^/]+)\/projects$/.exec(url.pathname);
     if (project) {
       return json(201, {
@@ -324,6 +339,12 @@ describe("signInToGt", () => {
     expect(gt.requests).toEqual([
       {
         method: "GET",
+        path: "/v2/projects",
+        body: undefined,
+        auth: "Bearer user-token",
+      },
+      {
+        method: "GET",
         path: "/v2/orgs",
         body: undefined,
         auth: "Bearer user-token",
@@ -350,9 +371,15 @@ describe("signInToGt", () => {
     expect(output()).not.toContain(API_KEY);
   });
 
-  test.each([403, 404])(
+  test.each([
+    [
+      403,
+      "If you are a member of its organization, ask a project admin for project:api_keys:write. If you aren't, ask to be invited",
+    ],
+    [404, "If you aren't a member of its organization, ask to be invited"],
+  ])(
     "says how to get access when the key for a shared project fails with %i",
-    async (status) => {
+    async (status, advice) => {
       captureLog();
       const gt = fakeAccount(
         fakeApi({
@@ -369,10 +396,106 @@ describe("signInToGt", () => {
           account: gt.account,
         }),
       ).rejects.toThrow(
-        "Couldn't create a General Translation API key for project prj_team: Forbidden. If you aren't a member of its organization, ask to be invited, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.",
+        `Couldn't create a General Translation API key for project prj_team: Forbidden. ${advice}, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.`,
       );
     },
   );
+
+  const teamProjects = [
+    { id: "prj_a", name: "Website", orgId: "org_1", orgName: "Emails" },
+    { id: "prj_b", name: "App", orgId: "org_2", orgName: "Acme" },
+    { id: "prj_c", name: "Docs", orgId: "org_2", orgName: "Acme" },
+  ];
+
+  test("asks which of the user's projects to use, from every page, and makes the key for it", async () => {
+    captureLog();
+    const dir = tree();
+    const gt = fakeAccount(fakeApi({ projects: teamProjects, pageSize: 2 }));
+    const { prompts, prompt } = fakePrompt("prj_c");
+    expect(await signIn({ dir, prompt, account: gt.account })).toEqual({
+      apiKey: API_KEY,
+      projectId: "prj_c",
+    });
+    expect(prompts).toEqual([
+      [
+        "Which General Translation project should this inlang project use?",
+        {
+          type: "select",
+          options: [
+            { label: "Website", value: "prj_a", hint: "Emails" },
+            { label: "App", value: "prj_b", hint: "Acme" },
+            { label: "Docs", value: "prj_c", hint: "Acme" },
+            { label: "Create a new project", value: "" },
+          ],
+          cancel: "undefined",
+        },
+      ],
+    ]);
+    expect(gt.requests.map((request) => request.path)).toEqual([
+      "/v2/projects",
+      "/v2/projects",
+      "/v2/projects/prj_c/api-keys",
+    ]);
+    expect(read(dir, ".env.local")).toBe(
+      `GT_PROJECT_ID=prj_c\nGT_DEV_API_KEY=${API_KEY}\n`,
+    );
+  });
+
+  test("creates a project when the user chooses to, asking for the organization only then", async () => {
+    captureLog();
+    const gt = fakeAccount(
+      fakeApi({
+        projects: teamProjects,
+        orgs: [
+          { id: "org_1", name: "Emails" },
+          { id: "org_2", name: "Acme" },
+        ],
+      }),
+    );
+    const answers = ["", "org_2"];
+    const prompts: string[] = [];
+    await signIn({
+      dir: tree(),
+      prompt: async (message) => {
+        prompts.push(message);
+        return answers.shift();
+      },
+      account: gt.account,
+    });
+    expect(prompts).toEqual([
+      "Which General Translation project should this inlang project use?",
+      "Which General Translation organization should the project belong to?",
+    ]);
+    expect(gt.requests.map((request) => request.path)).toContain(
+      "/v2/orgs/org_2/projects",
+    );
+  });
+
+  test("creates and saves nothing when the project question is cancelled", async () => {
+    captureLog();
+    const dir = tree();
+    const gt = fakeAccount(fakeApi({ projects: teamProjects }));
+    expect(
+      await signIn({
+        dir,
+        prompt: fakePrompt(undefined).prompt,
+        account: gt.account,
+      }),
+    ).toBeUndefined();
+    expect(gt.requests.map((request) => request.path)).toEqual([
+      "/v2/projects",
+    ]);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  test("passes noBrowser to the sign-in", async () => {
+    captureLog();
+    const gt = fakeAccount();
+    await signIn({ dir: tree(), noBrowser: true, account: gt.account });
+    expect(gt.login).toHaveBeenCalledWith(
+      expect.objectContaining({ noBrowser: true }),
+    );
+  });
 
   test("doesn't sign in again while gt's sign-in is valid", async () => {
     captureLog();
@@ -744,7 +867,10 @@ describe("signInToGt", () => {
         account: gt.account,
       }),
     ).toBeUndefined();
-    expect(gt.requests.map((request) => request.path)).toEqual(["/v2/orgs"]);
+    expect(gt.requests.map((request) => request.path)).toEqual([
+      "/v2/projects",
+      "/v2/orgs",
+    ]);
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
@@ -879,7 +1005,10 @@ describe("signInToGt", () => {
         "Your General Translation account has several organizations. Run this command in a terminal to choose one, or set GT_PROJECT_ID to a project from https://dash.generaltranslation.com.",
       );
       expect(prompts).toEqual([]);
-      expect(gt.requests.map((request) => request.path)).toEqual(["/v2/orgs"]);
+      expect(gt.requests.map((request) => request.path)).toEqual([
+        "/v2/projects",
+        "/v2/orgs",
+      ]);
       expect(fs.readdirSync(dir)).toEqual([]);
     });
   });
