@@ -127,7 +127,7 @@ describe("inlang check", { timeout: 60_000 }, () => {
       "unused-message incomplete: unused messages can't be determined because:\n  src/Field.tsx:14:8  m[`${fieldName}_label`]  Dynamic message access cannot be resolved.",
     );
     expect(stdout).toContain(
-      "3 findings\n  missing-translation  1\n  missing-variable     2\n",
+      "3 findings\n  missing-translation  1\n  missing-variable     2\n\nTranslate what's missing with inlang machine translate --project ./project.inlang\n",
     );
     // Paraglide's compiled output isn't analyzed, its re-exports would make analysis incomplete.
     expect(stdout).not.toContain("paraglide/messages.js");
@@ -145,6 +145,7 @@ describe("inlang check", { timeout: 60_000 }, () => {
     );
     expect(stdout).not.toContain("missing-translation");
     expect(stdout).not.toContain("Unsupported source format");
+    expect(stdout).not.toContain("machine translate");
     expect(stdout).toContain("2 findings\n  unused-message  2\n");
   });
 
@@ -251,6 +252,20 @@ describe("inlang check", { timeout: 60_000 }, () => {
     expect(noFail.stdout).toContain("3 findings");
   });
 
+  test("doesn't point to machine translate for the base locale", async () => {
+    const path = "messages/en-US.json";
+    const messages = JSON.parse(
+      fs.readFileSync(nodePath.join(fixtures, "check-app", path), "utf8"),
+    );
+    messages.welcome_back = "";
+    const { stdout } = await run(
+      app({ files: { [path]: JSON.stringify(messages) } }),
+      ["check", ...project, "--empty-translations"],
+    );
+    expect(stdout).toContain("empty-translation (1)\n  welcome_back  en-US");
+    expect(stdout).not.toContain("machine translate");
+  });
+
   test("--locales filters findings and validates the locales", async () => {
     const root = app();
     const filtered = await run(root, [
@@ -274,6 +289,10 @@ describe("inlang check", { timeout: 60_000 }, () => {
       "--missing-translations",
     ]);
     expect(alias.stdout).toContain("welcome_back  pt-BR  no translation");
+    // the hint translates only the checked locales, without the base locale
+    expect(alias.stdout).toContain(
+      "Translate what's missing with inlang machine translate --project ./project.inlang --targetLocales pt-BR\n",
+    );
     const unknown = await run(root, ["check", ...project, "--locales", "de"]);
     expect(unknown.code).toBe(1);
     expect(unknown.stderr).toContain(
