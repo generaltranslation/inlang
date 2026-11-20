@@ -1,5 +1,5 @@
 import type { MachineTranslateProvider, TranslateTextArgs } from "./types.js";
-import { rateLimitOf } from "./rateLimit.js";
+import { rateLimitOf, scopeOf } from "./rateLimit.js";
 
 export const DEFAULT_OPENAI_MODEL = "gpt-6-luna";
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -114,9 +114,7 @@ export function createOpenAITranslateProvider(
       if (!response.ok) {
         return {
           ok: false,
-          scope: [400, 413, 422].includes(response.status)
-            ? "text"
-            : "provider",
+          scope: scopeOf(response.status),
           ...rateLimitOf(response),
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
