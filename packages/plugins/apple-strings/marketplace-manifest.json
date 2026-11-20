@@ -9,6 +9,6 @@
   "keywords": ["apple", "ios", "macos", "strings", "localization", "plugin"],
   "publisherName": "inlang",
   "publisherIcon": "https://inlang.com/favicon/safari-pinned-tab.svg",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "module": "https://cdn.jsdelivr.net/npm/@inlang/plugin-apple-strings@latest/dist/index.js"
 }

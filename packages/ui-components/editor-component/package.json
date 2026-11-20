@@ -29,7 +29,7 @@
 	},
 	"keywords": [],
 	"author": "",
-	"license": "ISC",
+	"license": "MIT",
 	"devDependencies": {
 		"@inlang/plugin-icu1": "workspace:*",
 		"@inlang/tsconfig": "workspace:*",
