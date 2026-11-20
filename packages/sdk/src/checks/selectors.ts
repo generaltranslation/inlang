@@ -121,6 +121,12 @@ export type PluralRules = {
 	requiredCategories: string[];
 	/** Categories that select exactly one number, e.g. German "one" (1) but not Russian "one" (1, 21, 31, …). */
 	singleNumberCategories: string[];
+	/**
+	 * Sample numbers (0–1000 and some decimals up to 10.1, before the offset) each category
+	 * selects, to compare categories across locales. Categories that only
+	 * millions or compact exponents select have none.
+	 */
+	sampleNumbers: ReadonlyMap<string, ReadonlySet<number>>;
 	/** `Intl.PluralRules` with the selector's options, to choose a category for a number. */
 	rules: Intl.PluralRules;
 };
@@ -137,15 +143,26 @@ const SAMPLES = [
  * The plural rules of a `plural` selector in a locale. Undefined when the
  * selector is not a plural, its type or options are only known at runtime, or
  * the locale is unsupported (never guesses another language).
+ *
+ * A plural whose `type` is a variable (i18next's `type=$pluralType`) has the
+ * type a form chooses: pass the form's `matches`. Its catch-all on the type
+ * is the runtime's default, cardinal.
  */
 export function pluralRules(
 	selector: string,
 	declarations: readonly Declaration[] | undefined,
-	locale: string
+	locale: string,
+	matches?: readonly Match[]
 ): PluralRules | undefined {
 	const annotation = resolveAnnotation(selector, declarations);
 	if (annotation?.name !== "plural") return undefined;
-	return rulesOf(annotation, locale);
+	const variable = typeVariable(annotation);
+	if (variable === undefined || !matches) return rulesOf(annotation, locale);
+	const type = typeMatched(variable, matches, declarations);
+	return rulesOf(
+		withType(annotation, type === "*" ? "cardinal" : type),
+		locale
+	);
 }
 
 function rulesOf(
@@ -208,6 +225,7 @@ function rulesOf(
 							([category, values]) => category !== "other" && values.size === 1
 						)
 						.map(([category]) => category),
+					sampleNumbers: numbers,
 					rules,
 				};
 			}
@@ -253,12 +271,61 @@ export function isSingleNumberCategory(
 	);
 }
 
+/**
+ * Inputs a variant may spell out instead of interpolating: an exact number,
+ * or a plural category that selects one number in the variant's locale.
+ * Only that selector's input is exempt; other variables remain required.
+ */
+export function spelledOutInputs(
+	variant: WithMatches,
+	declarations: readonly Declaration[] | undefined,
+	locale: string
+): string[] {
+	return variant.matches.flatMap((match) => {
+		if (match.type !== "literal-match") return [];
+		const annotation = resolveAnnotation(match.key, declarations);
+		const exact =
+			isNumericKey(match.value) &&
+			(annotation === undefined || annotation.name === "plural");
+		const single =
+			annotation?.name === "plural" &&
+			pluralRules(
+				match.key,
+				declarations,
+				locale,
+				variant.matches
+			)?.singleNumberCategories.includes(match.value);
+		return exact || single
+			? [resolveInputVariable(match.key, declarations)]
+			: [];
+	});
+}
+
 /** The variable a plural's `type` option reads (`type=$pluralType`), if any. */
 function typeVariable(annotation: FunctionReference): string | undefined {
 	const option = annotation.options?.find((value) => value.name === "type");
 	return option?.value.type === "variable-reference"
 		? option.value.name
 		: undefined;
+}
+
+/**
+ * The type a form chooses for a plural's `type=$variable`: what it matches on
+ * the select that reads that variable, "*" for the catch-all.
+ */
+function typeMatched(
+	variable: string,
+	matches: readonly Match[],
+	declarations: readonly Declaration[] | undefined
+): string {
+	const input = resolveInputVariable(variable, declarations);
+	const chosen = matches.find(
+		(match) =>
+			match.type === "literal-match" &&
+			resolveAnnotation(match.key, declarations) === undefined &&
+			resolveInputVariable(match.key, declarations) === input
+	);
+	return chosen?.type === "literal-match" ? chosen.value : "*";
 }
 
 /** The plural annotation with its `type` option set to a literal type. */
@@ -299,15 +366,7 @@ export function isUnreachableVariant(
 		const variable = typeVariable(annotation);
 		let types: (string | undefined)[] = [undefined];
 		if (variable !== undefined) {
-			// the type the variant selects, read through the selector on that variable
-			const input = resolveInputVariable(variable, declarations);
-			const chosen = variant.matches.find(
-				(other) =>
-					other.type === "literal-match" &&
-					resolveAnnotation(other.key, declarations) === undefined &&
-					resolveInputVariable(other.key, declarations) === input
-			);
-			const value = chosen?.type === "literal-match" ? chosen.value : "*";
+			const value = typeMatched(variable, variant.matches, declarations);
 			types =
 				value === "cardinal" || value === "ordinal"
 					? [value]
@@ -724,13 +783,25 @@ export function requiredVariants(
 /**
  * True when a variant is the form for a match combination. An explicit
  * `other` of a plural selector is its catch-all form as well.
+ *
+ * With the `locale`, a plural category that selects only 0 is the form's
+ * exact 0: Arabic "zero" is `=0`, which is how `@inlang/plugin-i18next`
+ * imports Arabic `_zero`, with ordinal forms too (in the catch-all type, which
+ * is cardinal). Latvian "zero" (0, 10–20, 30…) is not. Neither is German
+ * "one" `=1`: plural rules ignore the sign, so "one" is -1 too.
  */
 export function variantCovers(
 	variant: WithMatches,
 	matches: readonly Match[],
-	declarations: readonly Declaration[] | undefined
+	declarations: readonly Declaration[] | undefined,
+	locale?: string
 ): boolean {
+	const same =
+		locale === undefined
+			? []
+			: exactNumberAsCategory(variant, matches, declarations, locale);
 	return matches.every((match) => {
+		if (same.includes(match.key)) return true;
 		const actual = matchValue(variant, match.key);
 		if (actual === (match.type === "literal-match" ? match.value : "*"))
 			return true;
@@ -740,6 +811,66 @@ export function variantCovers(
 			isPluralSelector(match.key, declarations)
 		);
 	});
+}
+
+/**
+ * The exact-number selector of `matches` and the plural selector of the same
+ * input, when the exact number is 0 after the plural's offset and the variant
+ * has the catch-all on the first and, on the second, the category that
+ * selects only 0 in the locale. With a variable plural type, also its select
+ * when the form matches "cardinal" there and the variant the catch-all (the
+ * cardinal type). Empty otherwise.
+ */
+function exactNumberAsCategory(
+	variant: WithMatches,
+	matches: readonly Match[],
+	declarations: readonly Declaration[] | undefined,
+	locale: string
+): string[] {
+	for (const exact of matches) {
+		if (
+			exact.type !== "literal-match" ||
+			!isNumericKey(exact.value) ||
+			resolveAnnotation(exact.key, declarations) !== undefined ||
+			matchValue(variant, exact.key) !== "*"
+		)
+			continue;
+		const input = resolveInputVariable(exact.key, declarations);
+		for (const plural of matches) {
+			if (
+				plural.type !== "catchall-match" ||
+				resolveInputVariable(plural.key, declarations) !== input
+			)
+				continue;
+			const rules = pluralRules(plural.key, declarations, locale, matches);
+			const category = matchValue(variant, plural.key);
+			if (
+				!rules ||
+				Number(exact.value) !== rules.offset ||
+				!rules.singleNumberCategories.includes(category) ||
+				rules.rules.select(0) !== category
+			)
+				continue;
+			const variable = typeVariable(
+				resolveAnnotation(plural.key, declarations)!
+			);
+			const type =
+				variable === undefined
+					? undefined
+					: matches.find(
+							(match) =>
+								resolveAnnotation(match.key, declarations) === undefined &&
+								resolveInputVariable(match.key, declarations) ===
+									resolveInputVariable(variable, declarations)
+						);
+			return type?.type === "literal-match" &&
+				type.value === "cardinal" &&
+				matchValue(variant, type.key) === "*"
+				? [exact.key, plural.key, type.key]
+				: [exact.key, plural.key];
+		}
+	}
+	return [];
 }
 
 /**
@@ -754,6 +885,134 @@ export function missingVariants(
 	const variants = options.variants ?? message.variants ?? [];
 	return requiredVariants(message, declarations, options).filter(
 		(matches) =>
-			!variants.some((variant) => variantCovers(variant, matches, declarations))
+			!variants.some((variant) =>
+				variantCovers(variant, matches, declarations, message.locale)
+			)
 	);
+}
+
+/**
+ * The reference variant a form of a translation (one of its
+ * {@link requiredVariants}) is translated from: the variant the reference
+ * shows at runtime for the form's inputs. The form has the reference's
+ * selectors.
+ *
+ * - Exact numbers (ICU `=0`) must match.
+ * - A plural category comes from the category the reference's locale
+ *   selects for the category's whole numbers (its decimals, if it has none),
+ *   not the one of the same name. When they fall in more than one, it comes
+ *   from `other`, matched by an explicit `other` or the catch-all. German
+ *   `one` (1) comes from English `one`, but Russian `one` (1, 21, 31…) and
+ *   `few` come from English `*`, and Russian `many` (5–20, 25…) from French
+ *   `*` rather than French `many` (millions). The translation's `other` and
+ *   catch-all come from the reference's.
+ * - A category without numbers (only millions select it), or with unknown
+ *   plural rules in either locale, comes from the reference's category of the
+ *   same name, or from `other` if the reference's locale lacks it.
+ * - A plural with a variable type (`type=$pluralType`) has the type the form
+ *   matches, see {@link pluralRules}.
+ * - Of the variants whose keys all hold, the runtime shows the one with
+ *   literal keys on the earliest selectors (Paraglide's order, as in MF2):
+ *   with selectors `count`, `gender`, `one · male` from `one · *` rather than
+ *   `* · male`, and `few · male` from `* · male`.
+ * - Variants the reference never selects in `referenceLocale` (English
+ *   `zero`) are skipped.
+ *
+ * Undefined when the reference has no such variant, such as for an exact
+ * number or a select value only the translation uses.
+ */
+export function sourceVariantFor<V extends WithMatches>({
+	target,
+	reference,
+	declarations,
+	referenceLocale,
+	targetLocale,
+}: {
+	target: readonly Match[];
+	reference: readonly V[];
+	declarations: readonly Declaration[] | undefined;
+	referenceLocale: string;
+	targetLocale: string;
+}): V | undefined {
+	const form = { matches: target };
+	// Candidates exclude variants the reference never shows: an exact number's
+	// key holds as is, so `0 · zero` would otherwise stand in for English 0.
+	// Those variants still count as using their select values.
+	const shown = reference.filter(
+		(variant) => !isUnreachableVariant(variant, declarations, referenceLocale)
+	);
+	const groups = selectorGroups(
+		{
+			locale: referenceLocale,
+			selectors: target.map(({ key }) => ({
+				type: "variable-reference",
+				name: key,
+			})),
+		},
+		declarations,
+		{ variants: [form], referenceVariants: shown }
+	);
+	// per group, the reference keys that hold for the form's inputs
+	const holds = groups.map((group) => {
+		const key = group.keyOf(form);
+		if (!group.isPlural)
+			return reference.some((variant) => group.keyOf(variant) === key)
+				? [key, "*"]
+				: [key];
+		if (isNumericKey(key)) return [key];
+		const rules = pluralRules(
+			group.selector,
+			declarations,
+			referenceLocale,
+			target
+		);
+		const samples = [
+			...(pluralRules(
+				group.selector,
+				declarations,
+				targetLocale,
+				target
+			)?.sampleNumbers.get(key) ?? []),
+		];
+		// Whole numbers, if the category has any: languages that agree on them
+		// can still put decimals in different categories (Croatian `one` has
+		// 1.1, Russian `one` doesn't), and counts are mostly whole.
+		const integers = samples.filter(Number.isInteger);
+		const numbers = integers.length > 0 ? integers : samples;
+		// The reference shows the text of the category its locale selects for
+		// the form's numbers. Numbers in more than one category have no one
+		// text, so they take the catch-all's.
+		const selected =
+			rules && numbers.length > 0
+				? new Set(numbers.map((number) => rules.rules.select(number)))
+				: undefined;
+		const category =
+			key === "*" || key === "other"
+				? "other"
+				: selected
+					? selected.size === 1
+						? [...selected][0]!
+						: "other"
+					: // Without the form's numbers (unknown rules in the
+						// translation, or a category only millions select), it
+						// keeps its name, if the reference's locale has it.
+						rules && !rules.categories.includes(key)
+						? "other"
+						: key;
+		return [category, "*"];
+	});
+	// Paraglide checks the variants with a literal key on an earlier selector first
+	const rank = (variant: V) =>
+		target.map(({ key }) => (matchValue(variant, key) === "*" ? 1 : 0));
+	return shown
+		.filter((variant) =>
+			groups.every((group, index) =>
+				holds[index]!.includes(group.keyOf(variant))
+			)
+		)
+		.map((variant) => ({ variant, rank: rank(variant) }))
+		.sort((a, b) => {
+			const index = a.rank.findIndex((value, i) => value !== b.rank[i]);
+			return index === -1 ? 0 : a.rank[index]! - b.rank[index]!;
+		})[0]?.variant;
 }
