@@ -55,7 +55,45 @@ describe("createGoogleTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "provider",
       error: "403 Forbidden: translating from en to de",
     });
   });
+
+  // Translation API v2 reports its per-minute quotas as 403, not 429.
+  test.each([
+    ["userRateLimitExceeded", true],
+    ["rateLimitExceeded", true],
+    ["dailyLimitExceeded", false],
+  ])(
+    "a 403 with reason %s is rate-limited: %s",
+    async (reason, rateLimited) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 403,
+          statusText: "Forbidden",
+          headers: new Headers({ "retry-after": "5" }),
+          json: async () => ({
+            error: { code: 403, errors: [{ domain: "usageLimits", reason }] },
+          }),
+        }),
+      );
+
+      const provider = createGoogleTranslateProvider("google-key");
+      const result = await provider.translateText({
+        text: "Hello World",
+        sourceLocale: "en",
+        targetLocale: "de",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        scope: "provider",
+        ...(rateLimited ? { rateLimited: true, retryAfterMs: 5000 } : {}),
+        error: "403 Forbidden: translating from en to de",
+      });
+    },
+  );
 });

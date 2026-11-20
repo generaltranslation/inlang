@@ -178,36 +178,8 @@ describe("createOpenAITranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "provider",
       error: "401 Unauthorized: translating from en to de",
-    });
-  });
-
-  test.each([
-    [429, "Too Many Requests"],
-    [500, "Internal Server Error"],
-    [503, "Service Unavailable"],
-    [599, "Server Error"],
-  ])("marks HTTP %i as unavailable", async (status, statusText) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status,
-        statusText,
-      }),
-    );
-
-    const provider = createOpenAITranslateProvider("openai-key");
-    const result = await provider.translateText({
-      text: "Hello World",
-      sourceLocale: "en",
-      targetLocale: "de",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: `${status} ${statusText}: translating from en to de`,
-      unavailable: true,
     });
   });
 
@@ -249,8 +221,8 @@ describe("createOpenAITranslateProvider", () => {
 
       expect(result).toEqual({
         ok: false,
+        scope: "text",
         error: "OpenAI response was not completed: translating from en to de",
-        unavailable: true,
       });
     },
   );
@@ -273,6 +245,7 @@ describe("createOpenAITranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "text",
       error: "Invalid response from OpenAI: translating from en to de",
     });
   });

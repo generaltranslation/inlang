@@ -53,7 +53,7 @@ export function serializePattern(
   let result = "";
   for (const [index, element] of pattern.entries()) {
     if (element.type === "text") {
-      result += element.value
+      result += escapeHtml(element.value)
         .replaceAll("\r", "<inlang-CarriageReturn>")
         .replaceAll("\n", "<inlang-LineFeed>");
     } else {
@@ -65,46 +65,82 @@ export function serializePattern(
             ? (pattern[index + 1] as Text).value[0]
             : undefined,
       };
-      result += `${escapeStart}${JSON.stringify(element)}${escapeEnd}`;
+      result += `${escapeStart}${escapeHtml(JSON.stringify(element))}${escapeEnd}`;
     }
   }
   return result;
 }
 
+/** An expression with an argument, or markup with a name. */
+function isPlaceholder(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const { type, arg, name } = value as Record<string, unknown>;
+  return type === "expression"
+    ? typeof arg === "object" && arg !== null
+    : typeof type === "string" &&
+        type.startsWith("markup-") &&
+        typeof name === "string";
+}
+
 export function deserializePattern(text: string): VariantRow["pattern"] {
   const result: VariantRow["pattern"] = [];
-  const unescapedText = text
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .replaceAll("<inlang-CarriageReturn>", "\r")
-    .replaceAll("<inlang-LineFeed> ", "\n")
-    .replaceAll("<inlang-LineFeed>", "\n");
+  const appendText = (value: string) =>
+    result.push({
+      type: "text",
+      value: unescapeHtml(
+        value
+          .replaceAll("<inlang-CarriageReturn>", "\r")
+          .replaceAll("<inlang-LineFeed> ", "\n")
+          .replaceAll("<inlang-LineFeed>", "\n"),
+      ),
+    });
   let index = 0;
-  while (index < unescapedText.length) {
-    const start = unescapedText.indexOf(escapeStart, index);
+  while (index < text.length) {
+    const start = text.indexOf(escapeStart, index);
     if (start === -1) {
-      result.push({ type: "text", value: unescapedText.slice(index) });
+      appendText(text.slice(index));
       break;
     } else if (index < start) {
-      result.push({ type: "text", value: unescapedText.slice(index, start) });
+      appendText(text.slice(index, start));
       index = start;
       continue;
     }
-    const end = unescapedText.indexOf(escapeEnd, start);
+    const end = text.indexOf(escapeEnd, start);
     if (end === -1) {
-      result.push({ type: "text", value: unescapedText.slice(index) });
+      appendText(text.slice(index));
       break;
     }
 
-    const expressionAsText = unescapedText.slice(
-      start + escapeStart.length,
-      end,
+    const expressionAsText = unescapeHtml(
+      text.slice(start + escapeStart.length, end),
     );
     const expression = JSON.parse(expressionAsText) as VariableReference;
+    // The provider can return any JSON here, which later checks would trip on.
+    if (!isPlaceholder(expression)) {
+      throw new SyntaxError(`Not a placeholder: ${expressionAsText}`);
+    }
 
     // @ts-expect-error placeholder metadata is preserved at runtime
     result.push(expression);
     index = end + escapeEnd.length;
   }
   return result;
+}
+
+// Decode only after finding placeholder boundaries: a literal span in the
+// source, or a closing span inside JSON, must never become a delimiter.
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function unescapeHtml(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
 }

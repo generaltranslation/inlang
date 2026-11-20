@@ -1,4 +1,5 @@
 import type { MachineTranslateProvider, TranslateTextArgs } from "./types.js";
+import { rateLimitOf, scopeOf } from "./rateLimit.js";
 
 export const DEFAULT_OPENAI_MODEL = "gpt-6-luna";
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -113,10 +114,9 @@ export function createOpenAITranslateProvider(
       if (!response.ok) {
         return {
           ok: false,
+          scope: scopeOf(response.status),
+          ...rateLimitOf(response),
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
-          ...(response.status === 429 || response.status >= 500
-            ? { unavailable: true }
-            : {}),
         };
       }
 
@@ -124,8 +124,8 @@ export function createOpenAITranslateProvider(
       if (!isCompletedResponse(json)) {
         return {
           ok: false,
+          scope: "text",
           error: `OpenAI response was not completed: translating from ${args.sourceLocale} to ${args.targetLocale}`,
-          unavailable: true,
         };
       }
 
@@ -133,6 +133,7 @@ export function createOpenAITranslateProvider(
       if (typeof outputText !== "string") {
         return {
           ok: false,
+          scope: "text",
           error: `Invalid response from OpenAI: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
       }

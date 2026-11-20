@@ -155,7 +155,6 @@ describe("createDemosjarcoTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: SERVICE_UNAVAILABLE_ERROR,
-      unavailable: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1 + MAX_RETRIES);
   });
@@ -198,7 +197,6 @@ describe("createDemosjarcoTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: SERVICE_UNAVAILABLE_ERROR,
-      unavailable: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1 + MAX_RETRIES);
   });
@@ -217,7 +215,6 @@ describe("createDemosjarcoTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: SERVICE_UNAVAILABLE_ERROR,
-      unavailable: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1 + MAX_RETRIES);
   });
@@ -236,7 +233,6 @@ describe("createDemosjarcoTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: SERVICE_UNAVAILABLE_ERROR,
-      unavailable: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1 + MAX_RETRIES);
   });
@@ -269,7 +265,6 @@ describe("createDemosjarcoTranslateProvider", () => {
       expect(result).toEqual({
         ok: false,
         error: SERVICE_UNAVAILABLE_ERROR,
-        unavailable: true,
       });
     },
   );
@@ -295,7 +290,6 @@ describe("createDemosjarcoTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: SERVICE_UNAVAILABLE_ERROR,
-      unavailable: true,
     });
   });
 
@@ -318,6 +312,7 @@ describe("createDemosjarcoTranslateProvider", () => {
 
     expect(result).toEqual({
       ok: false,
+      scope: "text",
       error: "400 Bad Request: translating from en to xx",
     });
   });
@@ -384,7 +379,6 @@ describe("createDemosjarcoTranslateProvider", () => {
     expect(result).toEqual({
       ok: false,
       error: SERVICE_UNAVAILABLE_ERROR,
-      unavailable: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
