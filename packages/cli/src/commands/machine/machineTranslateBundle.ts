@@ -2,8 +2,16 @@
 // order of the source message
 import { v7 as randomUUID } from "uuid";
 import {
+  isPluralSelector,
+  matchValue,
+  missingVariants,
+  pluralRules,
+  resolveAnnotation,
+  selectorGroups,
+  variantCovers,
   isEmptyPattern,
   type BundleNested,
+  type Declaration,
   type NewBundleNested,
   type VariantRow,
 } from "@inlang/sdk";
@@ -117,14 +125,43 @@ type MissingTranslation = {
   context?: string;
 };
 
+/** What a bundle's plurals tell the user. */
+type PluralReport = {
+  /**
+   * Target locales whose plurals need categories no source variant has, with
+   * those categories. The source's forms are still translated, as they were
+   * before these were reported; the categories stay missing until they are
+   * added by hand. Whether the runtime falls back to another form for their
+   * numbers depends on the message format: i18next shows the key. A
+   * translation whose selectors aren't the source's, such as a hand-written
+   * plural of a text, is left as it is: the source's forms wouldn't fit it.
+   */
+  incompletePlurals: Array<{ locale: string; categories: string[] }>;
+  /**
+   * Target locales whose message has other selectors than the source's, in
+   * any order, such as a hand-written text without the source's plural. The
+   * source's forms match on selectors such a message doesn't have, so it is
+   * left as it is. It is reported when it lacks a form its own selectors
+   * need, or has it empty, also when `incompletePlurals` has it: the source
+   * can't fill any of its forms.
+   */
+  differentSelectors: string[];
+  /**
+   * Target locales translated without known plural rules (see the SDK's
+   * `pluralRules`): their plural forms are the source's.
+   */
+  unknownPluralRules: string[];
+};
+
 /**
  * The translations a bundle is missing, and how to add them to it once they
  * are translated.
  */
-export type BundleTranslationPlan = {
+export type BundleTranslationPlan = PluralReport & {
   missing: MissingTranslation[];
   /**
-   * Target locales the bundle has no message in. Added with only some of its
+   * Target locales the bundle has no message in, or a message without forms,
+   * which gets the source's selectors. Added with only some of its
    * translations, such a message could match nothing: half a plural.
    */
   newLocales: Set<string>;
@@ -150,6 +187,8 @@ type TranslatedBundle = {
 /**
  * Finds the translations the bundle is missing in the target locales: no
  * variant for a source variant, or an empty one.
+ * Reports target locales whose plurals need categories the source lacks, see
+ * `PluralReport`.
  */
 export function planBundleTranslation(
   args: MachineTranslateArgs,
@@ -164,23 +203,98 @@ export function planBundleTranslation(
     };
   }
 
+  const { declarations } = args.bundle;
+  let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
+  const newLocales = new Set<string>();
+  const report: PluralReport = {
+    incompletePlurals: [],
+    differentSelectors: [],
+    unknownPluralRules: [],
+  };
+
   // a locale given twice is translated once
-  const targetLocales = new Set(args.targetLocales);
-  for (const sourceVariant of sourceMessage.variants) {
-    const text = serializePattern(sourceVariant.pattern, {});
+  for (const targetLocale of new Set(args.targetLocales)) {
+    if (targetLocale === args.sourceLocale) {
+      continue;
+    }
 
-    for (const targetLocale of targetLocales) {
-      if (targetLocale === args.sourceLocale) {
-        continue;
+    const targetMessage = args.bundle.messages.find(
+      (message) => message.locale === targetLocale,
+    );
+    // A message without forms gets the source's, with the source's selectors
+    // (see `apply`), like a new one: its own select nothing.
+    const isNew = !targetMessage || targetMessage.variants.length === 0;
+    if (isNew) newLocales.add(targetLocale);
+    const target = {
+      locale: targetLocale,
+      selectors: isNew ? sourceMessage.selectors : targetMessage.selectors,
+      variants: targetMessage?.variants ?? [],
+    };
+    const categories = new Set<string>();
+    // The forms are the target's, so without a plural in the target no
+    // category can be missing. `missingVariants` takes seconds on a message
+    // with several selects, so it isn't called then (but for the rare target
+    // with other selectors than the source's, below).
+    if (
+      target.selectors.some(({ name }) => isPluralSelector(name, declarations))
+    ) {
+      const lackedBySource = (sourceMissing ??= missingVariants(
+        sourceMessage,
+        declarations,
+      ));
+      // an empty form is missing, like one the target doesn't have
+      missingVariants(target, declarations, {
+        variants: target.variants.filter(
+          (variant) => !isEmptyPattern(variant.pattern),
+        ),
+        referenceVariants: sourceMessage.variants,
+      })
+        .filter(
+          (matches) =>
+            !lackedBySource.some((sourceMatches) =>
+              variantCovers({ matches: sourceMatches }, matches, declarations),
+            ),
+        )
+        .flatMap((matches) =>
+          newCategories(matches, sourceMessage.variants, declarations),
+        )
+        .forEach((category) => categories.add(category));
+    }
+    // in any order
+    const names = (selectors: typeof target.selectors) =>
+      selectors
+        .map(({ name }) => name)
+        .sort()
+        .join();
+    const sameSelectors =
+      names(target.selectors) === names(sourceMessage.selectors);
+    if (categories.size > 0) {
+      report.incompletePlurals.push({
+        locale: targetLocale,
+        categories: [...categories],
+      });
+    }
+    // The source's forms would be added with selectors the message doesn't
+    // have, so it could never select them. It is reported when it has an
+    // empty form, which runtimes select before a filled catch-all, or lacks
+    // one its selectors need.
+    if (!sameSelectors) {
+      if (
+        target.variants.some((variant) => isEmptyPattern(variant.pattern)) ||
+        missingVariants(target, declarations).length > 0
+      ) {
+        report.differentSelectors.push(targetLocale);
       }
+      continue;
+    }
 
-      const targetMessage = args.bundle.messages.find(
-        (message) => message.locale === targetLocale,
+    const missingBefore = missing.length;
+    for (const sourceVariant of sourceMessage.variants) {
+      const existingVariant = findMatchingVariant(
+        target.variants,
+        sourceVariant.matches,
       );
-      const existingVariant =
-        targetMessage &&
-        findMatchingVariant(targetMessage.variants, sourceVariant.matches);
 
       // A blank variant is missing, as `inlang check` reports it, unless its
       // source is blank too: then a translation can't fill it.
@@ -195,20 +309,22 @@ export function planBundleTranslation(
       missing.push({
         sourceVariant,
         targetLocale,
-        text,
+        text: serializePattern(sourceVariant.pattern, {}),
         context: args.bundle.description || undefined,
       });
+    }
+    if (
+      missing.length > missingBefore &&
+      hasUnknownPluralRules(target, declarations)
+    ) {
+      report.unknownPluralRules.push(targetLocale);
     }
   }
 
   return {
+    ...report,
     missing,
-    newLocales: new Set(
-      [...targetLocales].filter(
-        (locale) =>
-          !args.bundle.messages.some((message) => message.locale === locale),
-      ),
-    ),
+    newLocales,
     apply: (translations) => {
       const copy = structuredClone(args.bundle);
       const sourceMessage = copy.messages.find(
@@ -238,6 +354,11 @@ export function planBundleTranslation(
           if (existingVariant) {
             existingVariant.pattern = pattern;
           } else {
+            if (targetMessage.variants.length === 0) {
+              targetMessage.selectors = structuredClone(
+                sourceMessage.selectors,
+              );
+            }
             const variant = {
               id: randomUUID(),
               message_id: targetMessage.id,
@@ -278,6 +399,66 @@ export function planBundleTranslation(
         : { data: copy };
     },
   };
+}
+
+/**
+ * The plural categories a missing form needs that no source variant of its
+ * branch has. A branch is the form's values of the other selectors, or their
+ * catch-all where the source has no variant for a value, as at runtime: so
+ * English ordinal `few` is no source for Russian cardinal `few`.
+ */
+function newCategories(
+  matches: VariantRow["matches"],
+  sourceVariants: VariantRow[],
+  declarations: BundleNested["declarations"],
+): string[] {
+  const branch = sourceVariants.filter((variant) =>
+    matches.every((match) => {
+      if (isPluralSelector(match.key, declarations)) return true;
+      const wanted = matchValue({ matches }, match.key);
+      const value = matchValue(variant, match.key);
+      return (
+        value === wanted ||
+        (value === "*" &&
+          !sourceVariants.some(
+            (other) => matchValue(other, match.key) === wanted,
+          ))
+      );
+    }),
+  );
+  return matches.flatMap((match) =>
+    match.type === "literal-match" &&
+    isPluralSelector(match.key, declarations) &&
+    !branch.some((variant) => matchValue(variant, match.key) === match.value)
+      ? [match.value]
+      : [],
+  );
+}
+
+/**
+ * True when a plural of the message has no known rules in its locale (an
+ * unknown locale, or options only known at runtime), so the SDK requires only
+ * its catch-all. A plural whose `type` a select chooses has known rules when
+ * its cardinal rules are known.
+ */
+function hasUnknownPluralRules(
+  message: Parameters<typeof selectorGroups>[0],
+  declarations: BundleNested["declarations"],
+): boolean {
+  return selectorGroups(message, declarations).some((group) => {
+    if (!group.isPlural) return false;
+    if (!group.typeSelector) return !group.plural;
+    const annotation = resolveAnnotation(group.selector, declarations)!;
+    const cardinal: Declaration = {
+      type: "input-variable",
+      name: group.selector,
+      annotation: {
+        ...annotation,
+        options: annotation.options.filter((option) => option.name !== "type"),
+      },
+    };
+    return !pluralRules(group.selector, [cardinal], message.locale);
+  });
 }
 
 /**

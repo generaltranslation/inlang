@@ -1,10 +1,10 @@
 import { expect, test } from "vitest";
-import type { BundleNested } from "@inlang/sdk";
-import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
+import type { BundleNested, Declaration, NewBundleNested } from "@inlang/sdk";
 import {
   planBundleTranslation,
   translateMissing,
 } from "./machineTranslateBundle.js";
+import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
 
 test("translated variants get ids in the order of the source variants", async () => {
   const values = Array.from({ length: 20 }, (_, index) => `v${index}`);
@@ -229,6 +229,421 @@ test("a target locale given twice is translated once", async () => {
   expect(valuesOf(de)).toEqual(["one", "*"]);
 });
 
+const input = (name: string): Declaration => ({ type: "input-variable", name });
+
+/** `local <name> = <arg>: plural <options>`; an option value `$x` is a variable. */
+const plural = (
+  name: string,
+  arg: string,
+  options: Record<string, string> = {},
+): Declaration => ({
+  type: "local-variable",
+  name,
+  value: {
+    type: "expression",
+    arg: { type: "variable-reference", name: arg },
+    annotation: {
+      type: "function-reference",
+      name: "plural",
+      options: Object.entries(options).map(([name, value]) => ({
+        name,
+        value: value.startsWith("$")
+          ? { type: "variable-reference", name: value.slice(1) }
+          : { type: "literal", value },
+      })),
+    },
+  },
+});
+
+const countPlural = [input("count"), plural("countPlural", "count")];
+
+/**
+ * A bundle with a message per locale. Forms are keyed by their matches,
+ * `"countPlural=one,gender=*"`.
+ */
+function formsBundle(
+  declarations: Declaration[],
+  selectors: string[],
+  messages: Record<string, Record<string, string>>,
+): BundleNested {
+  return {
+    id: "items",
+    declarations,
+    messages: Object.entries(messages).map(([locale, forms]) => ({
+      id: locale,
+      bundleId: "items",
+      locale,
+      selectors: selectors.map((name) => ({
+        type: "variable-reference",
+        name,
+      })),
+      variants: Object.entries(forms).map(([key, text], index) => ({
+        id: `01900000-0000-7000-8000-${locale.padStart(6, "0")}${String(index).padStart(6, "0")}`,
+        messageId: locale,
+        matches: key.split(",").map((pair) => {
+          const [key, value] = pair.split("=") as [string, string];
+          return value === "*"
+            ? { type: "catchall-match", key }
+            : { type: "literal-match", key, value };
+        }),
+        pattern: text === "" ? [] : [{ type: "text", value: text }],
+      })),
+    })),
+  } as any;
+}
+
+/** A provider that records the texts and translates `text` to `[locale] text`. */
+function recordingProvider() {
+  const calls: string[] = [];
+  return {
+    calls,
+    provider: {
+      translateText: async (args: { text: string; targetLocale: string }) => {
+        calls.push(args.text);
+        return {
+          ok: true as const,
+          translatedText: `[${args.targetLocale}] ${args.text}`,
+        };
+      },
+    },
+  };
+}
+
+/** The forms of a locale's message, keyed like `formsBundle`'s. */
+function formsOf(result: { data?: NewBundleNested }, locale: string) {
+  const message = result.data!.messages.find((m) => m.locale === locale)!;
+  return Object.fromEntries(
+    message.variants.map((variant) => [
+      variant
+        .matches!.map(
+          (match) =>
+            `${match.key}=${match.type === "literal-match" ? match.value : "*"}`,
+        )
+        .join(","),
+      (variant.pattern![0] as { value: string } | undefined)?.value ?? "",
+    ]),
+  );
+}
+
+async function translate(bundle: BundleNested, targetLocales: string[]) {
+  const { calls, provider } = recordingProvider();
+  const args = { bundle, sourceLocale: "en", targetLocales };
+  const plan = planBundleTranslation(args);
+  if ("error" in plan) throw new Error(plan.error);
+  const result = await machineTranslateBundle({ ...args, provider });
+  return { calls, result: { ...plan, ...result } };
+}
+
+const items = { "countPlural=one": "One item", "countPlural=*": "Many items" };
+
+test("two plurals: a category in any combination of the source counts for the other plural", async () => {
+  const bundle = formsBundle(
+    [...countPlural, input("guests"), plural("guestsPlural", "guests")],
+    ["countPlural", "guestsPlural"],
+    {
+      en: {
+        "countPlural=one,guestsPlural=one": "One item for one guest",
+        "countPlural=*,guestsPlural=*": "Items for guests",
+      },
+    },
+  );
+  const { result } = await translate(bundle, ["ru"]);
+
+  // Russian `one` × `few` has a source for `one`: `one` × `one`
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+});
+
+test("a target complete for one gender is reported when another lacks a category", async () => {
+  const bundle = formsBundle(
+    [input("gender"), ...countPlural],
+    ["countPlural", "gender"],
+    {
+      en: {
+        "countPlural=one,gender=female": "She has one item",
+        "countPlural=*,gender=female": "She has items",
+        "countPlural=one,gender=*": "They have one item",
+        "countPlural=*,gender=*": "They have items",
+      },
+      ru: {
+        "countPlural=one,gender=*": "У них один товар",
+        "countPlural=few,gender=*": "У них несколько товаров",
+        "countPlural=many,gender=*": "У них много товаров",
+        "countPlural=*,gender=*": "У них товары",
+      },
+    },
+  );
+  const { calls, result } = await translate(bundle, ["ru"]);
+
+  // `female` is the source's; its forms are still translated
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+  expect(calls).toEqual(["She has one item", "She has items"]);
+});
+
+test("a select value only the target has needs no category", async () => {
+  const bundle = formsBundle(
+    [input("gender"), ...countPlural],
+    ["countPlural", "gender"],
+    {
+      en: {
+        "countPlural=one,gender=*": "They have one item",
+        "countPlural=*,gender=*": "They have items",
+      },
+      de: { "countPlural=*,gender=diverse": "Sie haben Dinge" },
+    },
+  );
+  const { result } = await translate(bundle, ["de"]);
+
+  // German lacks `one` × `diverse`, as English does
+  expect(result.incompletePlurals).toEqual([]);
+});
+
+test("empty forms are missing forms: a target whose plural forms are all empty is reported", async () => {
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: items,
+    ru: {
+      "countPlural=one": "",
+      "countPlural=few": "",
+      "countPlural=many": "",
+      "countPlural=*": "",
+    },
+  });
+  const { result } = await translate(bundle, ["ru"]);
+
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+});
+
+test("a target's own selectors decide the forms it needs", async () => {
+  // a source without a plural, and a hand-written Russian plural without
+  // `many` and a catch-all
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=*": "Items" },
+    ru: {
+      "countPlural=one": "Один товар",
+      "countPlural=few": "Несколько товаров",
+    },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["ru"]);
+
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["many"] },
+  ]);
+  // and that the source can't fill it, many and the catch-all alike
+  expect(result.differentSelectors).toEqual(["ru"]);
+  // the source's text wouldn't fit the plural: it is left as it is
+  expect(calls).toEqual([]);
+  // complete but for an empty form, it is reported too
+  const ru = bundle.messages.find((message) => message.locale === "ru")!;
+  ru.variants.push(
+    {
+      ...ru.variants[0]!,
+      id: "many",
+      matches: [{ type: "literal-match", key: "countPlural", value: "many" }],
+    },
+    {
+      ...ru.variants[0]!,
+      id: "other",
+      matches: [{ type: "catchall-match", key: "countPlural" }],
+    },
+  );
+  ru.variants[0]!.pattern = [];
+  expect(
+    planBundleTranslation({
+      bundle,
+      sourceLocale: "en",
+      targetLocales: ["ru"],
+    }),
+  ).toMatchObject({ missing: [], differentSelectors: ["ru"] });
+});
+
+test("a complete translation with other selectors than the source's isn't reported", async () => {
+  // a source without a plural, and a hand-written Russian plural with every form
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=*": "Items" },
+    ru: {
+      "countPlural=one": "Один товар",
+      "countPlural=few": "Несколько товаров",
+      "countPlural=many": "Много товаров",
+      "countPlural=*": "Товары",
+    },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["ru"]);
+
+  expect(result.incompletePlurals).toEqual([]);
+  expect(result.differentSelectors).toEqual([]);
+  expect(calls).toEqual([]);
+});
+
+test("a translation with other selectors than the source's is left as it is", async () => {
+  // a Japanese text written by hand without the source's plural: the
+  // source's forms would match on a selector it doesn't have
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: items,
+    ja: { "countPlural=*": "" },
+  });
+  const ja = bundle.messages.find((message) => message.locale === "ja")!;
+  ja.selectors = [];
+  ja.variants[0]!.matches = [];
+  ja.variants[0]!.pattern = [{ type: "text", value: "アイテム" }];
+  const { calls, result } = await translate(bundle, ["ja", "de"]);
+
+  // it lacks no translation, so it isn't reported
+  expect(result.differentSelectors).toEqual([]);
+  expect(result.incompletePlurals).toEqual([]);
+  // German, without a message, gets the source's forms
+  expect(calls).toEqual(["One item", "Many items"]);
+  expect(
+    result.data!.messages.find((message) => message.locale === "ja"),
+  ).toMatchObject({ selectors: [], variants: [{ matches: [] }] });
+
+  // an empty one is reported, as it lacks a translation
+  ja.variants[0]!.pattern = [];
+  expect(
+    planBundleTranslation({
+      bundle,
+      sourceLocale: "en",
+      targetLocales: ["ja"],
+    }),
+  ).toMatchObject({
+    missing: [],
+    differentSelectors: ["ja"],
+  });
+  // one without forms gets the source's, as a new message does
+  ja.variants = [];
+  const plan = planBundleTranslation({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["ja"],
+  });
+  if ("error" in plan) throw new Error(plan.error);
+  expect(plan.missing.map(({ text }) => text)).toEqual([
+    "One item",
+    "Many items",
+  ]);
+  expect(plan.differentSelectors).toEqual([]);
+});
+
+test("selectors in another order are the source's", async () => {
+  const bundle = formsBundle(
+    [...countPlural, input("gender")],
+    ["countPlural", "gender"],
+    {
+      en: {
+        "countPlural=one,gender=*": "One item",
+        "countPlural=*,gender=*": "Items",
+      },
+      de: {
+        "countPlural=one,gender=*": "",
+        "countPlural=*,gender=*": "Artikel",
+      },
+    },
+  );
+  const de = bundle.messages.find((message) => message.locale === "de")!;
+  de.selectors.reverse();
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual(["One item"]);
+  expect(result.differentSelectors).toEqual([]);
+});
+
+test("a translation with other selectors that lacks a form is reported", async () => {
+  // a German plural with a gender written by hand, without `one`, which the
+  // source has
+  const bundle = formsBundle(
+    [...countPlural, input("gender")],
+    ["countPlural", "gender"],
+    {
+      en: {
+        "countPlural=one,gender=*": "One item",
+        "countPlural=*,gender=*": "Items",
+      },
+      de: { "countPlural=*,gender=*": "Artikel" },
+    },
+  );
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = en.selectors.slice(0, 1);
+  for (const variant of en.variants)
+    variant.matches = variant.matches.slice(0, 1);
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual([]);
+  expect(result.incompletePlurals).toEqual([]);
+  expect(result.differentSelectors).toEqual(["de"]);
+});
+
+test("a plural whose type a select chooses needs the categories of each type", async () => {
+  // i18next keys with cardinal and ordinal forms, as @inlang/plugin-i18next imports them
+  const bundle = formsBundle(
+    [
+      input("pluralType"),
+      input("count"),
+      plural("countPlural", "count", { type: "$pluralType" }),
+    ],
+    ["pluralType", "count", "countPlural"],
+    {
+      en: {
+        "pluralType=cardinal,count=0,countPlural=*": "None",
+        "pluralType=ordinal,count=*,countPlural=one": "1st",
+        "pluralType=ordinal,count=*,countPlural=two": "2nd",
+        "pluralType=ordinal,count=*,countPlural=few": "3rd",
+        "pluralType=ordinal,count=*,countPlural=other": "nth",
+        "pluralType=*,count=*,countPlural=one": "One item",
+        "pluralType=*,count=*,countPlural=other": "Items",
+      },
+    },
+  );
+  const { result } = await translate(bundle, [
+    "de",
+    "ru",
+    "sl",
+    "pt_BR",
+    "x-foo",
+  ]);
+
+  // German needs one and other (cardinal) and other (ordinal), Russian also
+  // few and many, Brazilian Portuguese (written as some projects do) one and
+  // other. Slovenian cardinal two and few aren't English ordinal two and few.
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+    { locale: "sl", categories: ["two", "few"] },
+  ]);
+  // the rules are known per type, unless the locale is unknown
+  expect(result.unknownPluralRules).toEqual(["x-foo"]);
+});
+
+test("a locale with nothing to translate isn't reported for unknown plural rules", async () => {
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: items,
+    "x-foo": { "countPlural=one": "Foo", "countPlural=*": "Foos" },
+  });
+  const { result } = await translate(bundle, ["x-foo"]);
+
+  expect(result.unknownPluralRules).toEqual([]);
+});
+
+test("forms the source lacks in its own locale too aren't reported", async () => {
+  // English needs `one` as well: German is as complete as the source
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=*": "{count} items" },
+  });
+  const { result } = await translate(bundle, ["de", "ru"]);
+
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+});
+
 test("a blank catch-all is copied, so a new message matches every number", async () => {
   const bundle = pluralBundle([]);
   bundle.messages[0]!.variants[1]!.pattern = [];
@@ -302,4 +717,60 @@ test("a translation that isn't text, such as {}, fails instead of being saved bl
     error: 'The translation of "One item" isn\'t text.',
   });
   expect(result.translations.size).toBe(0);
+});
+
+test("a translation's `other` doesn't replace the source's catch-all", async () => {
+  // Paraglide selects a literal `other` only for its category, which in
+  // Russian is fractions: 2 and 5 need the catch-all
+  const { calls, result } = await translate(
+    formsBundle(countPlural, ["countPlural"], {
+      en: items,
+      ru: { "countPlural=one": "Один товар", "countPlural=other": "Товара" },
+    }),
+    ["ru"],
+  );
+
+  expect(calls).toEqual(["Many items"]);
+  expect(formsOf(result, "ru")).toEqual({
+    "countPlural=one": "Один товар",
+    "countPlural=other": "Товара",
+    "countPlural=*": "[ru] Many items",
+  });
+  expect(result.incompletePlurals).toEqual([
+    { locale: "ru", categories: ["few", "many"] },
+  ]);
+});
+
+test("an empty select value only the translation has is reported", async () => {
+  // a source without selectors, and a hand-written translation by gender
+  const bundle = formsBundle([input("gender")], ["gender"], {
+    en: { "gender=*": "Hello" },
+    de: { "gender=female": "", "gender=*": "Hallo" },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual([]);
+  expect(result.differentSelectors).toEqual(["de"]);
+});
+
+test("an empty form next to a filled catch-all is reported", async () => {
+  // German `other` is selected for 2 before the catch-all
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=*": "Items" },
+    de: {
+      "countPlural=one": "Ein Ding",
+      "countPlural=other": "",
+      "countPlural=*": "Dinge",
+    },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual([]);
+  expect(result.differentSelectors).toEqual(["de"]);
 });

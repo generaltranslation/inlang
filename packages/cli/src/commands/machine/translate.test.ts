@@ -1111,3 +1111,297 @@ test("the command prints a translation failure as is and exits with 1", async ()
     await cleanup();
   }
 });
+
+/** A bundle with an English `one` and `*` of the plural `countPlural`. */
+function pluralBundle(id: string): NewBundleNested {
+  const variant = (value: string, text: string) => ({
+    id: `${id}_en_${value}`,
+    message_id: `${id}_en`,
+    matches: [
+      value === "*"
+        ? { type: "catchall-match" as const, key: "countPlural" }
+        : { type: "literal-match" as const, key: "countPlural", value },
+    ],
+    pattern: [{ type: "text" as const, value: text }],
+  });
+  return {
+    id,
+    declarations: [
+      { type: "input-variable", name: "count" },
+      {
+        type: "local-variable",
+        name: "countPlural",
+        value: {
+          type: "expression",
+          arg: { type: "variable-reference", name: "count" },
+          annotation: {
+            type: "function-reference",
+            name: "plural",
+            options: [],
+          },
+        },
+      },
+    ],
+    messages: [
+      {
+        id: `${id}_en`,
+        bundle_id: id,
+        locale: "en",
+        selectors: [{ type: "variable-reference", name: "countPlural" }],
+        variants: [variant("one", "One item"), variant("*", "Items")],
+      },
+    ],
+  };
+}
+
+test("a long list of messages is shortened, and translations with other selectors are reported", async () => {
+  const project = await projectWithTextBundles(["en", "ru", "ja"], 0);
+  const ids = ["a", "b", "c", "d", "e", "f", "g"];
+  for (const id of ids) {
+    const bundle = pluralBundle(id);
+    // a Japanese message without the plural, and with no text yet
+    bundle.messages.push({
+      id: `${id}_ja`,
+      bundle_id: id,
+      locale: "ja",
+      selectors: [],
+      variants: [
+        {
+          id: `${id}_ja_text`,
+          message_id: `${id}_ja`,
+          matches: [],
+          pattern: [],
+        },
+      ],
+    } as never);
+    await insertBundleNested(project.db, bundle);
+  }
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): a, b, c, d, e, … and 2 more\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+      [
+        "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:\n" +
+          "  ja: a, b, c, d, e, … and 2 more",
+      ],
+    ]);
+    const bundles = await selectBundleNested(project.db).selectAll().execute();
+    for (const bundle of bundles) {
+      expect(
+        bundle.messages.find(
+          (message: { locale: string }) => message.locale === "ja",
+        )?.variants,
+      ).toHaveLength(1);
+    }
+  } finally {
+    await project.close();
+  }
+});
+
+test("plurals that need forms the source lacks get the source's forms and are reported once, grouped by locale", async () => {
+  const project = await projectWithTextBundles(
+    ["en", "ru", "ar", "de", "x-foo"],
+    0,
+  );
+  for (const id of ["cart", "items"]) {
+    await insertBundleNested(project.db, pluralBundle(id));
+  }
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): cart, items\n" +
+          "  ar (zero, two, few, many): cart, items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+      ["Plural rules unknown for x-foo; copied the source's forms."],
+    ]);
+    // translated as before these were reported, rather than left out
+    const bundles = await selectBundleNested(project.db).selectAll().execute();
+    for (const bundle of bundles) {
+      for (const locale of ["ru", "ar"]) {
+        expect(
+          bundle.messages.find(
+            (message: { locale: string }) => message.locale === locale,
+          )?.variants,
+        ).toHaveLength(2);
+      }
+    }
+  } finally {
+    await project.close();
+  }
+});
+
+/** A Russian message with neither selectors nor forms, such as an editor adds. */
+function withEmptyRussianMessage(bundle: NewBundleNested): NewBundleNested {
+  bundle.messages.push({
+    id: `${bundle.id}_ru`,
+    bundle_id: bundle.id,
+    locale: "ru",
+    selectors: [],
+    variants: [],
+  } as never);
+  return bundle;
+}
+
+const russianMessage = async (project: { db: any }, id: string) =>
+  (await selectBundleNested(project.db).selectAll().execute())
+    .find((bundle: { id: string }) => bundle.id === id)
+    ?.messages.find((message: { locale: string }) => message.locale === "ru");
+
+test("a translation without forms gets the source's selectors with its forms, and is reported", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(
+    project.db,
+    withEmptyRussianMessage(pluralBundle("cart")),
+  );
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider();
+  try {
+    await translateCommandAction({ project, provider });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): cart\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+    const ru = await russianMessage(project, "cart");
+    expect(ru.id).toBe("cart_ru");
+    // without them, its forms would match on a selector it doesn't have
+    expect(ru.selectors).toEqual([
+      { type: "variable-reference", name: "countPlural" },
+    ]);
+    // the source's forms, in its order
+    const [bundle] = await selectBundleNested(project.db).selectAll().execute();
+    const en = bundle.messages.find(
+      (message: { locale: string }) => message.locale === "en",
+    );
+    type Variant = { matches: unknown; pattern: Array<{ value: string }> };
+    expect(
+      ru.variants.map((variant: Variant) => [variant.matches, variant.pattern]),
+    ).toEqual(
+      en.variants.map((variant: Variant) => [
+        variant.matches,
+        [{ type: "text", value: `${variant.pattern[0]!.value} (ru)` }],
+      ]),
+    );
+  } finally {
+    await project.close();
+  }
+});
+
+test("a message isn't created, or filled, without all its translations, and isn't reported then", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  const withCatchAll = (bundle: NewBundleNested, text: string) => {
+    bundle.messages[0]!.variants[1]!.pattern = [{ type: "text", value: text }];
+    return bundle;
+  };
+  // no Russian message
+  await insertBundleNested(
+    project.db,
+    withCatchAll(pluralBundle("cart"), "Carts"),
+  );
+  // a Russian message without forms
+  await insertBundleNested(
+    project.db,
+    withEmptyRussianMessage(withCatchAll(pluralBundle("bag"), "Bags")),
+  );
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider(async (args) => {
+    const translatedTexts = Object.fromEntries(
+      Object.entries(args.texts)
+        .filter(([, { text }]) => text !== "Carts" && text !== "Bags")
+        .map(([key, { text }]) => [key, `${text} (${args.targetLocale})`]),
+    );
+    return {
+      ok: false,
+      scope: "text",
+      error: "Carts and Bags failed",
+      translatedTexts,
+    };
+  });
+  try {
+    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
+      "Carts and Bags failed",
+    );
+    // only the message that was created lacks forms
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+    expect(await russianMessage(project, "cart")).toBeUndefined();
+    expect(await russianMessage(project, "bag")).toMatchObject({
+      selectors: [],
+      variants: [],
+    });
+    expect((await russianMessage(project, "items")).variants).toHaveLength(2);
+  } finally {
+    await project.close();
+  }
+});
+
+test("unknown plural rules aren't reported for a message that isn't created", async () => {
+  const project = await projectWithTextBundles(["en", "x-foo"], 0);
+  const cart = pluralBundle("cart");
+  cart.messages[0]!.variants[1]!.pattern = [{ type: "text", value: "Carts" }];
+  await insertBundleNested(project.db, cart);
+  const warn = vi.spyOn(log, "warn");
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: false,
+    scope: "text",
+    error: "Carts failed",
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts)
+        .filter(([, { text }]) => text !== "Carts")
+        .map(([key, { text }]) => [key, `${text} (${args.targetLocale})`]),
+    ),
+  }));
+  try {
+    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
+      "Carts failed",
+    );
+    // nothing was copied
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    await project.close();
+  }
+});
+
+test("plurals are reported before anything is written, so a failed write keeps the report", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  await insertBundleNested(project.db, pluralBundle("cart"));
+  const warn = vi.spyOn(log, "warn");
+  vi.spyOn(project.db, "insertInto").mockImplementation(() => {
+    throw new Error("database is locked");
+  });
+  const { provider } = fakeBatchProvider();
+  try {
+    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
+      "database is locked",
+    );
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): cart\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+  } finally {
+    vi.restoreAllMocks();
+    await project.close();
+  }
+});
