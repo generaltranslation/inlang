@@ -392,10 +392,10 @@ describe("signInToGt", () => {
     ["gt.config.json", { "gt.config.json": '{"projectId":"prj_1"}' }, {}],
     ["the environment", {}, { VITE_GT_PROJECT_ID: "prj_1" }],
     [
-      ".env.local, before gt.config.json and the environment",
+      ".env.local, before .env and the environment",
       {
-        ".env.local": "VITE_GT_PROJECT_ID=prj_1\n",
-        "gt.config.json": '{"projectId":"prj_other"}',
+        ".env.local": "GT_PROJECT_ID=prj_1\n",
+        ".env": "VITE_GT_PROJECT_ID=prj_other\n",
       },
       { GT_PROJECT_ID: "prj_env" },
     ],
@@ -470,6 +470,44 @@ describe("signInToGt", () => {
     );
     expect(gt.login).not.toHaveBeenCalled();
   });
+
+  test("refuses before signing in when git fails in the repository", async () => {
+    captureLog();
+    const dir = gitTree({ ".env.local": "OTHER=1\n" });
+    execFileSync("git", ["add", ".env.local"], { cwd: dir });
+    // Like "detected dubious ownership": git fails for any command.
+    fs.appendFileSync(nodePath.join(dir, ".git", "config"), "[core\n");
+    const gt = fakeAccount();
+    await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+      "git can't tell whether it tracks .env.local (fatal: bad config line",
+    );
+    expect(gt.login).not.toHaveBeenCalled();
+    expect(read(dir, ".env.local")).toBe("OTHER=1\n");
+  });
+
+  test.each([
+    [".env.local or .env", { ".env.local": "GT_PROJECT_ID=prj_local\n" }, {}],
+    ["the environment", {}, { GT_PROJECT_ID: "prj_local" }],
+  ])(
+    "refuses before signing in when %s names another project than gt.config.json",
+    async (where, files, env) => {
+      captureLog();
+      const gt = fakeAccount();
+      await expect(
+        signIn({
+          dir: tree({
+            ...files,
+            "gt.config.json": '{"projectId":"prj_config"}',
+          }),
+          env,
+          account: gt.account,
+        }),
+      ).rejects.toThrow(
+        `Project ID mismatch: gt.config.json uses prj_config, but ${where} uses prj_local. Use the same project ID in both, then run again.`,
+      );
+      expect(gt.login).not.toHaveBeenCalled();
+    },
+  );
 
   test("refuses a symlinked .env.local before signing in", async () => {
     captureLog();

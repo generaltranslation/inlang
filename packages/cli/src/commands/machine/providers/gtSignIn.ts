@@ -82,17 +82,23 @@ function findCredentials(
 }
 
 async function readEnvFiles(dir: string): Promise<Record<string, string>> {
-  const variables: Record<string, string> = {};
-  for (const file of [".env", ".env.local"]) {
-    const content = await fs
-      .readFile(nodePath.join(dir, file), "utf8")
-      .catch((error) => {
-        if (error.code === "ENOENT") return "";
-        throw error;
-      });
-    Object.assign(variables, parseEnvFile(content));
-  }
-  return variables;
+  return {
+    ...(await readEnvFile(dir, ".env")),
+    ...(await readEnvFile(dir, ".env.local")),
+  };
+}
+
+async function readEnvFile(
+  dir: string,
+  file: string,
+): Promise<Record<string, string>> {
+  const content = await fs
+    .readFile(nodePath.join(dir, file), "utf8")
+    .catch((error) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    });
+  return parseEnvFile(content);
 }
 
 /** The sign-in and the user's API client; tests replace them. */
@@ -282,7 +288,11 @@ async function isSignedIn(account: GtAccount): Promise<boolean> {
  * .gitignore.
  */
 async function envLocalProblem(dir: string): Promise<string | undefined> {
-  if (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) {
+  const tracked = await gitTracksEnvLocal(dir);
+  if (typeof tracked === "string") {
+    return `git can't tell whether it tracks .env.local (${tracked}). Fix that`;
+  }
+  if (tracked) {
     return ".env.local is tracked by git. Untrack it with `git rm --cached .env.local`";
   }
   const envLocal = await fs
@@ -377,10 +387,50 @@ async function findGtProjectId(
       projectId = config.projectId;
     }
   }
-  return (
-    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
-    projectId ||
-    findVariable(env, PROJECT_ID)
+  // .env.local overrides .env, as for the app.
+  const fromEnvFiles =
+    findVariable(await readEnvFile(dir, ".env.local"), PROJECT_ID) ||
+    findVariable(await readEnvFile(dir, ".env"), PROJECT_ID);
+  const fromEnv = findVariable(env, PROJECT_ID);
+  // As gt does: a key for either project would be wrong for some of the
+  // project's users.
+  for (const [where, other] of [
+    [".env.local or .env", fromEnvFiles],
+    ["the environment", fromEnv],
+  ] as const) {
+    if (projectId && other && other !== projectId) {
+      throw new Error(
+        `Project ID mismatch: gt.config.json uses ${projectId}, but ${where} uses ${other}. Use the same project ID in both, then run again.`,
+      );
+    }
+  }
+  return fromEnvFiles || projectId || fromEnv;
+}
+
+/**
+ * Whether git tracks `dir/.env.local`: false without git or outside a
+ * repository, and git's error when it fails otherwise, as in a repository it
+ * refuses for "dubious ownership".
+ */
+function gitTracksEnvLocal(dir: string): Promise<boolean | string> {
+  return new Promise((resolve) =>
+    execFile(
+      "git",
+      ["ls-files", "--error-unmatch", "--", ".env.local"],
+      // English messages, for "not a git repository".
+      { cwd: dir, env: { ...process.env, LC_ALL: "C" } },
+      (error, _stdout, stderr) => {
+        if (!error) return resolve(true);
+        if (
+          error.code === 1 ||
+          error.code === "ENOENT" ||
+          /not a git repository/.test(stderr)
+        ) {
+          return resolve(false);
+        }
+        resolve(stderr.trim().split("\n")[0] || error.message);
+      },
+    ),
   );
 }
 
