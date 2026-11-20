@@ -165,9 +165,12 @@ export async function signInToGt(args: {
     await account.login({
       baseUrl: GT_API_URL,
       onWarning: warn,
+      // The browser sign-in returns to a server on this machine, which a
+      // browser elsewhere can't reach, as from a remote container. gt's sign-in
+      // is shared, and its --no-browser uses a code instead.
       onAuthorizationUrl: (url) =>
         log.log(
-          `Opening your browser to sign in to General Translation. If it doesn't open, visit:\n${url}`,
+          `Opening your browser to sign in to General Translation. If it doesn't open, visit:\n${url}\nIf the browser runs on another machine, as with a remote container, press Ctrl+C, run \`npx gt login --no-browser\`, then run this again.`,
         ),
       // Over SSH, or where no browser can be opened.
       onDeviceCode: ({ userCode, verificationUri, verificationUriComplete }) =>
@@ -186,7 +189,13 @@ export async function signInToGt(args: {
 
   let createdProject = false;
   let addedIgnoreRule = false;
+  // Each request can take minutes on a bad connection (the client retries a
+  // read up to 3 times after 60-second timeouts), so say what is waiting.
+  // There is no overall deadline: one that ended the run while a project was
+  // being created could leave a project whose ID was never saved, and the
+  // next run would create another.
   if (!projectId) {
+    log.start("Loading your General Translation organizations...");
     const orgs = [];
     for await (const org of paginate(listOrgs, { client })) orgs.push(org);
     if (orgs.length === 0) {
@@ -211,6 +220,7 @@ export async function signInToGt(args: {
             },
           );
     if (typeof orgId !== "string") return undefined;
+    log.start("Creating the General Translation project...");
     const { data } = await createProject({
       client,
       path: { orgId },
@@ -233,6 +243,7 @@ export async function signInToGt(args: {
       text: `GT_PROJECT_ID=${projectId}\n`,
     });
   }
+  log.start("Creating a General Translation API key...");
   const { data: key } = await createProjectApiKey({
     client,
     path: { projectId },

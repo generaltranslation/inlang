@@ -328,6 +328,26 @@ describe("signInToGt", () => {
     expect(gt.login).not.toHaveBeenCalled();
   });
 
+  test("says what it waits for before each request", async () => {
+    const output = captureLog();
+    const api = fakeApi();
+    const logBeforeRequest: string[] = [];
+    const gt = fakeAccount({
+      ...api,
+      fetch: async (input, init) => {
+        logBeforeRequest.push(output());
+        return api.fetch(input, init);
+      },
+    });
+    await signIn({ dir: tree(), account: gt.account });
+    const last = (log: string | undefined) => log?.split("\n").at(-1);
+    expect(logBeforeRequest.map(last)).toEqual([
+      "Loading your General Translation organizations...",
+      "Creating the General Translation project...",
+      "Creating a General Translation API key...",
+    ]);
+  });
+
   test("signs in again when gt's sign-in can no longer be refreshed", async () => {
     captureLog();
     let expired = true;
@@ -372,6 +392,18 @@ describe("signInToGt", () => {
     });
     await signIn({ dir: tree(), account: gt.account });
     expect(output()).toContain("https://auth.example/authorize");
+  });
+
+  test("says how to sign in when the browser can't reach this machine", async () => {
+    const output = captureLog();
+    const gt = fakeAccount(fakeApi(), {
+      login: async (options) =>
+        options?.onAuthorizationUrl?.("https://auth.example/authorize"),
+    });
+    await signIn({ dir: tree(), account: gt.account });
+    expect(output()).toContain(
+      "press Ctrl+C, run `npx gt login --no-browser`, then run this again.",
+    );
   });
 
   test.each([
