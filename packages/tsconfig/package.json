@@ -12,6 +12,5 @@
   "types": "./dist/index.d.ts",
   "exports": {
     "./default": "./tsconfig.default.json"
-  },
-  "license": "MIT"
+  }
 }

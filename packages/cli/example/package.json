@@ -9,6 +9,5 @@
   "devDependencies": {
     "@inlang/cli": "workspace:*",
     "@inlang/plugin-message-format": "workspace:*"
-  },
-  "license": "MIT"
+  }
 }
