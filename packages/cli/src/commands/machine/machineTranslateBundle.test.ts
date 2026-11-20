@@ -2057,3 +2057,60 @@ test("with context, a form added in one select branch goes before that branch's 
     }
   }
 });
+
+test("an added catch-all that leaves out a selector stays after a translation's more specific form", async () => {
+  // runtimes that select the first matching variant would show "Items" for 0
+  const { result } = await translate(
+    formsBundle(countPlural, ["count", "countPlural"], {
+      en: {
+        "count=0,countPlural=*": "No items",
+        "countPlural=one": "One item",
+        "countPlural=*": "Items",
+      },
+      de: {
+        "count=0,countPlural=*": "Keine Artikel",
+        "countPlural=one": "Ein Artikel",
+      },
+    }),
+    ["de"],
+  );
+
+  expect(Object.entries(formsOf(result, "de")!)).toEqual([
+    ["count=0,countPlural=*", "Keine Artikel"],
+    ["countPlural=one", "Ein Artikel"],
+    ["countPlural=*", "[de] Items"],
+  ]);
+});
+
+test("an added form doesn't move before a variant whose literal it has only under another selector", () => {
+  const row = (id: string, count: string, guests: string) =>
+    ({
+      id,
+      message_id: "ru",
+      matches: [
+        count === "*"
+          ? { type: "catchall-match" as const, key: "countPlural" }
+          : {
+              type: "literal-match" as const,
+              key: "countPlural",
+              value: count,
+            },
+        guests === "*"
+          ? { type: "catchall-match" as const, key: "guestsPlural" }
+          : {
+              type: "literal-match" as const,
+              key: "guestsPlural",
+              value: guests,
+            },
+      ],
+      pattern: [],
+    }) as any;
+  // only for one guest, while the added form is for one item and any guests
+  const oneGuest = row("ru-guest", "*", "one");
+  const oneItem = row("ru-item", "one", "*");
+  const message = { variants: [oneGuest, oneItem] };
+
+  orderLikeSource(message, [], new Set([oneItem]), []);
+
+  expect(message.variants).toEqual([oneGuest, oneItem]);
+});
