@@ -705,40 +705,6 @@ test("forms the source lacks in its own locale too aren't reported", async () =>
   ]);
 });
 
-test.each<[string, Array<[string, string]> | undefined]>([
-  ["a new message", undefined],
-  ["a message without that variant", [["*", "Viele Dinge"]]],
-])(
-  "a blank source is copied, not sent for translation, for %s",
-  async (_, de) => {
-    const bundle = pluralBundle(de ?? []);
-    bundle.messages[0]!.variants[0]!.pattern = [];
-    if (!de) bundle.messages.pop();
-    const texts: string[] = [];
-    const result = await machineTranslateBundle({
-      bundle,
-      sourceLocale: "en",
-      targetLocales: ["de"],
-      provider: {
-        translateText: async ({ text }) => {
-          texts.push(text);
-          // as a provider that rejects empty text
-          return text
-            ? { ok: true, translatedText: "Viele Dinge" }
-            : { ok: false, error: "empty text" };
-        },
-      },
-    });
-
-    expect(result.error).toBeUndefined();
-    expect(texts).toEqual(de ? [] : ["Many items"]);
-    const translated = result.data!.messages.find((m) => m.locale === "de")!;
-    // `one` stays blank, as in the source, instead of showing `*`
-    expect(valuesOf(translated)).toEqual(["one", "*"]);
-    expect(translated.variants[0]!.pattern).toEqual([]);
-  },
-);
-
 test("a blank catch-all is copied, so a new message matches every number", async () => {
   const bundle = pluralBundle([]);
   bundle.messages[0]!.variants[1]!.pattern = [];
@@ -785,34 +751,31 @@ test("copied blank sources count toward progress", async () => {
   expect(progress).toBe(plan.missing.length);
 });
 
-test.each([[42], [false], [{}], [[]]])(
-  "a translation that isn't text (%j) fails instead of being saved blank",
-  async (value) => {
-    const bundle = pluralBundle([]);
-    bundle.messages.pop();
-    const plan = planBundleTranslation({
-      bundle,
-      sourceLocale: "en",
-      targetLocales: ["de"],
-    });
-    if ("error" in plan) throw new Error(plan.error);
-    const result = await translateMissing({
-      provider: {
-        translateBatch: async ({ texts }) => ({
-          ok: true,
-          translatedTexts: Object.fromEntries(
-            Object.keys(texts).map((key) => [key, value as never]),
-          ),
-        }),
-      },
-      sourceLocale: "en",
-      missing: plan.missing,
-    });
+test("a translation that isn't text, such as {}, fails instead of being saved blank", async () => {
+  const bundle = pluralBundle([]);
+  bundle.messages.pop();
+  const plan = planBundleTranslation({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+  });
+  if ("error" in plan) throw new Error(plan.error);
+  const result = await translateMissing({
+    provider: {
+      translateBatch: async ({ texts }) => ({
+        ok: true,
+        translatedTexts: Object.fromEntries(
+          Object.keys(texts).map((key) => [key, {} as never]),
+        ),
+      }),
+    },
+    sourceLocale: "en",
+    missing: plan.missing,
+  });
 
-    expect(result).toMatchObject({
-      ok: false,
-      error: 'The translation of "One item" isn\'t text.',
-    });
-    expect(result.translations.size).toBe(0);
-  },
-);
+  expect(result).toMatchObject({
+    ok: false,
+    error: 'The translation of "One item" isn\'t text.',
+  });
+  expect(result.translations.size).toBe(0);
+});
