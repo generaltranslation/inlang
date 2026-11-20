@@ -7,6 +7,7 @@ import type {
 } from "@inlang/sdk";
 import { checkTranslation } from "@inlang/sdk";
 import {
+  orderLikeSource,
   planBundleTranslation,
   translateMissing,
 } from "./machineTranslateBundle.js";
@@ -1976,4 +1977,51 @@ test("with context, a filled `other` is kept when the source writes its catch-al
   expect(formsOf(result, "ru")).toMatchObject({
     "countPlural=other": "Товара",
   });
+});
+
+test("with context, forms added to a target whose catch-all the source writes as `other` go before its catch-all", async () => {
+  // runtimes that select the first matching variant would pick `*` for 2 and 5
+  const { result } = await expand(
+    formsBundle(countPlural, ["countPlural"], {
+      en: { "countPlural=one": "One item", "countPlural=other": "Items" },
+      ru: { "countPlural=one": "Один товар", "countPlural=*": "Товары" },
+    }),
+    ["ru"],
+  );
+
+  expect(Object.keys(formsOf(result, "ru")!)).toEqual([
+    "countPlural=one",
+    "countPlural=few",
+    "countPlural=many",
+    "countPlural=*",
+  ]);
+});
+
+test("a form added without a later form of the source goes before a variant that leaves its selector out", () => {
+  const row = (id: string, matches: any[]) =>
+    ({ id, message_id: "ru", matches, pattern: [] }) as any;
+  const plural = (value: string) => [
+    { type: "literal-match" as const, key: "countPlural", value },
+  ];
+  const catchAll = row("ru-rest", []);
+  const few = row("ru-few", plural("few"));
+  const message = { variants: [row("ru-one", plural("one")), catchAll, few] };
+
+  orderLikeSource(
+    message,
+    [row("en-one", plural("one")), row("en-other", plural("other"))],
+    new Set([few]),
+    [],
+    [
+      plural("one"),
+      plural("few"),
+      [{ type: "catchall-match" as const, key: "countPlural" }],
+    ],
+  );
+
+  expect(message.variants.map((variant) => variant.matches)).toEqual([
+    plural("one"),
+    plural("few"),
+    [],
+  ]);
 });
