@@ -154,6 +154,7 @@ function fakePrompt(answer: unknown) {
 /** A git work tree with `files`, shielded from the user's git config. */
 function gitTree(files: Record<string, string> = {}): string {
   vi.stubEnv("GIT_CONFIG_GLOBAL", nodePath.join(tree(), "none"));
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   vi.stubEnv("XDG_CONFIG_HOME", tree());
   const dir = tree(files);
   execFileSync("git", ["init", "-q"], { cwd: dir });
@@ -349,6 +350,30 @@ describe("signInToGt", () => {
     expect(output()).not.toContain(API_KEY);
   });
 
+  test.each([403, 404])(
+    "says how to get access when the key for a shared project fails with %i",
+    async (status) => {
+      captureLog();
+      const gt = fakeAccount(
+        fakeApi({
+          fail: {
+            path: "/v2/projects/prj_team/api-keys",
+            status,
+            body: { error: "Forbidden", code: "forbidden" },
+          },
+        }),
+      );
+      await expect(
+        signIn({
+          dir: tree({ "gt.config.json": '{"projectId":"prj_team"}' }),
+          account: gt.account,
+        }),
+      ).rejects.toThrow(
+        "Couldn't create a General Translation API key for project prj_team: Forbidden. If you aren't a member of its organization, ask to be invited, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.",
+      );
+    },
+  );
+
   test("doesn't sign in again while gt's sign-in is valid", async () => {
     captureLog();
     const gt = fakeAccount(fakeApi(), { signedIn: true });
@@ -451,6 +476,11 @@ describe("signInToGt", () => {
     ["gt.config.json", { "gt.config.json": '{"projectId":"prj_1"}' }, {}],
     ["the environment", {}, { VITE_GT_PROJECT_ID: "prj_1" }],
     [
+      "gt.config.json, without its spaces",
+      { "gt.config.json": '{"projectId":" prj_1 "}' },
+      {},
+    ],
+    [
       ".env.local, before .env and the environment",
       {
         ".env.local": "GT_PROJECT_ID=prj_1\n",
@@ -491,6 +521,7 @@ describe("signInToGt", () => {
   test("adds the rule again outside git where a later .gitignore line un-ignores .env.local, so a later git init ignores it", async () => {
     captureLog();
     vi.stubEnv("GIT_CONFIG_GLOBAL", nodePath.join(tree(), "none"));
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("XDG_CONFIG_HOME", tree());
     const dir = tree({ ".gitignore": ".env.local\n!.env.local\n" });
     await signIn({ dir, account: fakeAccount().account });
@@ -517,6 +548,54 @@ describe("signInToGt", () => {
     });
     // Outside a work tree too, or a later `git init` would commit the key.
     expect(read(dir, ".gitignore")).toBe(".env.local\n");
+  });
+
+  test.each([["/.env.local\n"], [".env.local  \n"]])(
+    "outside git, leaves a .gitignore whose last line is %j alone",
+    async (gitignore) => {
+      captureLog();
+      vi.stubEnv("PATH", tree());
+      const dir = tree({ ".gitignore": gitignore });
+      await signIn({ dir, account: fakeAccount().account });
+      expect(read(dir, ".gitignore")).toBe(gitignore);
+    },
+  );
+
+  test("refuses a .env.local that can't be written before signing in", async () => {
+    captureLog();
+    const dir = tree({ ".env.local": "OTHER=1\n" });
+    fs.chmodSync(nodePath.join(dir, ".env.local"), 0o444);
+    const gt = fakeAccount();
+    await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+      "Can't save the General Translation key: .env.local can't be written. Make it writable, then run again.",
+    );
+    expect(gt.login).not.toHaveBeenCalled();
+  });
+
+  test("refuses a .gitignore that is a folder before signing in", async () => {
+    captureLog();
+    const dir = tree();
+    fs.mkdirSync(nodePath.join(dir, ".gitignore"));
+    const gt = fakeAccount();
+    await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+      ".gitignore isn't a file. Replace it with a regular file, then run again.",
+    );
+    expect(gt.login).not.toHaveBeenCalled();
+  });
+
+  test("refuses a folder that can't be written before signing in", async () => {
+    captureLog();
+    const dir = tree();
+    fs.chmodSync(dir, 0o555);
+    const gt = fakeAccount();
+    try {
+      await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+        `${dir} can't be written. Make it writable, then run again.`,
+      );
+      expect(gt.login).not.toHaveBeenCalled();
+    } finally {
+      fs.chmodSync(dir, 0o755);
+    }
   });
 
   test("refuses a .env.local that git tracks before signing in", async () => {
@@ -695,7 +774,11 @@ describe("signInToGt", () => {
     const failing = fakeAccount(
       fakeApi({ fail: projectLimit("/v2/projects/prj_new/api-keys") }),
     );
-    await expect(signIn({ dir, account: failing.account })).rejects.toThrow(
+    const error = await signIn({ dir, account: failing.account }).catch(
+      (error) => error,
+    );
+    // No hint to ask for access: the project is the user's own.
+    expect(error.message).toBe(
       "Couldn't create a General Translation API key for project prj_new: The organization reached its project limit",
     );
     expect(read(dir, ".env.local")).toBe("GT_PROJECT_ID=prj_new\n");
@@ -731,20 +814,30 @@ describe("signInToGt", () => {
     expect(read(dir, ".env.local")).toBe(envLocal);
   });
 
-  test("passes on a failed sign-in, and saves nothing", async () => {
-    captureLog();
-    const dir = tree();
-    const gt = fakeAccount(fakeApi(), {
-      login: async () => {
-        throw new Error("gt Error: Sign in was denied in the browser");
-      },
-    });
-    await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
-      "Sign in was denied in the browser",
-    );
-    expect(gt.requests).toEqual([]);
-    expect(fs.readdirSync(dir)).toEqual([]);
-  });
+  test.each([
+    ["oauth", "Sign in was denied in the browser", "Run `gt login` again"],
+    ["login_required", "You are not signed in", "Run `gt login` to sign in"],
+  ] as const)(
+    "passes on a failed sign-in (%s), saves nothing, and says to run this command again instead of `gt login`",
+    async (code, whatHappened, fix) => {
+      captureLog();
+      const dir = tree();
+      const gt = fakeAccount(fakeApi(), {
+        login: async () => {
+          throw new UserAuthError(code, whatHappened, fix);
+        },
+      });
+      const error = await signIn({ dir, account: gt.account }).catch(
+        (error) => error,
+      );
+      expect(error.message).toBe(
+        `${whatHappened}. Run this command again to sign in.`,
+      );
+      expect(error.cause).toBeInstanceOf(UserAuthError);
+      expect(gt.requests).toEqual([]);
+      expect(fs.readdirSync(dir)).toEqual([]);
+    },
+  );
 
   describe("without interactive", () => {
     test("resolves nothing without a sign-in, before checking .env.local", async () => {
