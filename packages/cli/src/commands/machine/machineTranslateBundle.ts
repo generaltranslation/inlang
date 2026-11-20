@@ -1063,7 +1063,10 @@ const UUID_V7 =
  * form after it in `forms` (the target's, in the SDK's `requiredVariants`
  * order) that the source has, so the catch-all stays last. Any other variant
  * the source doesn't have (one written by hand) stays after the variant it
- * followed. Messages whose order doesn't change keep every id.
+ * followed. Then every added form goes before the first variant that matches
+ * its inputs too: an English `other` isn't Russian `*`, so `forms` can name a
+ * form of another select branch, or none. Messages whose order doesn't change
+ * keep every id.
  */
 export function orderLikeSource(
   message: { variants: VariantRow[] },
@@ -1077,7 +1080,6 @@ export function orderLikeSource(
       (source) => findMatchingVariant([variant], source.matches) !== undefined,
     );
   let previous = -1;
-  const unanchored: VariantRow[] = [];
   const keyed = message.variants.map((variant, position) => {
     let key = sourceIndex(variant);
     if (key === -1 && added.has(variant)) {
@@ -1088,15 +1090,8 @@ export function orderLikeSource(
         .slice(form + 1)
         .map((matches) => sourceIndex({ matches }))
         .find((index) => index !== -1);
-      if (next === undefined) {
-        // no later form the source has, as when its catch-all is a literal
-        // `other`: placed below
-        unanchored.push(variant);
-        key = Infinity;
-      } else {
-        // before that form, after the variants before it
-        key = next - 0.5;
-      }
+      // before that form, after the variants before it; without one, last
+      key = next === undefined ? Infinity : next - 0.5;
     }
     if (key === -1) key = previous;
     if (!added.has(variant)) previous = key;
@@ -1104,12 +1099,12 @@ export function orderLikeSource(
   });
   const ordered = [...keyed]
     .sort((a, b) => a.key - b.key || a.position - b.position)
-    .map(({ variant }) => variant)
-    .filter((variant) => !unanchored.includes(variant));
+    .map(({ variant }) => variant);
   // before the first variant that matches its inputs too, such as the target's
   // catch-all, or a runtime that takes the first match never gets to it
-  for (const variant of unanchored) {
-    const before = ordered.findIndex((other) =>
+  for (const variant of ordered.filter((each) => added.has(each))) {
+    const at = ordered.indexOf(variant);
+    const before = ordered.slice(0, at).findIndex((other) =>
       variant.matches.every((match) => {
         const value = other.matches.find((each) => each.key === match.key);
         return (
@@ -1121,7 +1116,7 @@ export function orderLikeSource(
         );
       }),
     );
-    ordered.splice(before === -1 ? ordered.length : before, 0, variant);
+    if (before !== -1) ordered.splice(before, 0, ...ordered.splice(at, 1));
   }
   // the first variant whose place changes, or whose id doesn't sort after
   // the variant before it (e.g. an added variant after a non-v7 id)
