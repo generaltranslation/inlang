@@ -22,6 +22,7 @@ import {
   resolveMachineTranslateProvider,
 } from "./providers/resolveProvider.js";
 import type { AnyMachineTranslateProvider } from "./providers/types.js";
+import { isInteractive } from "../cloud/index.js";
 
 export const translate = new Command()
   .command("translate")
@@ -36,6 +37,10 @@ export const translate = new Command()
     "Comma separated list of target locales for translation.",
   )
   .option("-n, --nobar", "disable progress bar", false)
+  .option(
+    "--no-browser",
+    "Sign in to General Translation with a code instead of a browser on this machine.",
+  )
   .description("Machine translate bundles.")
   .action(async (args: { force: boolean; project: string }) => {
     let exitCode = 0;
@@ -100,6 +105,20 @@ export async function translateAndSave(args: {
  * (not of a text) stops the run after its locale is saved. A save that fails
  * after a translation failed or was rejected says so too.
  */
+/**
+ * Whether sign-in uses a code instead of a browser: as asked with
+ * `--no-browser`, or where no browser can be shown, as the cloud command
+ * decides (CI, pipes, and Linux without a display, as in SSH and containers).
+ */
+export function signInWithCode(args: {
+  browser: boolean;
+  isTTY: boolean;
+  env: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  return !args.browser || !isInteractive(args);
+}
+
 export async function translateCommandAction(args: {
   project: InlangProject;
   provider?: AnyMachineTranslateProvider;
@@ -177,6 +196,11 @@ export async function translateCommandAction(args: {
             interactive: Boolean(
               process.stdin.isTTY && process.stdout.isTTY && !process.env.CI,
             ),
+            noBrowser: signInWithCode({
+              browser: options.browser,
+              isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+              env: process.env,
+            }),
           })));
     if (provider && !provider.supportsContext) planned = planBundles(false);
     const { plans, missing } = planned;

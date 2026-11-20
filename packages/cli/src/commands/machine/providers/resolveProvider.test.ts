@@ -544,6 +544,18 @@ test("a failed sign-in outside an interactive terminal is a MachineTranslateErro
   );
 });
 
+test("passes noBrowser to the sign-in chosen in the menu", async () => {
+  vi.spyOn(log, "prompt").mockResolvedValue("gt");
+  const signIn = vi.fn<NonNullable<ResolveArgs["signIn"]>>(async () => ({
+    apiKey: "gtx-dev",
+    projectId: "prj_1",
+  }));
+  await resolve({ interactive: true, noBrowser: true, signIn });
+  expect(signIn).toHaveBeenCalledWith(
+    expect.objectContaining({ noBrowser: true }),
+  );
+});
+
 test("a failed sign-in is a MachineTranslateError, which prints without a stack trace", async () => {
   vi.spyOn(log, "prompt").mockResolvedValue("gt");
   const error = await resolve({
