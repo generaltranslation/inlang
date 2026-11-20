@@ -2,7 +2,7 @@ import type {
   BatchMachineTranslateProvider,
   TranslateBatchArgs,
 } from "./types.js";
-import { rateLimitOf } from "./rateLimit.js";
+import { rateLimitOf, scopeOf } from "./rateLimit.js";
 
 const GT_TRANSLATE_API_URL = "https://api.gtx.dev/v2/translate";
 /**
@@ -85,14 +85,8 @@ export function createGtTranslateProvider(args: {
         };
       }
 
-      if (response.status === 402) {
-        return {
-          ok: false,
-          error: `General Translation could not bill this request. Check your billing: ${GT_DASHBOARD_URL}`,
-        };
-      }
-
-      if (response.status === 403) {
+      if (!response.ok) {
+        // Every other failure explains itself in the body: `{ error, code }`.
         let body: string;
         try {
           body = await response.text();
@@ -101,31 +95,56 @@ export function createGtTranslateProvider(args: {
           if ((error as Error).name === "TimeoutError") return timedOut;
           body = "";
         }
-        if (body.includes(RUNTIME_TRANSLATION_PERMISSION)) {
+        const { message, code } = errorOf(body);
+
+        if (response.status === 402) {
+          // The API uses 402 for the free plan's monthly limit, the spend limit
+          // and the balance, each with its own message. Only the first line:
+          // the balance's goes on with an estimate that is only this batch's.
+          const reason = reasonOf(message, args.apiKey, { firstLine: true });
           return {
             ok: false,
-            error: `General Translation rejected the request: this API key needs the Runtime translation permission. Edit the key at ${GT_DASHBOARD_URL}.`,
+            error: reason
+              ? `General Translation rejected the request: ${reason} Billing settings: ${GT_DASHBOARD_URL}`
+              : `General Translation could not bill this request. Check your billing: ${GT_DASHBOARD_URL}`,
           };
         }
-        // Other reasons, such as a locale the GT project doesn't allow, aren't
-        // about the key, so only a bare 403 points to it.
-        const reason = reasonOf(body, args.apiKey);
-        return {
-          ok: false,
-          error: reason
-            ? `General Translation rejected the request: ${reason}`
-            : `General Translation rejected the request. Check the API key at ${GT_DASHBOARD_URL}.`,
-        };
-      }
 
-      if (!response.ok) {
+        if (response.status === 403) {
+          if (body.includes(RUNTIME_TRANSLATION_PERMISSION)) {
+            return {
+              ok: false,
+              error: `General Translation rejected the request: this API key needs the Runtime translation permission. Edit the key at ${GT_DASHBOARD_URL}.`,
+            };
+          }
+          // Other reasons, such as a locale the GT project doesn't allow, aren't
+          // about the key, so only a bare 403 points to it.
+          const reason = reasonOf(message, args.apiKey);
+          return {
+            ok: false,
+            // A locale the GT project doesn't allow fails only its own texts,
+            // so the other locales are still translated.
+            ...(code === "locale_not_allowed"
+              ? { scope: "text" as const }
+              : {}),
+            error: reason
+              ? `General Translation rejected the request: ${reason}`
+              : `General Translation rejected the request. Check the API key at ${GT_DASHBOARD_URL}.`,
+          };
+        }
+
+        const reason = reasonOf(message, args.apiKey);
+        // Over HTTP/2 the status text is empty.
+        const status = [response.status, response.statusText]
+          .filter(Boolean)
+          .join(" ");
         return {
           ok: false,
-          scope: [400, 413, 422].includes(response.status)
-            ? "text"
-            : "provider",
+          scope: scopeOf(response.status),
           ...rateLimitOf(response),
-          error: `${response.status} ${response.statusText}: translating from ${sourceLocale} to ${targetLocale}`,
+          error: reason
+            ? `General Translation answered ${response.status} translating from ${sourceLocale} to ${targetLocale}: ${reason}`
+            : `General Translation answered ${status} translating from ${sourceLocale} to ${targetLocale}.`,
         };
       }
 
@@ -166,19 +185,30 @@ export function createGtTranslateProvider(args: {
 }
 
 /**
- * The reason an error response gives, as one line ending a sentence: General
- * Translation's JSON `error`, or a short plain-text body, not an HTML page.
- * The API key is never quoted.
+ * The `error` and `code` of an error response's body: General Translation's
+ * JSON, or a plain-text body as the message.
  */
-function reasonOf(body: string, apiKey: string): string | undefined {
-  let reason: unknown = body;
+function errorOf(body: string): { message: unknown; code: unknown } {
   try {
-    reason = JSON.parse(body)?.error;
+    const json = JSON.parse(body);
+    return { message: json?.error, code: json?.code };
   } catch {
-    // Not JSON: the body is the reason.
+    // Not JSON: the body is the message.
+    return { message: body, code: undefined };
   }
-  if (typeof reason !== "string") return undefined;
-  let text = reason
+}
+
+/**
+ * An error message as one line ending a sentence, or nothing for a message
+ * that isn't worth showing, such as an HTML page. The API key is never quoted.
+ */
+function reasonOf(
+  message: unknown,
+  apiKey: string,
+  options: { firstLine?: boolean } = {},
+): string | undefined {
+  if (typeof message !== "string") return undefined;
+  let text = (options.firstLine ? message.trim().split("\n")[0]! : message)
     .replace(/\s+/g, " ")
     // No terminal escape sequences from a proxy's answer.
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
