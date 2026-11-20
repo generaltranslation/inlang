@@ -3,6 +3,7 @@ import type {
   TranslateTextArgs,
   TranslateTextResult,
 } from "./types.js";
+import { scopeOf } from "./rateLimit.js";
 
 /**
  * A free, third-party hosted translation service used as the default fallback
@@ -104,9 +105,7 @@ export function createDemosjarcoTranslateProvider(
         done: true,
         result: {
           ok: false,
-          scope: [400, 413, 422].includes(response.status)
-            ? "text"
-            : "provider",
+          scope: scopeOf(response.status),
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         },
       };
