@@ -33,6 +33,9 @@ const __dirname = pathPolyfill123.dirname(__filename)
     },
     // @inlang/sdk owns Lix's native and WASM assets. Keep its module URLs
     // relative to the installed SDK instead of rebasing them into dist/main.js.
-    external: ["esbuild-wasm", "@inlang/sdk"],
+    // `open`, which General Translation's sign-in uses, declares its own
+    // top-level __dirname, which the banner's would collide with, and finds
+    // its xdg-open script next to itself.
+    external: ["esbuild-wasm", "@inlang/sdk", "open"],
   };
 }

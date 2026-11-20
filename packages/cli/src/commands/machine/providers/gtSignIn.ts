@@ -1,42 +1,38 @@
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import nodePath from "node:path";
-import { createInterface } from "node:readline";
+import {
+  createApiClient,
+  createProject,
+  createProjectApiKey,
+  listOrgs,
+  paginate,
+  ProjectApiKeyPermission,
+  type UserTokenProvider,
+} from "@generaltranslation/api";
+import {
+  createUserTokenProvider,
+  hasLogin,
+  login,
+} from "@generaltranslation/auth";
 import type { ProjectSettings } from "@inlang/sdk";
 import { log } from "../../../utilities/log.js";
+import { GT_DASHBOARD_URL } from "./gt.js";
 
-// Pinned because this module parses `gt init --json`'s flags and events, which
-// a new gt release may change. Bump only after rechecking both.
-export const GT_CLI = "gt@2.28.3";
-const GT_LOG_TAIL_LINES = 20;
-// gt requires a file pattern even though its file workflow isn't used.
-const GT_FILE_PATTERN = "json=./messages/[locale].json";
+// The API the translate provider calls too. Passed to the sign-in, which
+// otherwise follows GT_API_URL, so a gt developer's setting can't sign this
+// CLI in to another API than the one it translates with.
+const GT_API_URL = "https://api.gtx.dev";
+const KEY_NAME = "Development key (inlang machine translate)";
+// The API's limit, in UTF-16 code units.
+const MAX_PROJECT_NAME_LENGTH = 64;
 
 type GtCredentials = { apiKey: string; projectId?: string };
-
-/**
- * Runs `command` and resolves with its exit code and stderr when it exits.
- * Each stdout line is passed to `onStdoutLine` as it arrives.
- */
-type RunProcess = (
-  command: string,
-  args: string[],
-  options: { cwd: string; onStdoutLine: (line: string) => void },
-) => Promise<{ code: number | null; stderr: string }>;
 
 type Prompt = (
   message: string,
   options: NonNullable<Parameters<typeof log.prompt>[1]>,
 ) => Promise<unknown>;
-
-type InitResult = {
-  type: "result";
-  outcome: "success" | "failed";
-  completedSteps?: string[];
-  error?: string;
-  missingOptions?: string[];
-};
 
 /**
  * General Translation credentials from `env`, else from `dir`'s `.env` and
@@ -114,12 +110,37 @@ function parseEnvFile(content: string): Record<string, string> {
   return variables;
 }
 
+/** The sign-in and the user's API client; tests replace them. */
+export type GtAccount = {
+  hasLogin: () => Promise<boolean>;
+  login: (options: Parameters<typeof login>[0]) => Promise<void>;
+  userTokenProvider: UserTokenProvider;
+  fetch?: typeof fetch;
+};
+
+// consola's methods read `this`.
+const warn = (message: string) => log.warn(message);
+
+const defaultAccount: GtAccount = {
+  hasLogin: () => hasLogin({ baseUrl: GT_API_URL, onWarning: warn }),
+  login,
+  // Reads the sign-in only when a request needs it.
+  userTokenProvider: createUserTokenProvider({
+    baseUrl: GT_API_URL,
+    onWarning: warn,
+  }),
+};
+
 /**
- * Signs the user in to General Translation with `gt init --json`, which
- * creates a project (unless `dir`'s gt.config.json, .env files or the
- * environment name one) and makes a development key for it, then appends the
- * key to `dir/.env.local`. It may ask for an organization, so call it only in
- * an interactive terminal. Resolves `undefined` if the user cancels that.
+ * Signs the user in to General Translation, unless a `gt` sign-in on this
+ * machine is still valid, and makes a key for the project `dir`'s .env files,
+ * gt.config.json or `env` name, creating one in the user's organization
+ * otherwise. The key may only translate. It and its project ID are appended
+ * to `dir/.env.local`, and the key is never printed. Resolves `undefined` if
+ * the user cancels the question for the organization.
+ *
+ * Without `interactive`, it neither signs in nor asks: it resolves
+ * `undefined` without a valid sign-in, and fails if it would have to ask.
  *
  * `.env.local` gets a `.gitignore` rule unless git ignores it already, and a
  * tracked or symlinked `.env.local` fails before the sign-in.
@@ -128,107 +149,122 @@ export async function signInToGt(args: {
   dir: string;
   settings: ProjectSettings;
   env: Record<string, string | undefined>;
-  run?: RunProcess;
+  interactive?: boolean;
   prompt?: Prompt;
-  openUrl?: (url: string) => void;
+  account?: GtAccount;
 }): Promise<GtCredentials | undefined> {
   const {
     dir,
     settings,
     env,
-    run = runProcess,
+    interactive = true,
     // consola's prompt reads `this`.
     prompt = (message, options) => log.prompt(message, options),
-    openUrl = openInBrowser,
+    account = defaultAccount,
   } = args;
+  const signedIn = await account.hasLogin();
+  // Before the checks: CI without a key must hear how to set one, not why
+  // a key can't be saved here.
+  if (!interactive && !signedIn) return undefined;
   const problem = await envLocalProblem(dir);
   if (problem) {
     throw new Error(
       `Can't save the General Translation key: ${problem}, then run again.`,
     );
   }
+  let projectId = await findGtProjectId(dir, env);
 
-  const initArgs = await gtInitArgs({ dir, settings, env });
-  // gt init adds gt to a package.json in its folder and installs it, which
-  // can't be turned off, so it runs in an empty one.
-  const cwd = await fs.mkdtemp(nodePath.join(os.tmpdir(), "inlang-gt-"));
-  const init = async (extraArgs: string[]) => {
-    let result: InitResult | undefined;
-    const { stderr } = await run("npx", [...initArgs, ...extraArgs], {
-      cwd,
-      onStdoutLine: (line) => {
-        const event = parseJson(line);
-        if (event?.type === "authorization_required") {
-          log.log(
-            `Sign in to General Translation in your browser: ${event.verificationUriComplete}`,
-          );
-          // `gt init --json` only prints the URL, it never opens a browser.
-          openUrl(event.verificationUriComplete);
-        } else if (event?.type === "result") {
-          result = event;
-        }
-      },
+  if (!signedIn) {
+    await account.login({
+      baseUrl: GT_API_URL,
+      onWarning: warn,
+      onAuthorizationUrl: (url) =>
+        log.log(
+          `Opening your browser to sign in to General Translation. If it doesn't open, visit:\n${url}`,
+        ),
+      // Over SSH, or where no browser can be opened.
+      onDeviceCode: ({ userCode, verificationUri, verificationUriComplete }) =>
+        log.log(
+          verificationUriComplete
+            ? `Sign in to General Translation in your browser: ${verificationUriComplete}`
+            : `Sign in to General Translation in your browser: ${verificationUri}\nThen enter the code ${userCode}.`,
+        ),
     });
-    return { result, stderr };
-  };
-
-  try {
-    let { result, stderr } = await init([]);
-    const orgs = result?.missingOptions?.includes("--org-id")
-      ? parseOrgs(result.error ?? "")
-      : [];
-    if (orgs.length > 0) {
-      const orgId = await prompt(
-        "Which General Translation organization should the project belong to?",
-        {
-          type: "select",
-          options: orgs.map((org) => ({ label: org.name, value: org.id })),
-          cancel: "undefined",
-        },
-      );
-      if (typeof orgId !== "string") return undefined;
-      // The sign-in is stored by now, so the rerun doesn't ask again.
-      ({ result, stderr } = await init(["--org-id", orgId]));
-    }
-    if (result?.outcome !== "success") {
-      const tail = stderr
-        .trimEnd()
-        .split("\n")
-        .slice(-GT_LOG_TAIL_LINES)
-        .join("\n");
-      throw new Error(
-        [
-          `General Translation sign-in failed: ${result?.error ?? "gt init exited without a result."}`,
-          ...(tail ? ["", "gt's log:", tail] : []),
-        ].join("\n"),
-      );
-    }
-
-    const credentials = await readGtCredentials({ env: {}, dir: cwd });
-    if (!credentials) {
-      throw new Error(
-        "gt init finished without saving a General Translation key to .env.local.",
-      );
-    }
-    const addedIgnoreRule = await appendToEnvLocal(
-      dir,
-      await fs.readFile(nodePath.join(cwd, ".env.local"), "utf8"),
-    );
-    log.success(
-      [
-        ...(result.completedSteps?.some((step) =>
-          step.startsWith("created project "),
-        )
-          ? ["Created the General Translation project."]
-          : []),
-        "Saved the API key to .env.local.",
-        ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
-      ].join("\n"),
-    );
-    return credentials;
-  } finally {
-    await fs.rm(cwd, { recursive: true, force: true });
   }
+  const client = createApiClient({
+    baseUrl: GT_API_URL,
+    userTokenProvider: account.userTokenProvider,
+    ...(account.fetch ? { fetch: account.fetch } : {}),
+  });
+
+  let createdProject = false;
+  if (!projectId) {
+    const orgs = [];
+    for await (const org of paginate(listOrgs, { client })) orgs.push(org);
+    if (orgs.length === 0) {
+      throw new Error(
+        `Your General Translation account has no organization. Create one at ${GT_DASHBOARD_URL}, then run again.`,
+      );
+    }
+    if (orgs.length > 1 && !interactive) {
+      throw new Error(
+        `Your General Translation account has several organizations, so a project can't be created without asking which. Run this command in a terminal, or set GT_PROJECT_ID to a project from ${GT_DASHBOARD_URL}.`,
+      );
+    }
+    const orgId =
+      orgs.length === 1
+        ? orgs[0]!.id
+        : await prompt(
+            "Which General Translation organization should the project belong to?",
+            {
+              type: "select",
+              options: orgs.map((org) => ({ label: org.name, value: org.id })),
+              cancel: "undefined",
+            },
+          );
+    if (typeof orgId !== "string") return undefined;
+    const { data } = await createProject({
+      client,
+      path: { orgId },
+      body: {
+        name: projectName(dir),
+        defaultLocale: settings.baseLocale,
+      },
+      throwOnError: true,
+    }).catch((error: Error) => {
+      throw new Error(
+        `Couldn't create the General Translation project: ${error.message}`,
+      );
+    });
+    projectId = data.id;
+    createdProject = true;
+  }
+  const { data: key } = await createProjectApiKey({
+    client,
+    path: { projectId },
+    body: {
+      name: KEY_NAME,
+      permissions: [ProjectApiKeyPermission["PROJECT:TRANSLATIONS:GENERATE"]],
+    },
+    throwOnError: true,
+  }).catch((error: Error) => {
+    throw new Error(
+      `Couldn't create a General Translation API key for project ${projectId}: ${error.message}`,
+    );
+  });
+
+  const addedIgnoreRule = await appendToEnvLocal(
+    dir,
+    `GT_PROJECT_ID=${projectId}\nGT_DEV_API_KEY=${key.key}\n`,
+  );
+  log.success(
+    [
+      ...(createdProject ? ["Created the General Translation project."] : []),
+      "Saved the API key to .env.local.",
+      ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
+    ].join("\n"),
+  );
+  return { apiKey: key.key, projectId };
 }
 
 /**
@@ -240,8 +276,7 @@ export async function envLocalProblem(
   dir: string,
 ): Promise<string | undefined> {
   if (
-    (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")).code ===
-    0
+    (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) === 0
   ) {
     return ".env.local is tracked by git. Untrack it with `git rm --cached .env.local`";
   }
@@ -266,7 +301,7 @@ export async function appendToEnvLocal(
 ): Promise<boolean> {
   // Exit code 0: ignored.
   const ignored =
-    (await git(dir, "check-ignore", "-q", "--", ".env.local")).code === 0;
+    (await git(dir, "check-ignore", "-q", "--", ".env.local")) === 0;
   if (!ignored) {
     await appendToFile(nodePath.join(dir, ".gitignore"), ".env.local\n");
   }
@@ -302,25 +337,6 @@ export async function shareGtProjectId(dir: string): Promise<boolean> {
     `${JSON.stringify({ ...config, projectId }, null, 2)}\n`,
   );
   return true;
-}
-
-function git(dir: string, ...args: string[]) {
-  return (
-    runProcess("git", args, { cwd: dir, onStdoutLine: () => {} })
-      // Without git, the folder is no work tree.
-      .catch(() => ({ code: null }))
-  );
-}
-
-/** Appends `text` to `file` on a new line, creating the file if needed. */
-async function appendToFile(
-  file: string,
-  text: string,
-  options?: { mode: number },
-): Promise<void> {
-  const content = await fs.readFile(file, "utf8").catch(() => "");
-  const separator = content && !content.endsWith("\n") ? "\n" : "";
-  await fs.appendFile(file, separator + text, options);
 }
 
 /**
@@ -377,46 +393,35 @@ export async function findGtProjectId(
 }
 
 /**
- * `npx`'s arguments to run `gt init` in an empty folder: it signs in, creates a
- * project unless `dir`'s gt.config.json, .env files or the environment name
- * one, and saves a development key for it to the folder's .env.local.
+ * The folder's name, as the project's, cut to the API's length at a whole
+ * character.
  */
-export async function gtInitArgs(args: {
-  dir: string;
-  settings: ProjectSettings;
-  env: Record<string, string | undefined>;
-}): Promise<string[]> {
-  const { dir, settings, env } = args;
-  // gt runs in an empty folder, so it doesn't see this folder's project ID.
-  const projectId = await findGtProjectId(dir, env);
-  return [
-    "--yes",
-    GT_CLI,
-    "init",
-    "--json",
-    "--no-react-setup",
-    "--dev-credentials",
-    "--default-locale",
-    settings.baseLocale,
-    "--locales",
-    ...settings.locales.filter((locale) => locale !== settings.baseLocale),
-    "--file-patterns",
-    GT_FILE_PATTERN,
-    ...(projectId
-      ? ["--project-id", projectId]
-      : [
-          "--create-project",
-          "--project-name",
-          nodePath.basename(nodePath.resolve(dir)),
-        ]),
-  ];
+function projectName(dir: string): string {
+  let name = nodePath.basename(nodePath.resolve(dir));
+  while (name.length > MAX_PROJECT_NAME_LENGTH) {
+    name = [...name].slice(0, -1).join("");
+  }
+  return name;
 }
 
-/** gt lists the organizations only as text: `  - Emails (org_abc123)`. */
-function parseOrgs(error: string): Array<{ name: string; id: string }> {
-  return [...error.matchAll(/^\s*-\s+(.+?)\s+\(([^()\s]+)\)\s*$/gm)].map(
-    ([, name, id]) => ({ name: name!, id: id! }),
+/** git's exit code; null without git, where the folder is no work tree. */
+function git(dir: string, ...args: string[]): Promise<number | null> {
+  return new Promise((resolve) =>
+    execFile("git", args, { cwd: dir }, (error) =>
+      resolve(!error ? 0 : typeof error.code === "number" ? error.code : null),
+    ),
   );
+}
+
+/** Appends `text` to `file` on a new line, creating the file if needed. */
+async function appendToFile(
+  file: string,
+  text: string,
+  options?: { mode: number },
+): Promise<void> {
+  const content = await fs.readFile(file, "utf8").catch(() => "");
+  const separator = content && !content.endsWith("\n") ? "\n" : "";
+  await fs.appendFile(file, separator + text, options);
 }
 
 function parseJson(text: string): any {
@@ -425,48 +430,4 @@ function parseJson(text: string): any {
   } catch {
     return undefined;
   }
-}
-
-const runProcess: RunProcess = (command, args, { cwd, onStdoutLine }) =>
-  new Promise((resolve, reject) => {
-    // npx is npx.cmd on Windows, which Node starts only through a shell. The
-    // shell gets one command line with each argument quoted (a directory name
-    // can have spaces); args next to a shell are deprecated (DEP0190).
-    const windows = process.platform === "win32";
-    const child = spawn(
-      windows ? [command, ...args.map((arg) => `"${arg}"`)].join(" ") : command,
-      windows ? [] : args,
-      {
-        cwd,
-        // stdin is closed so gt can never wait on a prompt; with --json it
-        // reports missing input as a result event instead.
-        stdio: ["ignore", "pipe", "pipe"],
-        shell: windows,
-      },
-    );
-    let stderr = "";
-    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-    createInterface({ input: child.stdout }).on("line", onStdoutLine);
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stderr }));
-  });
-
-/** Best effort: the printed URL is the fallback, so failures are ignored. */
-function openInBrowser(url: string): void {
-  // On Windows, `start` takes its first quoted argument as the window title,
-  // and the quotes around the URL keep cmd from splitting it at a `&`.
-  const [command, args] =
-    process.platform === "darwin"
-      ? ["open", [url]]
-      : process.platform === "win32"
-        ? ["cmd", ["/c", "start", '""', `"${url}"`]]
-        : ["xdg-open", [url]];
-  spawn(command, args, {
-    detached: true,
-    stdio: "ignore",
-    // Ignored outside Windows; there it keeps Node from escaping the quotes.
-    windowsVerbatimArguments: true,
-  })
-    .on("error", () => {})
-    .unref();
 }

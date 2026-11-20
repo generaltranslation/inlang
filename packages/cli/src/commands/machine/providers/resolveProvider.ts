@@ -7,11 +7,9 @@ import { createGoogleTranslateProvider } from "./google.js";
 import { createDemosjarcoTranslateProvider } from "./demosjarco.js";
 import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
 import {
-  GT_CLI,
   appendToEnvLocal,
   envLocalProblem,
   findGtProjectId,
-  gtInitArgs,
   readEnvFiles,
   readGtCredentials,
   shareGtProjectId,
@@ -153,56 +151,66 @@ export async function resolveMachineTranslateProvider(args: {
         );
         return createCommunityProvider(env);
       }
-      throw await missingGtKeyError(dir, args.settings, env);
-    }
-    // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
-    const choice = await log.prompt(
-      "Which translation provider should this project use?",
-      {
-        type: "select",
-        options: [
-          { value: "gt", label: "General Translation (recommended)" },
-          { value: "community", label: "Community translation service" },
-          { value: "other", label: "Other" },
-        ],
-        initial: "gt",
-        cancel: "undefined",
-      },
-    );
-    if (choice === "other") {
-      // Nothing is saved: the provider set up from the docs is used without asking.
-      throw new MachineTranslateError(
-        `To use another translation provider, see ${BYOK_URL}, then run this command again.`,
-      );
-    }
-    if (choice === "community") {
-      const provider = createCommunityProvider(env);
-      const addedIgnoreRule = await appendToEnvLocal(
-        dir,
-        `${PROVIDER_ENV}=demosjarco\n`,
-      );
-      log.info(
-        [
-          `Saved your choice to .env.local. To be asked again, remove ${PROVIDER_ENV} from it.`,
-          ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
-        ].join("\n"),
-      );
-      return provider;
-    }
-    if (choice === "gt") {
+      // A `gt` sign-in on this machine still makes a key, without asking.
       credentials = await (args.signIn ?? signInToGt)({
         dir,
         settings: args.settings,
         env,
+        interactive: false,
       }).catch((error: Error) => {
-        // Its errors are for the user, so they print without a stack trace.
         throw new MachineTranslateError(error.message);
       });
-    }
-    if (!credentials) {
-      throw new MachineTranslateError(
-        `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+      if (!credentials) throw await missingGtKeyError(dir);
+    } else {
+      // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
+      const choice = await log.prompt(
+        "Which translation provider should this project use?",
+        {
+          type: "select",
+          options: [
+            { value: "gt", label: "General Translation (recommended)" },
+            { value: "community", label: "Community translation service" },
+            { value: "other", label: "Other" },
+          ],
+          initial: "gt",
+          cancel: "undefined",
+        },
       );
+      if (choice === "other") {
+        // Nothing is saved: the provider set up from the docs is used without asking.
+        throw new MachineTranslateError(
+          `To use another translation provider, see ${BYOK_URL}, then run this command again.`,
+        );
+      }
+      if (choice === "community") {
+        const provider = createCommunityProvider(env);
+        const addedIgnoreRule = await appendToEnvLocal(
+          dir,
+          `${PROVIDER_ENV}=demosjarco\n`,
+        );
+        log.info(
+          [
+            `Saved your choice to .env.local. To be asked again, remove ${PROVIDER_ENV} from it.`,
+            ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
+          ].join("\n"),
+        );
+        return provider;
+      }
+      if (choice === "gt") {
+        credentials = await (args.signIn ?? signInToGt)({
+          dir,
+          settings: args.settings,
+          env,
+        }).catch((error: Error) => {
+          // Its errors are for the user, so they print without a stack trace.
+          throw new MachineTranslateError(error.message);
+        });
+      }
+      if (!credentials) {
+        throw new MachineTranslateError(
+          `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+        );
+      }
     }
   }
   if (await shareGtProjectId(dir)) {
@@ -216,24 +224,10 @@ export async function resolveMachineTranslateProvider(args: {
   });
 }
 
-/** CI and agents that chose GT can't sign in here, so they are told how to get a key. */
-async function missingGtKeyError(
-  dir: string,
-  settings: ProjectSettings,
-  env: Env,
-): Promise<MachineTranslateError> {
-  const init = ["npx", ...(await gtInitArgs({ dir, settings, env }))]
-    .map(shellQuote)
-    .join(" ");
-  const envLocal = shellQuote(nodePath.join(dir, ".env.local"));
-  // gt init adds gt to a package.json in its folder, so it runs in an empty
-  // one, and the .env.local it saves there is appended to the project's, which
-  // only the user can read if it is new. The subshell keeps the caller's
-  // working directory: an agent's shell keeps it between commands, and this
-  // command must then run again from where it was.
-  const command = `(umask 077 && d=$(mktemp -d) && cd "$d" && ${init} && { echo; cat .env.local; } >> ${envLocal})`;
-  // The command appends the key as sign-in does, so it is held back where
-  // sign-in would refuse to save it.
+/** CI and agents that chose GT, without a `gt` sign-in, are told how to get a key. */
+async function missingGtKeyError(dir: string): Promise<MachineTranslateError> {
+  // Sign-in saves the key to .env.local, so it is held back where sign-in
+  // would refuse to save it.
   const problem = await envLocalProblem(dir);
   return new MachineTranslateError(
     [
@@ -242,17 +236,11 @@ async function missingGtKeyError(
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
       problem
         ? `- Agents: a development key can't be saved: ${problem}, then run this command again.`
-        : `- Agents: check that git ignores .env.local, have the user sign in with \`npx --yes ${GT_CLI} login --no-browser\`, then run \`${command}\` to save a development key to .env.local, and run this command again.`,
+        : "- Agents: have the user run this command in their terminal, or sign in with `npx gt login --no-browser`, then run this command again. Signed in, it saves a development key to .env.local.",
       `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,
       `- Or bring your own key: ${BYOK_URL}`,
     ].join("\n"),
   );
-}
-
-function shellQuote(arg: string): string {
-  return /^[\w@%+=:,./-]+$/.test(arg)
-    ? arg
-    : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
 function createCommunityProvider(env: Env): MachineTranslateProvider {
