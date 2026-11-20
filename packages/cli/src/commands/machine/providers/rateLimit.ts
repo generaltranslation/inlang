@@ -10,13 +10,15 @@ export function scopeOf(status: number): TranslateFailure["scope"] {
 
 /**
  * The fields of a failed response's `TranslateFailure` that let the run retry
- * it: a 429 is rate-limited, with how long its `Retry-After` header asks to
- * wait. Other responses get none.
+ * it: a 429 is rate-limited, or another status a provider uses for its rate
+ * limit, with how long its `Retry-After` header asks to wait. Other responses
+ * get none.
  */
 export function rateLimitOf(
   response: Response,
+  rateLimited = response.status === 429,
 ): Pick<TranslateFailure, "rateLimited" | "retryAfterMs"> {
-  if (response.status !== 429) return {};
+  if (!rateLimited) return {};
   const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
   return {
     rateLimited: true,
