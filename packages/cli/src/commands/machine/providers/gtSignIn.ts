@@ -232,9 +232,15 @@ export async function signInToGt(args: {
     );
   });
 
-  // readGtCredentials pairs the key with the unprefixed project ID of the
-  // .env files, which may name this project already.
-  const savedProjectId = (await readEnvFiles(dir)).GT_PROJECT_ID === projectId;
+  // The key's project ID is kept next to it in .env.local, which names this
+  // project already after a failed key. One in .env alone doesn't count: the
+  // project ID is shared from .env.local, and .env may change.
+  const savedProjectId =
+    parseEnvFile(
+      await fs
+        .readFile(nodePath.join(dir, ".env.local"), "utf8")
+        .catch(() => ""),
+    ).GT_PROJECT_ID === projectId;
   const addedIgnoreRuleWithKey = await appendToEnvLocal({
     dir,
     text: `${savedProjectId ? "" : `GT_PROJECT_ID=${projectId}\n`}GT_DEV_API_KEY=${key.key}\n`,
