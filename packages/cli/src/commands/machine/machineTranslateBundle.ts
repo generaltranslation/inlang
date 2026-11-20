@@ -1077,6 +1077,7 @@ export function orderLikeSource(
       (source) => findMatchingVariant([variant], source.matches) !== undefined,
     );
   let previous = -1;
+  const unanchored: VariantRow[] = [];
   const keyed = message.variants.map((variant, position) => {
     let key = sourceIndex(variant);
     if (key === -1 && added.has(variant)) {
@@ -1087,8 +1088,15 @@ export function orderLikeSource(
         .slice(form + 1)
         .map((matches) => sourceIndex({ matches }))
         .find((index) => index !== -1);
-      // before that form, after the variants before it
-      key = next! - 0.5;
+      if (next === undefined) {
+        // no later form the source has, as when its catch-all is a literal
+        // `other`: placed below
+        unanchored.push(variant);
+        key = Infinity;
+      } else {
+        // before that form, after the variants before it
+        key = next - 0.5;
+      }
     }
     if (key === -1) key = previous;
     if (!added.has(variant)) previous = key;
@@ -1096,7 +1104,25 @@ export function orderLikeSource(
   });
   const ordered = [...keyed]
     .sort((a, b) => a.key - b.key || a.position - b.position)
-    .map(({ variant }) => variant);
+    .map(({ variant }) => variant)
+    .filter((variant) => !unanchored.includes(variant));
+  // before the first variant that matches its inputs too, such as the target's
+  // catch-all, or a runtime that takes the first match never gets to it
+  for (const variant of unanchored) {
+    const before = ordered.findIndex((other) =>
+      variant.matches.every((match) => {
+        const value = other.matches.find((each) => each.key === match.key);
+        return (
+          value === undefined ||
+          value.type === "catchall-match" ||
+          (match.type === "literal-match" &&
+            value.type === "literal-match" &&
+            value.value === match.value)
+        );
+      }),
+    );
+    ordered.splice(before === -1 ? ordered.length : before, 0, variant);
+  }
   // the first variant whose place changes, or whose id doesn't sort after
   // the variant before it (e.g. an added variant after a non-v7 id)
   let start = ordered.findIndex(
