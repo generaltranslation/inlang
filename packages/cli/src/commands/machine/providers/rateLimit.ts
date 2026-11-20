@@ -1,6 +1,14 @@
 import type { TranslateFailure } from "./types.js";
 
 /**
+ * How far a failed response reaches: a 400, 413 or 422 is about the text
+ * sent, so other requests are worth trying; anything else is provider-wide.
+ */
+export function scopeOf(status: number): TranslateFailure["scope"] {
+  return [400, 413, 422].includes(status) ? "text" : "provider";
+}
+
+/**
  * The fields of a failed response's `TranslateFailure` that let the run retry
  * it: a 429 is rate-limited, with how long its `Retry-After` header asks to
  * wait. Other responses get none.
