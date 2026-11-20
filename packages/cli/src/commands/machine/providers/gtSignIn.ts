@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import {
+  ApiError,
   createApiClient,
   createProject,
   createProjectApiKey,
@@ -20,8 +21,9 @@ import type { ProjectSettings } from "@inlang/sdk";
 import { parse as parseEnvFile } from "dotenv";
 import { log } from "../../../utilities/log.js";
 // The API the translate provider calls. Passed to the sign-in, which
-// otherwise follows the GT_API_URL variable, so a gt developer's setting can't
-// sign this CLI in to another API than the one it translates with.
+// otherwise follows the GT_API_URL variable, so a gt developer's API setting
+// can't make this CLI sign in for another API than the one it translates
+// with. GT_AUTH_URL still chooses the sign-in server, as in gt.
 import { GT_API_URL, GT_DASHBOARD_URL } from "./gt.js";
 
 const KEY_NAME = "Development key (inlang machine translate)";
@@ -84,17 +86,23 @@ function findCredentials(
 export async function readEnvFiles(
   dir: string,
 ): Promise<Record<string, string>> {
-  const variables: Record<string, string> = {};
-  for (const file of [".env", ".env.local"]) {
-    const content = await fs
-      .readFile(nodePath.join(dir, file), "utf8")
-      .catch((error) => {
-        if (error.code === "ENOENT") return "";
-        throw error;
-      });
-    Object.assign(variables, parseEnvFile(content));
-  }
-  return variables;
+  return {
+    ...(await readEnvFile(dir, ".env")),
+    ...(await readEnvFile(dir, ".env.local")),
+  };
+}
+
+async function readEnvFile(
+  dir: string,
+  file: string,
+): Promise<Record<string, string>> {
+  const content = await fs
+    .readFile(nodePath.join(dir, file), "utf8")
+    .catch((error) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    });
+  return parseEnvFile(content);
 }
 
 /** The sign-in and the user's API client; tests replace them. */
@@ -132,7 +140,28 @@ const defaultAccount: GtAccount = {
  * `.env.local` gets a `.gitignore` rule unless git ignores it already, and a
  * tracked or symlinked `.env.local` fails before the sign-in.
  */
-export async function signInToGt(args: {
+export function signInToGt(
+  args: Parameters<typeof signInAndSaveKey>[0],
+): Promise<GtCredentials | undefined> {
+  return signInAndSaveKey(args).catch((error: unknown) => {
+    // The auth package's errors say to run `gt login`, which inlang users may
+    // not have installed.
+    if (error instanceof Error && error.message.includes("`gt login`")) {
+      throw new Error(
+        error.message
+          .replaceAll("gt Error: ", "")
+          .replace(
+            /Run `gt login`(?: again| to sign in)?\./,
+            "Run this command again to sign in.",
+          ),
+        { cause: error },
+      );
+    }
+    throw error;
+  });
+}
+
+async function signInAndSaveKey(args: {
   dir: string;
   settings: ProjectSettings;
   env: Record<string, string | undefined>;
@@ -232,6 +261,7 @@ export async function signInToGt(args: {
     }).catch((error: Error) => {
       throw new Error(
         `Couldn't create the General Translation project: ${error.message}`,
+        { cause: error },
       );
     });
     projectId = data.id;
@@ -253,8 +283,19 @@ export async function signInToGt(args: {
     },
     throwOnError: true,
   }).catch((error: Error) => {
+    // A teammate's sign-in for the project gt.config.json shares fails here
+    // if they aren't in its organization, on every run until they act.
+    const noAccess =
+      !createdProject &&
+      error instanceof ApiError &&
+      (error.status === 403 || error.status === 404);
     throw new Error(
-      `Couldn't create a General Translation API key for project ${projectId}: ${error.message}`,
+      `Couldn't create a General Translation API key for project ${projectId}: ${
+        noAccess
+          ? `${error.message.replace(/\.?$/, ".")} If you aren't a member of its organization, ask to be invited, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.`
+          : error.message
+      }`,
+      { cause: error },
     );
   });
 
@@ -310,7 +351,11 @@ async function isSignedIn(account: GtAccount): Promise<boolean> {
 export async function envLocalProblem(
   dir: string,
 ): Promise<string | undefined> {
-  if (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) {
+  const tracked = await gitTracksEnvLocal(dir);
+  if (typeof tracked === "string") {
+    return `git can't tell whether it tracks .env.local (${tracked}). Fix that`;
+  }
+  if (tracked) {
     return ".env.local is tracked by git. Untrack it with `git rm --cached .env.local`";
   }
   const envLocal = await fs
@@ -327,6 +372,22 @@ export async function envLocalProblem(
     !(await git(dir, "check-ignore", "-q", "--", ".env.local"))
   ) {
     return ".gitignore is a symbolic link, which git doesn't read, so it can't ignore .env.local. Replace it with a regular file";
+  }
+  // Checked before a project is created: a project whose ID can't be saved
+  // would be created again on every run.
+  for (const file of [".env.local", ".gitignore"]) {
+    const path = nodePath.join(dir, file);
+    const stat = await fs.stat(path).catch(() => undefined);
+    if (stat && !stat.isFile()) {
+      return `${file} isn't a file. Replace it with a regular file`;
+    }
+    const writable = await fs.access(stat ? path : dir, fs.constants.W_OK).then(
+      () => true,
+      () => false,
+    );
+    if (!writable) {
+      return `${stat ? file : dir} can't be written. Make it writable`;
+    }
   }
   return undefined;
 }
@@ -349,7 +410,11 @@ export async function appendToEnvLocal(args: {
     (await fs.readFile(gitignore, "utf8").catch(() => ""))
       .split(/\r?\n/)
       .filter((line) => line.trim())
-      .at(-1) === ".env.local";
+      // git ignores trailing spaces, and a leading slash anchors the rule
+      // to this folder.
+      .at(-1)
+      ?.trimEnd()
+      .replace(/^\//, "") === ".env.local";
   if (!ignored) {
     await appendToFile({ file: gitignore, text: ".env.local\n" });
   }
@@ -433,13 +498,53 @@ export async function findGtProjectId(
           `Invalid General Translation config at ${configPath}: projectId must be a non-empty string.`,
         );
       }
-      projectId = config.projectId;
+      projectId = config.projectId.trim();
     }
   }
-  return (
-    findVariable(await readEnvFiles(dir), PROJECT_ID) ||
-    projectId ||
-    findVariable(env, PROJECT_ID)
+  // .env.local overrides .env, as for the app.
+  const fromEnvFiles =
+    findVariable(await readEnvFile(dir, ".env.local"), PROJECT_ID) ||
+    findVariable(await readEnvFile(dir, ".env"), PROJECT_ID);
+  const fromEnv = findVariable(env, PROJECT_ID);
+  // As gt does: a key for either project would be wrong for some of the
+  // project's users.
+  for (const [where, other] of [
+    [".env.local or .env", fromEnvFiles],
+    ["the environment", fromEnv],
+  ] as const) {
+    if (projectId && other && other !== projectId) {
+      throw new Error(
+        `Project ID mismatch: gt.config.json uses ${projectId}, but ${where} uses ${other}. Use the same project ID in both, then run again.`,
+      );
+    }
+  }
+  return fromEnvFiles || projectId || fromEnv;
+}
+
+/**
+ * Whether git tracks `dir/.env.local`: false without git or outside a
+ * repository, and git's error when it fails otherwise, as in a repository it
+ * refuses for "dubious ownership".
+ */
+function gitTracksEnvLocal(dir: string): Promise<boolean | string> {
+  return new Promise((resolve) =>
+    execFile(
+      "git",
+      ["ls-files", "--error-unmatch", "--", ".env.local"],
+      // English messages, for "not a git repository".
+      { cwd: dir, env: { ...process.env, LC_ALL: "C" } },
+      (error, _stdout, stderr) => {
+        if (!error) return resolve(true);
+        if (
+          error.code === 1 ||
+          error.code === "ENOENT" ||
+          /not a git repository/.test(stderr)
+        ) {
+          return resolve(false);
+        }
+        resolve(stderr.trim().split("\n")[0] || error.message);
+      },
+    ),
   );
 }
 
