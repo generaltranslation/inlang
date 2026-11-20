@@ -7,6 +7,7 @@ import {
   createProject,
   createProjectApiKey,
   listOrgs,
+  listProjects,
   paginate,
   ProjectApiKeyPermission,
   type UserTokenProvider,
@@ -27,6 +28,8 @@ import { log } from "../../../utilities/log.js";
 import { GT_API_URL, GT_DASHBOARD_URL } from "./gt.js";
 
 const KEY_NAME = "Development key (inlang machine translate)";
+// The choice to create a project; project IDs are never empty.
+const NEW_PROJECT = "";
 
 type GtCredentials = { apiKey: string; projectId?: string };
 
@@ -161,6 +164,8 @@ async function signInAndSaveKey(args: {
   dir: string;
   settings: ProjectSettings;
   env: Record<string, string | undefined>;
+  /** Sign in with a code instead of in this machine's browser. */
+  noBrowser?: boolean;
   prompt?: Prompt;
   account?: GtAccount;
 }): Promise<GtCredentials | undefined> {
@@ -168,6 +173,7 @@ async function signInAndSaveKey(args: {
     dir,
     settings,
     env,
+    noBrowser,
     // consola's prompt reads `this`.
     prompt = (message, options) => log.prompt(message, options),
     account = defaultAccount,
@@ -183,12 +189,13 @@ async function signInAndSaveKey(args: {
   if (!(await isSignedIn(account))) {
     await account.login({
       baseUrl: GT_API_URL,
+      noBrowser,
       onWarning: warn,
       onAuthorizationUrl: (url) =>
         log.log(
           `Opening your browser to sign in to General Translation. If it doesn't open, visit:\n${url}`,
         ),
-      // Over SSH, or where no browser can be opened.
+      // With noBrowser, and over SSH.
       onDeviceCode: ({ userCode, verificationUri, verificationUriComplete }) =>
         log.log(
           verificationUriComplete
@@ -205,6 +212,33 @@ async function signInAndSaveKey(args: {
 
   let createdProject = false;
   let addedIgnoreRule = false;
+  if (!projectId) {
+    // As gt init does: one of the user's projects, or a new one.
+    const projects = [];
+    for await (const project of paginate(listProjects, { client })) {
+      projects.push(project);
+    }
+    const choice =
+      projects.length === 0
+        ? NEW_PROJECT
+        : await prompt(
+            "Which General Translation project should this inlang project use?",
+            {
+              type: "select",
+              options: [
+                ...projects.map((project) => ({
+                  label: project.name,
+                  value: project.id,
+                  hint: project.orgName,
+                })),
+                { label: "Create a new project", value: NEW_PROJECT },
+              ],
+              cancel: "undefined",
+            },
+          );
+    if (typeof choice !== "string") return undefined;
+    if (choice !== NEW_PROJECT) projectId = choice;
+  }
   if (!projectId) {
     const orgs = [];
     for await (const org of paginate(listOrgs, { client })) orgs.push(org);
@@ -266,7 +300,11 @@ async function signInAndSaveKey(args: {
     throw new Error(
       `Couldn't create a General Translation API key for project ${projectId}: ${
         noAccess
-          ? `${error.message.replace(/\.?$/, ".")} If you aren't a member of its organization, ask to be invited, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.`
+          ? `${error.message.replace(/\.?$/, ".")} ${
+              error.status === 403
+                ? "If you are a member of its organization, ask a project admin for project:api_keys:write. If you aren't, ask to be invited"
+                : "If you aren't a member of its organization, ask to be invited"
+            }, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.`
           : error.message
       }`,
       { cause: error },
@@ -301,8 +339,11 @@ async function signInAndSaveKey(args: {
 /**
  * Whether gt's stored sign-in can still make requests. One whose refresh
  * token expired or was revoked stays stored, and only a new sign-in replaces
- * it. A refresh that fails offline counts as signed out too: the new sign-in
- * then fails with its own error.
+ * it. The auth package reports that and a temporary failure to refresh, such
+ * as being offline, with the same `oauth` code, so both count as signed out:
+ * the second then signs in again, or fails with the sign-in's own error. That
+ * is rare and harmless, and telling the two apart belongs in
+ * `@generaltranslation/auth`, which this CLI doesn't change.
  */
 async function isSignedIn(account: GtAccount): Promise<boolean> {
   if (!(await account.hasLogin())) return false;
