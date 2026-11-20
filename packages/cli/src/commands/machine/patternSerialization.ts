@@ -1,10 +1,4 @@
-import {
-  isPluralSelector,
-  Text,
-  VariableReference,
-  type Declaration,
-  type VariantRow,
-} from "@inlang/sdk";
+import { Text, VariableReference, type VariantRow } from "@inlang/sdk";
 
 type PlaceholderMetadata = Record<
   string,
@@ -17,65 +11,39 @@ type PlaceholderMetadata = Record<
 const escapeStart = `<span class="notranslate">`;
 const escapeEnd = "</span>";
 
-/**
- * The variant with the same matches. With `otherIsCatchAll`, an explicit
- * `other` on a plural selector is the catch-all (see the SDK's
- * `variantCovers`), so either one matches the other, unless a source variant
- * has that variant's own matches: a source with both `other` and `*` keeps
- * both.
- */
-export function findMatchingVariant<V extends Pick<VariantRow, "matches">>({
-  variants,
-  matches,
-  sourceVariants,
-  declarations,
-  otherIsCatchAll,
-}: {
-  variants: V[];
-  matches: VariantRow["matches"];
-  sourceVariants: VariantRow[];
-  declarations: Declaration[] | undefined;
-  /**
-   * Only when every number has a form: runtimes such as Paraglide select
-   * `other` only for its own category, so Russian `other` (fractions) can't
-   * stand in for a catch-all that 2 and 5 need while `few` and `many` lack.
-   */
-  otherIsCatchAll: boolean;
-}): V | undefined {
-  const valueOf = (list: VariantRow["matches"], key: string) => {
-    const match = list.find((value) => value.key === key);
-    return match && (match.type === "literal-match" ? match.value : "*");
-  };
-  const isOtherOrCatchAll = (value: string | undefined) =>
-    value === "other" || value === "*";
-  const same = (
-    a: VariantRow["matches"],
-    b: VariantRow["matches"],
-    otherIsCatchAll: boolean,
-  ) =>
-    a.length === b.length &&
-    b.every((match) => {
-      const [value, expected] = [valueOf(a, match.key), valueOf(b, match.key)];
-      return (
-        value === expected ||
-        (otherIsCatchAll &&
-          isOtherOrCatchAll(value) &&
-          isOtherOrCatchAll(expected) &&
-          isPluralSelector(match.key, declarations))
-      );
-    });
-  return (
-    variants.find((variant) => same(variant.matches, matches, false)) ??
-    (otherIsCatchAll
-      ? variants.find(
-          (variant) =>
-            same(variant.matches, matches, true) &&
-            !sourceVariants.some((source) =>
-              same(source.matches, variant.matches, false),
-            ),
-        )
-      : undefined)
-  );
+export function findMatchingVariant<V extends Pick<VariantRow, "matches">>(
+  variants: V[],
+  matches: VariantRow["matches"],
+): V | undefined {
+  if (matches.length === 0) {
+    return variants.find((variant) => variant.matches.length === 0);
+  }
+
+  return variants.find((variant) => {
+    if (variant.matches.length !== matches.length) {
+      return false;
+    }
+
+    return matches.every((sourceMatch) =>
+      variant.matches.some((targetMatch) => {
+        if (
+          targetMatch.key !== sourceMatch.key ||
+          targetMatch.type !== sourceMatch.type
+        ) {
+          return false;
+        }
+
+        if (
+          sourceMatch.type === "literal-match" &&
+          targetMatch.type === "literal-match"
+        ) {
+          return sourceMatch.value === targetMatch.value;
+        }
+
+        return true;
+      }),
+    );
+  });
 }
 
 export function serializePattern(
