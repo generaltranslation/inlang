@@ -609,67 +609,6 @@ test("a translation with other selectors that lacks a form is reported", async (
   expect(result.differentSelectors).toEqual(["de"]);
 });
 
-test("`other` and the catch-all are the same form", async () => {
-  // the source's catch-all is the target's `other`: no second one is added,
-  // and the translated `one` goes before `other`
-  const catchAll = await translate(
-    formsBundle(countPlural, ["countPlural"], {
-      en: items,
-      de: { "countPlural=other": "Dinge" },
-    }),
-    ["de"],
-  );
-  expect(Object.entries(formsOf(catchAll.result, "de")!)).toEqual([
-    ["countPlural=one", "[de] One item"],
-    ["countPlural=other", "Dinge"],
-  ]);
-
-  // an empty `other` is filled, not left next to a second catch-all
-  const emptyOther = await translate(
-    formsBundle(countPlural, ["countPlural"], {
-      en: items,
-      de: { "countPlural=one": "Ein Ding", "countPlural=other": "" },
-    }),
-    ["de"],
-  );
-  expect(Object.entries(formsOf(emptyOther.result, "de")!)).toEqual([
-    ["countPlural=one", "Ein Ding"],
-    ["countPlural=other", "[de] Many items"],
-  ]);
-});
-
-test("a source with both `other` and the catch-all keeps both", async () => {
-  // a select's `other` is a value like any other
-  const gender = [input("gender")];
-  const selectOther = await translate(
-    formsBundle(gender, ["gender"], {
-      en: { "gender=female": "She", "gender=*": "They" },
-      de: { "gender=female": "Sie", "gender=other": "Andere" },
-    }),
-    ["de"],
-  );
-  expect(selectOther.calls.map((call) => call.text)).toEqual(["They"]);
-
-  // on a plural, `other` stands in for the catch-all only when the source lacks one
-  const pluralForms = {
-    "countPlural=one": "One item",
-    "countPlural=other": "Items",
-    "countPlural=*": "Some items",
-  };
-  const partialPlural = await translate(
-    formsBundle(countPlural, ["countPlural"], {
-      en: pluralForms,
-      de: { "countPlural=one": "Ein Ding", "countPlural=other": "Dinge" },
-    }),
-    ["de"],
-  );
-  expect(Object.entries(formsOf(partialPlural.result, "de")!)).toEqual([
-    ["countPlural=one", "Ein Ding"],
-    ["countPlural=other", "Dinge"],
-    ["countPlural=*", "[de] Some items"],
-  ]);
-});
-
 test("a plural whose type a select chooses needs the categories of each type", async () => {
   // i18next keys with cardinal and ordinal forms, as @inlang/plugin-i18next imports them
   const bundle = formsBundle(
@@ -1295,9 +1234,11 @@ test("with context, a blank form is filled unless its source is blank too", asyn
     }),
     ["de"],
   );
+  // and the catch-all is added: a literal `other` isn't one to every runtime
   expect(Object.entries(formsOf(blank.result, "de")!)).toEqual([
     ["countPlural=one", ""],
     ["countPlural=other", "[de] Many items"],
+    ["countPlural=*", "[de] Many items"],
   ]);
 });
 
@@ -1940,9 +1881,9 @@ test("a translation that isn't text, such as {}, fails instead of being saved bl
   expect(result.translations.size).toBe(0);
 });
 
-test("an `other` that isn't a language's catch-all doesn't replace the source's", async () => {
-  // Russian `other` is only fractions: with `few` and `many` missing, 2 and 5
-  // need a catch-all, which runtimes such as Paraglide don't take from `other`
+test("a translation's `other` doesn't replace the source's catch-all", async () => {
+  // Paraglide selects a literal `other` only for its category, which in
+  // Russian is fractions: 2 and 5 need the catch-all
   const { calls, result } = await translate(
     formsBundle(countPlural, ["countPlural"], {
       en: items,
@@ -1977,27 +1918,6 @@ test("an empty select value only the translation has is reported", async () => {
   expect(result.differentSelectors).toEqual(["de"]);
 });
 
-test("an `other` doesn't replace the source's catch-all while a form the source lacks is missing too", async () => {
-  // Russian `one` is missing, and so is English `one`: 1 still needs the
-  // catch-all, which Russian `other` (fractions) isn't
-  const { calls, result } = await translate(
-    formsBundle(countPlural, ["countPlural"], {
-      en: { "countPlural=*": "Items" },
-      ru: {
-        "countPlural=few": "Товара",
-        "countPlural=many": "Товаров",
-        "countPlural=other": "Товара",
-      },
-    }),
-    ["ru"],
-  );
-
-  expect(calls.map((call) => call.text)).toEqual(["Items"]);
-  expect(formsOf(result, "ru")).toMatchObject({
-    "countPlural=*": "[ru] Items",
-  });
-});
-
 test("an empty form next to a filled catch-all is reported", async () => {
   // German `other` is selected for 2 before the catch-all
   const bundle = formsBundle(countPlural, ["countPlural"], {
@@ -2015,4 +1935,45 @@ test("an empty form next to a filled catch-all is reported", async () => {
 
   expect(calls).toEqual([]);
   expect(result.differentSelectors).toEqual(["de"]);
+});
+
+test("with context, a translation's `other` doesn't replace the source's catch-all", async () => {
+  // French `many` (millions) isn't a form the SDK requires, so only the
+  // catch-all covers it: Paraglide selects a literal `other` only for its
+  // category
+  const { calls, result } = await expand(
+    formsBundle(countPlural, ["countPlural"], {
+      en: items,
+      fr: { "countPlural=one": "Un article", "countPlural=other": "Articles" },
+    }),
+    ["fr"],
+  );
+
+  expect(calls.map((call) => call.text)).toEqual(["Many items"]);
+  expect(formsOf(result, "fr")).toEqual({
+    "countPlural=one": "Un article",
+    "countPlural=other": "Articles",
+    "countPlural=*": "[fr] Many items",
+  });
+});
+
+test("with context, a filled `other` is kept when the source writes its catch-all as `other` too", async () => {
+  // i18next stores `_other` as a literal `other` in both languages
+  const { calls, result } = await expand(
+    formsBundle(countPlural, ["countPlural"], {
+      en: { "countPlural=one": "One item", "countPlural=other": "Items" },
+      ru: {
+        "countPlural=one": "Один товар",
+        "countPlural=few": "Товара",
+        "countPlural=many": "Товаров",
+        "countPlural=other": "Товара",
+      },
+    }),
+    ["ru"],
+  );
+
+  expect(calls).toEqual([]);
+  expect(formsOf(result, "ru")).toMatchObject({
+    "countPlural=other": "Товара",
+  });
 });
