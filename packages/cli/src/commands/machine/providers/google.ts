@@ -22,7 +22,10 @@ export function createGoogleTranslateProvider(
         return {
           ok: false,
           scope: scopeOf(response.status),
-          ...rateLimitOf(response),
+          ...rateLimitOf(
+            response,
+            response.status === 429 || (await isRateLimit403(response)),
+          ),
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
       }
@@ -34,4 +37,28 @@ export function createGoogleTranslateProvider(
       };
     },
   };
+}
+
+/**
+ * Translation API v2 answers a per-minute quota with 403 and the reason
+ * `rateLimitExceeded` or `userRateLimitExceeded`, not 429. A daily quota
+ * (`dailyLimitExceeded`) isn't retried: waiting a minute doesn't lift it.
+ */
+async function isRateLimit403(response: Response): Promise<boolean> {
+  if (response.status !== 403) return false;
+  let body: any;
+  try {
+    body = await response.json();
+  } catch {
+    return false;
+  }
+  const errors: unknown = body?.error?.errors;
+  return (
+    Array.isArray(errors) &&
+    errors.some(
+      (error) =>
+        error?.reason === "rateLimitExceeded" ||
+        error?.reason === "userRateLimitExceeded",
+    )
+  );
 }
