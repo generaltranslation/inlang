@@ -211,6 +211,49 @@ describe("createGtTranslateProvider", () => {
     });
   });
 
+  test.each([
+    {
+      code: "usage_limit_reached",
+      message:
+        "Your organization has reached its free usage limit for this month. Configure credit-based billing to continue.",
+      error:
+        "General Translation rejected the request: Your organization has reached its free usage limit for this month. Configure credit-based billing to continue. Billing settings: https://dash.generaltranslation.com",
+    },
+    {
+      code: "spend_limit_reached",
+      message:
+        "Your account has reached its billing period spend limit. Increase or remove your spend limit in billing settings to continue using General Translation.",
+      error:
+        "General Translation rejected the request: Your account has reached its billing period spend limit. Increase or remove your spend limit in billing settings to continue using General Translation. Billing settings: https://dash.generaltranslation.com",
+    },
+    {
+      code: "payment_required",
+      // the estimate is this batch's only, not the run's
+      message:
+        "Your account's credit balance is insufficient to complete this request. Please add more usage credits to your account or configure auto-reload to reload your balance.\n  Available: $0.01\n  Estimated: $0.02",
+      error:
+        "General Translation rejected the request: Your account's credit balance is insufficient to complete this request. Please add more usage credits to your account or configure auto-reload to reload your balance. Billing settings: https://dash.generaltranslation.com",
+    },
+  ])(
+    "reports a 402 $code with the API's reason",
+    async ({ code, message, error }) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        jsonResponse({ error: message, code }, 402),
+      );
+
+      const result = await createGtTranslateProvider({
+        apiKey: "gtx-dev-key-10",
+        userAgent: "inlang-cli/0.0.10",
+      }).translateBatch({
+        sourceLocale: "en",
+        targetLocale: "de",
+        texts: { greeting: { text: "Hello" } },
+      });
+
+      expect(result).toEqual({ ok: false, error });
+    },
+  );
+
   test("reports a key without the Runtime translation permission", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(
@@ -278,6 +321,35 @@ describe("createGtTranslateProvider", () => {
       expect(result).toEqual({ ok: false, error });
     },
   );
+
+  test("fails only the texts of a locale the GT project doesn't allow", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        {
+          error:
+            "Target locale(s) not authorized: ja.\nPlease contact support@generaltranslation.com to add them to your project.",
+          code: "locale_not_allowed",
+        },
+        403,
+      ),
+    );
+
+    const result = await createGtTranslateProvider({
+      apiKey: "gtx-api-key-locale",
+      userAgent: "inlang-cli/0.0.4",
+    }).translateBatch({
+      sourceLocale: "en",
+      targetLocale: "ja",
+      texts: { greeting: { text: "Hello" } },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      scope: "text",
+      error:
+        "General Translation rejected the request: Target locale(s) not authorized: ja. Please contact support@generaltranslation.com to add them to your project.",
+    });
+  });
 
   test.each([
     {
@@ -427,29 +499,61 @@ describe("createGtTranslateProvider", () => {
     });
   });
 
-  test("reports other errors with the locale pair", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ error: "Unsupported locale" }), {
-        status: 400,
-        statusText: "Bad Request",
-      }),
-    );
-
-    const result = await createGtTranslateProvider({
-      apiKey: "gtx-dev-key-12",
-      userAgent: "inlang-cli/0.0.12",
-    }).translateBatch({
-      sourceLocale: "en",
-      targetLocale: "xx",
-      texts: { greeting: { text: "Hello" } },
-    });
-
-    expect(result).toEqual({
-      ok: false,
+  test.each([
+    {
+      name: "a JSON reason",
+      response: () =>
+        jsonResponse(
+          { error: "Unsupported locale: xx", code: "invalid_request" },
+          400,
+        ),
       scope: "text",
-      error: "400 Bad Request: translating from en to xx",
-    });
-  });
+      error:
+        "General Translation answered 400 translating from en to xx: Unsupported locale: xx.",
+    },
+    {
+      name: "a plain-text reason",
+      response: () =>
+        new Response(
+          "Internal server error. If this error persists, contact us!",
+          { status: 500, statusText: "Internal Server Error" },
+        ),
+      scope: "provider",
+      error:
+        "General Translation answered 500 translating from en to xx: Internal server error. If this error persists, contact us!",
+    },
+    {
+      name: "no reason and an empty status text, as over HTTP/2",
+      response: () =>
+        new Response("<html><body>Bad Gateway</body></html>", { status: 502 }),
+      scope: "provider",
+      error: "General Translation answered 502 translating from en to xx.",
+    },
+    {
+      name: "no reason",
+      response: () =>
+        new Response(null, { status: 413, statusText: "Payload Too Large" }),
+      scope: "text",
+      error:
+        "General Translation answered 413 Payload Too Large translating from en to xx.",
+    },
+  ])(
+    "reports other errors with the locale pair and $name",
+    async ({ response, scope, error }) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(response());
+
+      const result = await createGtTranslateProvider({
+        apiKey: "gtx-dev-key-12",
+        userAgent: "inlang-cli/0.0.12",
+      }).translateBatch({
+        sourceLocale: "en",
+        targetLocale: "xx",
+        texts: { greeting: { text: "Hello" } },
+      });
+
+      expect(result).toEqual({ ok: false, scope, error });
+    },
+  );
 });
 
 test("a 429 from General Translation is rate-limited, with its Retry-After", async () => {
