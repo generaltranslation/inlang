@@ -219,6 +219,8 @@ export function planBundleTranslation(
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const newLocales = new Set<string>();
+  /** locales whose target has a form for every number (see `findMatchingVariant`) */
+  const complete = new Set<string>();
   const report: PluralReport = {
     incompletePlurals: [],
     differentSelectors: [],
@@ -281,6 +283,7 @@ export function planBundleTranslation(
         .join();
     const sameSelectors =
       names(target.selectors) === names(sourceMessage.selectors);
+    if (categories.size === 0) complete.add(targetLocale);
     if (categories.size > 0) {
       report.incompletePlurals.push({
         locale: targetLocale,
@@ -294,7 +297,13 @@ export function planBundleTranslation(
       const filled = target.variants.filter(
         (variant) => !isEmptyPattern(variant.pattern),
       );
-      if (missingVariants(target, declarations, { variants: filled }).length) {
+      // values of empty variants too, such as a select's `female`
+      if (
+        missingVariants(target, declarations, {
+          variants: filled,
+          referenceVariants: target.variants,
+        }).length
+      ) {
         report.differentSelectors.push(targetLocale);
       }
       continue;
@@ -307,6 +316,7 @@ export function planBundleTranslation(
         matches: sourceVariant.matches,
         sourceVariants: sourceMessage.variants,
         declarations,
+        otherIsCatchAll: complete.has(targetLocale),
       });
 
       // A blank variant is missing, as `inlang check` reports it, unless its
@@ -391,6 +401,7 @@ export function planBundleTranslation(
             matches: sourceVariant.matches,
             sourceVariants: sourceMessage.variants,
             declarations: copy.declarations,
+            otherIsCatchAll: complete.has(targetLocale),
           });
 
           // only an empty variant is missing a translation
@@ -796,6 +807,8 @@ export function orderLikeSource(
           matches: source.matches,
           sourceVariants,
           declarations,
+          // only for the order: an `other` goes where the catch-all would
+          otherIsCatchAll: true,
         }) !== undefined,
     );
   let previous = -1;

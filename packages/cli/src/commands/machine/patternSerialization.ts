@@ -18,21 +18,29 @@ const escapeStart = `<span class="notranslate">`;
 const escapeEnd = "</span>";
 
 /**
- * The variant with the same matches. On a plural selector, an explicit `other`
- * is the catch-all (see the SDK's `variantCovers`), so either one matches the
- * other, unless a source variant has that variant's own matches: a source with
- * both `other` and `*` keeps both.
+ * The variant with the same matches. With `otherIsCatchAll`, an explicit
+ * `other` on a plural selector is the catch-all (see the SDK's
+ * `variantCovers`), so either one matches the other, unless a source variant
+ * has that variant's own matches: a source with both `other` and `*` keeps
+ * both.
  */
 export function findMatchingVariant({
   variants,
   matches,
   sourceVariants,
   declarations,
+  otherIsCatchAll,
 }: {
   variants: VariantRow[];
   matches: VariantRow["matches"];
   sourceVariants: VariantRow[];
   declarations: Declaration[] | undefined;
+  /**
+   * Only when every number has a form: runtimes such as Paraglide select
+   * `other` only for its own category, so Russian `other` (fractions) can't
+   * stand in for a catch-all that 2 and 5 need while `few` and `many` lack.
+   */
+  otherIsCatchAll: boolean;
 }): VariantRow | undefined {
   const valueOf = (list: VariantRow["matches"], key: string) => {
     const match = list.find((value) => value.key === key);
@@ -58,13 +66,15 @@ export function findMatchingVariant({
     });
   return (
     variants.find((variant) => same(variant.matches, matches, false)) ??
-    variants.find(
-      (variant) =>
-        same(variant.matches, matches, true) &&
-        !sourceVariants.some((source) =>
-          same(source.matches, variant.matches, false),
-        ),
-    )
+    (otherIsCatchAll
+      ? variants.find(
+          (variant) =>
+            same(variant.matches, matches, true) &&
+            !sourceVariants.some((source) =>
+              same(source.matches, variant.matches, false),
+            ),
+        )
+      : undefined)
   );
 }
 
