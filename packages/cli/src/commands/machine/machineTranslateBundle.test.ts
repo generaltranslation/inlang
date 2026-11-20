@@ -816,3 +816,43 @@ test("an empty select value only the translation has is reported", async () => {
   expect(calls).toEqual([]);
   expect(result.differentSelectors).toEqual(["de"]);
 });
+
+test("an `other` doesn't replace the source's catch-all while a form the source lacks is missing too", async () => {
+  // Russian `one` is missing, and so is English `one`: 1 still needs the
+  // catch-all, which Russian `other` (fractions) isn't
+  const { calls, result } = await translate(
+    formsBundle(countPlural, ["countPlural"], {
+      en: { "countPlural=*": "Items" },
+      ru: {
+        "countPlural=few": "Товара",
+        "countPlural=many": "Товаров",
+        "countPlural=other": "Товара",
+      },
+    }),
+    ["ru"],
+  );
+
+  expect(calls).toEqual(["Items"]);
+  expect(formsOf(result, "ru")).toMatchObject({
+    "countPlural=*": "[ru] Items",
+  });
+});
+
+test("an empty form next to a filled catch-all is reported", async () => {
+  // German `other` is selected for 2 before the catch-all
+  const bundle = formsBundle(countPlural, ["countPlural"], {
+    en: { "countPlural=*": "Items" },
+    de: {
+      "countPlural=one": "Ein Ding",
+      "countPlural=other": "",
+      "countPlural=*": "Dinge",
+    },
+  });
+  const en = bundle.messages.find((message) => message.locale === "en")!;
+  en.selectors = [];
+  en.variants[0]!.matches = [];
+  const { calls, result } = await translate(bundle, ["de"]);
+
+  expect(calls).toEqual([]);
+  expect(result.differentSelectors).toEqual(["de"]);
+});
