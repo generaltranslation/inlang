@@ -3,6 +3,7 @@ import type {
   TranslateTextArgs,
   TranslateTextResult,
 } from "./types.js";
+import { scopeOf } from "./rateLimit.js";
 
 /**
  * A free, third-party hosted translation service used as the default fallback
@@ -42,6 +43,14 @@ export const RETRY_BASE_DELAY_MS = 5_000;
 export function retryDelayMs(retry: number) {
   return RETRY_BASE_DELAY_MS * 2 ** retry;
 }
+
+/** A request not sent because the run stopped. */
+const stopped = {
+  ok: false,
+  error: "Not sent: the run stopped.",
+  scope: "text",
+  stopped: true,
+} as const;
 
 /**
  * Shown when the community-operated service at translate.demosjarco.dev can't
@@ -96,6 +105,7 @@ export function createDemosjarcoTranslateProvider(
         done: true,
         result: {
           ok: false,
+          scope: scopeOf(response.status),
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         },
       };
@@ -121,7 +131,6 @@ export function createDemosjarcoTranslateProvider(
         result: {
           ok: false,
           error: SERVICE_UNAVAILABLE_ERROR,
-          unavailable: true,
         },
       };
     }
@@ -159,7 +168,12 @@ export function createDemosjarcoTranslateProvider(
       for (let retry = 0; retry <= MAX_RETRIES; retry++) {
         // The concurrency slot is only held while a request is in flight, not
         // while backing off, so waiting retries don't block fresh requests.
-        const outcome = await limiter(() => attempt(url, args));
+        // Once the run stops, queued requests and retries aren't sent.
+        const outcome = await limiter(async () =>
+          args.signal?.aborted
+            ? { done: true as const, result: stopped }
+            : attempt(url, args),
+        );
         if (outcome.done) {
           return outcome.result;
         }
@@ -171,7 +185,6 @@ export function createDemosjarcoTranslateProvider(
       return {
         ok: false,
         error: SERVICE_UNAVAILABLE_ERROR,
-        unavailable: true,
       };
     },
   };

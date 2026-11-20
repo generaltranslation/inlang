@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import type { BundleNested } from "@inlang/sdk";
-import { machineTranslateBundle } from "./machineTranslateBundle.js";
+import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
+import {
+  planBundleTranslation,
+  translateMissing,
+} from "./machineTranslateBundle.js";
 
 test("translated variants get ids in the order of the source variants", async () => {
   const values = Array.from({ length: 20 }, (_, index) => `v${index}`);
@@ -181,4 +185,121 @@ test("a variant the source doesn't have stays after the one it followed", async 
   // `few` keeps its id, the ones after it get new ones
   expect(de.variants[0]!.id).toBe(v7Ids["de-few"]);
   expect(result.replacedVariantIds).toEqual([v7Ids["de-*"]]);
+});
+
+test("an empty variant is filled and the variants keep the source order", async () => {
+  const bundle = pluralBundle([["*", ""]]);
+  const result = await machineTranslateBundle({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+    provider: {
+      translateBatch: async () => ({
+        ok: true,
+        translatedTexts: { "0": "Ein Ding", "1": "Viele Dinge" },
+      }),
+    },
+  });
+
+  const de = result.data!.messages.find((m) => m.locale === "de")!;
+  expect(valuesOf(de)).toEqual(["one", "*"]);
+  // the empty catch-all is filled in
+  expect(de.variants.map((variant) => variant.pattern)).toEqual([
+    [{ type: "text", value: "Ein Ding" }],
+    [{ type: "text", value: "Viele Dinge" }],
+  ]);
+});
+
+test("a target locale given twice is translated once", async () => {
+  const texts: string[] = [];
+  const result = await machineTranslateBundle({
+    bundle: pluralBundle([]),
+    sourceLocale: "en",
+    targetLocales: ["de", "de"],
+    provider: {
+      translateText: async ({ text }) => {
+        texts.push(text);
+        return { ok: true, translatedText: `${text} (de)` };
+      },
+    },
+  });
+
+  expect(texts).toEqual(["One item", "Many items"]);
+  const de = result.data!.messages.find((m) => m.locale === "de")!;
+  expect(valuesOf(de)).toEqual(["one", "*"]);
+});
+
+test("a blank catch-all is copied, so a new message matches every number", async () => {
+  const bundle = pluralBundle([]);
+  bundle.messages[0]!.variants[1]!.pattern = [];
+  bundle.messages.pop();
+  const texts: string[] = [];
+  const result = await machineTranslateBundle({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+    provider: {
+      translateText: async ({ text }) => {
+        texts.push(text);
+        return { ok: true, translatedText: "Ein Ding" };
+      },
+    },
+  });
+
+  expect(texts).toEqual(["One item"]);
+  const translated = result.data!.messages.find((m) => m.locale === "de")!;
+  expect(valuesOf(translated)).toEqual(["one", "*"]);
+  expect(translated.variants[1]!.pattern).toEqual([]);
+});
+
+test("copied blank sources count toward progress", async () => {
+  const bundle = pluralBundle([]);
+  bundle.messages[0]!.variants[0]!.pattern = [];
+  bundle.messages.pop();
+  const plan = planBundleTranslation({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+  });
+  if ("error" in plan) throw new Error(plan.error);
+  let progress = 0;
+  await translateMissing({
+    provider: {
+      translateText: async () => ({ ok: true, translatedText: "Viele Dinge" }),
+    },
+    sourceLocale: "en",
+    missing: plan.missing,
+    onProgress: (count) => (progress += count),
+  });
+
+  expect(progress).toBe(plan.missing.length);
+});
+
+test("a translation that isn't text, such as {}, fails instead of being saved blank", async () => {
+  const bundle = pluralBundle([]);
+  bundle.messages.pop();
+  const plan = planBundleTranslation({
+    bundle,
+    sourceLocale: "en",
+    targetLocales: ["de"],
+  });
+  if ("error" in plan) throw new Error(plan.error);
+  const result = await translateMissing({
+    provider: {
+      translateBatch: async ({ texts }) => ({
+        ok: true,
+        translatedTexts: Object.fromEntries(
+          Object.keys(texts).map((key) => [key, {} as never]),
+        ),
+      }),
+    },
+    sourceLocale: "en",
+    missing: plan.missing,
+  });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: 'The translation of "One item" isn\'t text.',
+  });
+  expect(result.translations.size).toBe(0);
 });

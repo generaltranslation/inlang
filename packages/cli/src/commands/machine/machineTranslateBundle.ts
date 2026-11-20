@@ -2,7 +2,7 @@
 // order of the source message
 import { v7 as randomUUID } from "uuid";
 import {
-  Text,
+  isEmptyPattern,
   type BundleNested,
   type NewBundleNested,
   type VariantRow,
@@ -12,27 +12,133 @@ import {
   findMatchingVariant,
   serializePattern,
 } from "./patternSerialization.js";
-import type { MachineTranslateProvider } from "./providers/types.js";
+import type {
+  AnyMachineTranslateProvider,
+  BatchMachineTranslateProvider,
+  TranslateBatchResult,
+  TranslateFailure,
+} from "./providers/types.js";
+
+/**
+ * Texts per batch request. Keeps request bodies small while a large project
+ * needs only a few requests per locale.
+ */
+const MAX_TEXTS_PER_REQUEST = 50;
+
+/**
+ * Batch requests in flight at once. Sending every request at once runs into
+ * the providers' rate limits on large projects.
+ */
+const MAX_CONCURRENT_REQUESTS = 4;
+
+/**
+ * Requests in flight at once for a provider that translates one text per
+ * request (Google, DeepL, OpenAI; the community service sends at most 6 of
+ * them at once). With only 4, a large project would take minutes;
+ * rate-limited requests are sent again.
+ */
+const MAX_CONCURRENT_TEXT_REQUESTS = 16;
+
+/**
+ * A rate-limited request (429) is sent again at most this many times, after
+ * its `Retry-After` or else 2s, 4s, 8s. A 429 means the request wasn't
+ * processed, so sending it again doesn't pay twice. Other failures aren't
+ * retried: a 5xx or network error may have been processed.
+ */
+const MAX_RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BASE_DELAY_MS = 2_000;
+
+/**
+ * The most one request waits for rate limits in total. A provider that asks
+ * for longer fails the run at once, saving what came back.
+ */
+const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+
+/** Waits `ms`, or less if `signal` aborts. */
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+  });
+
+/**
+ * Sends a request again while it is rate-limited, within
+ * `MAX_RATE_LIMIT_RETRIES` and `MAX_RATE_LIMIT_WAIT_MS`. Once `stop` aborts,
+ * because another request failed for good, it stops waiting and doesn't
+ * send the request again.
+ */
+async function retryRateLimited(
+  send: () => Promise<TranslateBatchResult>,
+  wait: (ms: number, signal: AbortSignal) => Promise<void>,
+  stop: AbortSignal,
+): Promise<TranslateBatchResult> {
+  let waited = 0;
+  for (let retry = 0; ; retry++) {
+    const result = await send();
+    if (result.ok || !result.rateLimited) return result;
+    const delay = result.retryAfterMs ?? RATE_LIMIT_BASE_DELAY_MS * 2 ** retry;
+    if (delay + waited > MAX_RATE_LIMIT_WAIT_MS) {
+      return {
+        ...result,
+        error: `${result.error} (rate limited: the provider asked to wait ${Math.ceil(delay / 1000)} s${waited > 0 ? ` after ${Math.ceil(waited / 1000)} s of waiting` : ""}. Run again later.)`,
+      };
+    }
+    if (retry >= MAX_RATE_LIMIT_RETRIES) {
+      return {
+        ...result,
+        error: `${result.error} (still rate limited after ${retry} retries. Run again later.)`,
+      };
+    }
+    if (stop.aborted) return result;
+    waited += delay;
+    await wait(delay, stop);
+    if (stop.aborted) return result;
+  }
+}
 
 type MachineTranslateArgs = {
   bundle: BundleNested;
   sourceLocale: string;
   targetLocales: string[];
-  provider: MachineTranslateProvider;
 };
 
-export type MachineTranslateResult = {
-  data?: NewBundleNested;
-  error?: string;
-  /** Set when `error` means the translation provider itself is unavailable. */
-  unavailable?: boolean;
+/** A translation that a bundle is missing. */
+type MissingTranslation = {
+  sourceVariant: VariantRow;
+  targetLocale: string;
+  /** The source pattern, serialized for the provider. */
+  text: string;
+  /** The bundle description, if any. */
+  context?: string;
+};
+
+/**
+ * The translations a bundle is missing, and how to add them to it once they
+ * are translated.
+ */
+export type BundleTranslationPlan = {
+  missing: MissingTranslation[];
   /**
-   * Number of translations skipped because the provider was unavailable. The
-   * rest of the bundle is still translated and returned in `data`.
+   * Target locales the bundle has no message in. Added with only some of its
+   * translations, such a message could match nothing: half a plural.
    */
-  unavailableCount?: number;
-  /** Number of translations added to `data`. `0` means `data` equals the input. */
-  translated?: number;
+  newLocales: Set<string>;
+  /**
+   * Adds the translation of each of `missing` that `translations` has to a
+   * copy of the bundle.
+   */
+  apply: (
+    translations: Map<MissingTranslation, VariantRow["pattern"]>,
+  ) => TranslatedBundle;
+};
+
+type TranslatedBundle = {
+  data: NewBundleNested;
   /**
    * Ids of variants of `bundle` that `data` has with a new id, to take the
    * order of the source message (see `orderLikeSource`). Delete them after
@@ -42,55 +148,82 @@ export type MachineTranslateResult = {
 };
 
 /**
- * Machine translates the given bundle using the configured translation provider.
- *
- * The translation updates or creates variants only for missing translations in
- * the requested target locales. Existing non-empty variants are preserved.
- *
- * @example
- *   const provider = resolveMachineTranslateProvider();
- *   const result = await machineTranslateBundle({
- *     bundle,
- *     sourceLocale: "en",
- *     targetLocales: ["de"],
- *     provider,
- *   });
- *   if (result.data) {
- *     await upsertBundleNested(project, result.data);
- *   }
+ * Finds the translations the bundle is missing in the target locales: no
+ * variant for a source variant, or an empty one.
  */
-export async function machineTranslateBundle(
+export function planBundleTranslation(
   args: MachineTranslateArgs,
-): Promise<MachineTranslateResult> {
-  try {
-    const copy = structuredClone(args.bundle);
-    let unavailableError: string | undefined;
-    let unavailableCount = 0;
-    let translated = 0;
-    /** variants added to messages that existed, by message */
-    const addedVariants = new Map<
-      BundleNested["messages"][number],
-      Set<VariantRow>
-    >();
+): BundleTranslationPlan | { error: string } {
+  const sourceMessage = args.bundle.messages.find(
+    (message) => message.locale === args.sourceLocale,
+  );
 
-    const sourceMessage = copy.messages.find(
-      (message) => message.locale === args.sourceLocale,
-    );
+  if (!sourceMessage) {
+    return {
+      error: `Source locale not found in the bundle: ${args.bundle.id}`,
+    };
+  }
 
-    if (!sourceMessage) {
-      return {
-        error: `Source locale not found in the bundle: ${args.bundle.id}`,
-      };
+  const missing: MissingTranslation[] = [];
+  // a locale given twice is translated once
+  const targetLocales = new Set(args.targetLocales);
+  for (const sourceVariant of sourceMessage.variants) {
+    const text = serializePattern(sourceVariant.pattern, {});
+
+    for (const targetLocale of targetLocales) {
+      if (targetLocale === args.sourceLocale) {
+        continue;
+      }
+
+      const targetMessage = args.bundle.messages.find(
+        (message) => message.locale === targetLocale,
+      );
+      const existingVariant =
+        targetMessage &&
+        findMatchingVariant(targetMessage.variants, sourceVariant.matches);
+
+      // A blank variant is missing, as `inlang check` reports it, unless its
+      // source is blank too: then a translation can't fill it.
+      if (
+        existingVariant &&
+        (!isEmptyPattern(existingVariant.pattern) ||
+          isEmptyPattern(sourceVariant.pattern))
+      ) {
+        continue;
+      }
+
+      missing.push({
+        sourceVariant,
+        targetLocale,
+        text,
+        context: args.bundle.description || undefined,
+      });
     }
+  }
 
-    for (const sourceVariant of sourceMessage.variants) {
-      const sourcePattern = serializePattern(sourceVariant.pattern, {});
+  return {
+    missing,
+    newLocales: new Set(
+      [...targetLocales].filter(
+        (locale) =>
+          !args.bundle.messages.some((message) => message.locale === locale),
+      ),
+    ),
+    apply: (translations) => {
+      const copy = structuredClone(args.bundle);
+      const sourceMessage = copy.messages.find(
+        (message) => message.locale === args.sourceLocale,
+      )!;
+      /** variants added to messages that existed, by message */
+      const addedVariants = new Map<
+        BundleNested["messages"][number],
+        Set<VariantRow>
+      >();
 
-      for (const targetLocale of args.targetLocales) {
-        if (targetLocale === args.sourceLocale) {
-          continue;
-        }
-
+      for (const translation of missing) {
+        const pattern = translations.get(translation);
+        if (!pattern) continue;
+        const { sourceVariant, targetLocale } = translation;
         const targetMessage = copy.messages.find(
           (message) => message.locale === targetLocale,
         );
@@ -101,57 +234,8 @@ export async function machineTranslateBundle(
             sourceVariant.matches,
           );
 
-          if (
-            existingVariant &&
-            !(
-              existingVariant.pattern.length === 0 ||
-              (existingVariant.pattern.length === 1 &&
-                existingVariant.pattern[0]?.type === "text" &&
-                (existingVariant.pattern[0] as Text).value === "")
-            )
-          ) {
-            continue;
-          }
-        }
-
-        const translation = await args.provider.translateText({
-          text: sourcePattern,
-          sourceLocale: args.sourceLocale,
-          targetLocale,
-          ...(copy.description ? { context: copy.description } : {}),
-        });
-
-        if (!translation.ok && translation.unavailable) {
-          // Skip only this translation so one throttled or failed request
-          // doesn't discard every other translation in the run.
-          unavailableError = translation.error;
-          unavailableCount++;
-          continue;
-        }
-
-        if (!translation.ok) {
-          return {
-            error: translation.error,
-            unavailable: translation.unavailable,
-          };
-        }
-
-        const pattern = deserializePattern(translation.translatedText);
-        translated++;
-
-        if (targetMessage) {
-          const existingVariant = findMatchingVariant(
-            targetMessage.variants,
-            sourceVariant.matches,
-          );
-
-          if (
-            existingVariant &&
-            (existingVariant.pattern.length === 0 ||
-              (existingVariant.pattern.length === 1 &&
-                existingVariant.pattern[0]?.type === "text" &&
-                (existingVariant.pattern[0] as Text).value === ""))
-          ) {
+          // only an empty variant is missing a translation
+          if (existingVariant) {
             existingVariant.pattern = pattern;
           } else {
             const variant = {
@@ -182,32 +266,175 @@ export async function machineTranslateBundle(
           });
         }
       }
-    }
 
-    const replacedVariantIds: string[] = [];
-    for (const [message, added] of addedVariants) {
-      replacedVariantIds.push(
-        ...orderLikeSource(message, sourceMessage.variants, added),
-      );
-    }
-    const replaced =
-      replacedVariantIds.length > 0 ? { replacedVariantIds } : {};
+      const replacedVariantIds: string[] = [];
+      for (const [message, added] of addedVariants) {
+        replacedVariantIds.push(
+          ...orderLikeSource(message, sourceMessage.variants, added),
+        );
+      }
+      return replacedVariantIds.length > 0
+        ? { data: copy, replacedVariantIds }
+        : { data: copy };
+    },
+  };
+}
 
-    if (unavailableError) {
-      return {
-        data: copy,
-        error: unavailableError,
-        unavailable: true,
-        unavailableCount,
-        translated,
-        ...replaced,
-      };
-    }
-
-    return { data: copy, translated, ...replaced };
-  } catch (error) {
-    return { error: error?.toString() ?? "unknown error" };
+/**
+ * Translates the missing translations. A batch provider gets the texts of each
+ * target locale in requests of at most `MAX_TEXTS_PER_REQUEST`, with at most
+ * `MAX_CONCURRENT_REQUESTS` in flight; a single-text provider gets one request
+ * per text, with at most `MAX_CONCURRENT_TEXT_REQUESTS` in flight.
+ *
+ * A failed text does not stop unrelated requests. A rate-limited request is
+ * sent again (see `MAX_RATE_LIMIT_RETRIES`). A provider failure (including a
+ * thrown network error, or a rate limit that outlasts the retries) stops new
+ * requests; those in flight still settle.
+ * Returns every failure and the translations that came back.
+ */
+export async function translateMissing(args: {
+  provider: AnyMachineTranslateProvider;
+  sourceLocale: string;
+  missing: MissingTranslation[];
+  /** Called with the number of texts each successful request translated. */
+  onProgress?: (translated: number) => void;
+  /** Waits before a rate-limited request is sent again; for tests. */
+  wait?: (ms: number, signal: AbortSignal) => Promise<void>;
+}): Promise<
+  ({ ok: true } | TranslateFailure) & {
+    translations: Map<MissingTranslation, VariantRow["pattern"]>;
   }
+> {
+  const { provider, sourceLocale } = args;
+  const batched = "translateBatch" in provider;
+  // a single-text provider gets batches of one text, so that both kinds of
+  // provider share the scheduling and the checks of the results below
+  const translateBatch: BatchMachineTranslateProvider["translateBatch"] =
+    batched
+      ? (batch) => provider.translateBatch(batch)
+      : async ({ texts, ...locales }) => {
+          const [key, { text, context }] = Object.entries(texts)[0]!;
+          const result = await provider.translateText({
+            text,
+            ...locales,
+            ...(context ? { context } : {}),
+            signal: stop.signal,
+          });
+          return result.ok
+            ? { ok: true, translatedTexts: { [key]: result.translatedText } }
+            : result;
+        };
+  const textsPerRequest = batched ? MAX_TEXTS_PER_REQUEST : 1;
+
+  const translations = new Map<MissingTranslation, VariantRow["pattern"]>();
+  // A blank source can't be translated, and a provider may reject it, so it
+  // is copied as it is: dropping it would leave a new message without a form
+  // the source has, such as a blank catch-all.
+  const blank = args.missing.filter(({ sourceVariant }) =>
+    isEmptyPattern(sourceVariant.pattern),
+  );
+  for (const translation of blank) {
+    translations.set(
+      translation,
+      structuredClone(translation.sourceVariant.pattern),
+    );
+  }
+  if (blank.length > 0) args.onProgress?.(blank.length);
+
+  const byLocale = new Map<string, MissingTranslation[]>();
+  for (const translation of args.missing) {
+    if (translations.has(translation)) continue;
+    const missing = byLocale.get(translation.targetLocale) ?? [];
+    missing.push(translation);
+    byLocale.set(translation.targetLocale, missing);
+  }
+
+  /** Aborts on a provider failure: no request is sent after it. */
+  const stop = new AbortController();
+  /** Each sends one request and records what it translated. */
+  const requests: Array<() => Promise<{ ok: true } | TranslateFailure>> = [];
+  for (const [targetLocale, missing] of byLocale) {
+    for (let start = 0; start < missing.length; start += textsPerRequest) {
+      const chunk = missing.slice(start, start + textsPerRequest);
+      requests.push(async () => {
+        // keyed by position, not by source variant id, so that one source
+        // variant can have several translations into a locale (e.g. one per
+        // plural form of the target language), each with its own context
+        const result = await retryRateLimited(
+          () =>
+            translateBatch({
+              sourceLocale,
+              targetLocale,
+              texts: Object.fromEntries(
+                chunk.map(({ text, context }, index) => [
+                  String(index),
+                  { text, context },
+                ]),
+              ),
+            }),
+          args.wait ?? sleep,
+          stop.signal,
+        );
+        // The texts that did come back are kept, as with any failure, even
+        // when one of them is missing or isn't a valid pattern.
+        let textError: string | undefined;
+        for (const [index, translation] of chunk.entries()) {
+          const text: unknown = result.translatedTexts?.[String(index)];
+          if (text === undefined) {
+            textError ??= `No translation was returned for "${translation.text}".`;
+            continue;
+          }
+          // a malformed answer, such as 42 or {}, would parse as a blank text
+          if (typeof text !== "string") {
+            textError ??= `The translation of "${translation.text}" isn't text.`;
+            continue;
+          }
+          try {
+            translations.set(translation, deserializePattern(text));
+          } catch (error) {
+            textError ??= String(error);
+          }
+        }
+        if (!result.ok) return result;
+        if (textError !== undefined)
+          return { ok: false, error: textError, scope: "text" };
+        args.onProgress?.(chunk.length);
+        return result;
+      });
+    }
+  }
+
+  const errors = new Set<string>();
+  let next = 0;
+  const worker = async () => {
+    while (!stop.signal.aborted && next < requests.length) {
+      // Thrown errors, such as network failures, are provider-wide.
+      const result = await requests[next++]!().catch(
+        (error): TranslateFailure => ({ ok: false, error: String(error) }),
+      );
+      if (!result.ok) {
+        // a rate limit whose retry the stop cut short, or a request the stop
+        // kept from being sent, isn't a cause of its own
+        if (!((result.rateLimited || result.stopped) && stop.signal.aborted)) {
+          errors.add(result.error);
+        }
+        if (result.scope !== "text") stop.abort();
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      {
+        length: batched
+          ? MAX_CONCURRENT_REQUESTS
+          : MAX_CONCURRENT_TEXT_REQUESTS,
+      },
+      () => worker(),
+    ),
+  );
+  return errors.size > 0
+    ? { ok: false, error: [...errors].join("\n"), translations }
+    : { ok: true, translations };
 }
 
 const UUID_V7 =
