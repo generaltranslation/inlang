@@ -753,18 +753,6 @@ function missingForms(args: {
   /** empty variants a form before took: each is translated once */
   const taken = new Set<VariantRow>();
   for (const form of forms) {
-    const covering = target.variants.filter((variant) =>
-      variantCovers(variant, form, declarations, target.locale),
-    );
-    // An empty `other` can be shown instead of a filled `*` (a literal key is
-    // preferred, or stored first), so it is still missing. An empty variant
-    // can be the form of two: Arabic `zero` is `=0` too. Exact numbers come
-    // first in `forms`, so it keeps the exact number's meaning.
-    const empty = covering.filter(
-      (variant) => isEmptyPattern(variant.pattern) && !taken.has(variant),
-    );
-    if (covering.length > 0 && empty.length === 0) continue;
-    for (const variant of empty) taken.add(variant);
     const sourceVariant = sourceVariantFor({
       target: form,
       reference: sourceMessage.variants,
@@ -772,13 +760,58 @@ function missingForms(args: {
       referenceLocale: args.sourceLocale,
       targetLocale: target.locale,
     });
-    // A blank source can't fill a blank variant. For a form the target lacks
-    // it is planned, and `translateMissing` copies it without a request.
-    if (
-      !sourceVariant ||
-      (empty.length > 0 && isEmptyPattern(sourceVariant.pattern))
-    )
-      continue;
+    if (!sourceVariant) continue;
+    // the matches of a variant added for the form
+    const added = form.map((match) => {
+      const source = sourceVariant.matches.find(
+        (other) => other.key === match.key,
+      );
+      // a source that writes its catch-all as `other` keeps doing so. One
+      // with a `*` too never shows that `*` (`other` takes every number
+      // left), so the target's `*` is translated from `other`.
+      return match.type === "catchall-match" &&
+        source?.type === "literal-match" &&
+        source.value === "other" &&
+        !findMatchingVariant(
+          sourceMessage.variants,
+          sourceVariant.matches.map((other) =>
+            other === source ? match : other,
+          ),
+        )
+        ? source
+        : match;
+    });
+    const covering = target.variants.filter((variant) =>
+      variantCovers(variant, form, declarations, target.locale),
+    );
+    // An empty `other` can be shown instead of a filled `*` (a literal key is
+    // preferred, or stored first), so it is still missing. An empty variant
+    // can be the form of two: Arabic `zero` is `=0` too. Exact numbers come
+    // first in `forms`, so it keeps the exact number's meaning. A blank source
+    // can't fill a blank variant.
+    const empty = isEmptyPattern(sourceVariant.pattern)
+      ? []
+      : covering.filter(
+          (variant) => isEmptyPattern(variant.pattern) && !taken.has(variant),
+        );
+    // Paraglide selects a literal `other` only for its category, so it isn't
+    // the catch-all, unless the variant added for the form is `other` too.
+    const present = covering.some((variant) =>
+      form.every(
+        (match) =>
+          match.type === "literal-match" ||
+          matchValue(variant, match.key) !== "other" ||
+          matchValue({ matches: added }, match.key) === "other",
+      ),
+    );
+    // a blank source for a form the target lacks is copied (see
+    // `translateMissing`)
+    const writes = [
+      ...empty.map((variant) => variant.matches),
+      ...(present ? [] : [added]),
+    ];
+    if (writes.length === 0) continue;
+    for (const variant of empty) taken.add(variant);
     const plurals = form.flatMap(({ key }) => {
       if (!isPluralSelector(key, declarations)) return [];
       const input = resolveInputVariable(key, declarations);
@@ -808,32 +841,10 @@ function missingForms(args: {
         `Plural form for {${input}}: ${category} (${rules.type}) in ${target.locale}, used for n = ${examples}. Translate as the ${category} form; the source shows the ${sourceCategory} form.`,
       ];
     });
-    // the matches of a variant added for the form
-    const added = form.map((match) => {
-      const source = sourceVariant.matches.find(
-        (other) => other.key === match.key,
-      );
-      // a source that writes its catch-all as `other` keeps doing so. One
-      // with a `*` too never shows that `*` (`other` takes every number
-      // left), so the target's `*` is translated from `other`.
-      return match.type === "catchall-match" &&
-        source?.type === "literal-match" &&
-        source.value === "other" &&
-        !findMatchingVariant(
-          sourceMessage.variants,
-          sourceVariant.matches.map((other) =>
-            other === source ? match : other,
-          ),
-        )
-        ? source
-        : match;
-    });
     const context =
       [args.description, plurals.join("\n")].filter(Boolean).join("\n\n") ||
       undefined;
-    for (const matches of empty.length > 0
-      ? empty.map((variant) => variant.matches)
-      : [added]) {
+    for (const matches of writes) {
       missing.push({
         sourceVariant,
         matches,

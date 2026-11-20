@@ -1234,9 +1234,11 @@ test("with context, a blank form is filled unless its source is blank too", asyn
     }),
     ["de"],
   );
+  // and the catch-all is added: a literal `other` isn't one to every runtime
   expect(Object.entries(formsOf(blank.result, "de")!)).toEqual([
     ["countPlural=one", ""],
     ["countPlural=other", "[de] Many items"],
+    ["countPlural=*", "[de] Many items"],
   ]);
 });
 
@@ -1933,4 +1935,45 @@ test("an empty form next to a filled catch-all is reported", async () => {
 
   expect(calls).toEqual([]);
   expect(result.differentSelectors).toEqual(["de"]);
+});
+
+test("with context, a translation's `other` doesn't replace the source's catch-all", async () => {
+  // French `many` (millions) isn't a form the SDK requires, so only the
+  // catch-all covers it: Paraglide selects a literal `other` only for its
+  // category
+  const { calls, result } = await expand(
+    formsBundle(countPlural, ["countPlural"], {
+      en: items,
+      fr: { "countPlural=one": "Un article", "countPlural=other": "Articles" },
+    }),
+    ["fr"],
+  );
+
+  expect(calls.map((call) => call.text)).toEqual(["Many items"]);
+  expect(formsOf(result, "fr")).toEqual({
+    "countPlural=one": "Un article",
+    "countPlural=other": "Articles",
+    "countPlural=*": "[fr] Many items",
+  });
+});
+
+test("with context, a filled `other` is kept when the source writes its catch-all as `other` too", async () => {
+  // i18next stores `_other` as a literal `other` in both languages
+  const { calls, result } = await expand(
+    formsBundle(countPlural, ["countPlural"], {
+      en: { "countPlural=one": "One item", "countPlural=other": "Items" },
+      ru: {
+        "countPlural=one": "Один товар",
+        "countPlural=few": "Товара",
+        "countPlural=many": "Товаров",
+        "countPlural=other": "Товара",
+      },
+    }),
+    ["ru"],
+  );
+
+  expect(calls).toEqual([]);
+  expect(formsOf(result, "ru")).toMatchObject({
+    "countPlural=other": "Товара",
+  });
 });
