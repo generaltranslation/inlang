@@ -318,8 +318,9 @@ export async function envLocalProblem(
  * Appends `text` to `dir/.env.local`, which only the user can read if it is
  * new, and resolves whether it added a `.gitignore` rule for the file first.
  * It does unless git ignores the file: outside a work tree too, or a later
- * `git init` would commit it. There, where git can't tell, a `.env.local`
- * line in `.gitignore` counts, so the rule isn't added twice.
+ * `git init` would commit it. There git can't tell, so `.env.local` as the
+ * last line of `.gitignore` counts too: the rule this run added isn't added
+ * again, while an earlier line, which a later one may undo, doesn't count.
  */
 export async function appendToEnvLocal(args: {
   dir: string;
@@ -328,10 +329,10 @@ export async function appendToEnvLocal(args: {
   const gitignore = nodePath.join(args.dir, ".gitignore");
   const ignored =
     (await git(args.dir, "check-ignore", "-q", "--", ".env.local")) ||
-    (!(await git(args.dir, "rev-parse", "--is-inside-work-tree")) &&
-      (await fs.readFile(gitignore, "utf8").catch(() => ""))
-        .split(/\r?\n/)
-        .includes(".env.local"));
+    (await fs.readFile(gitignore, "utf8").catch(() => ""))
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .at(-1) === ".env.local";
   if (!ignored) {
     await appendToFile({ file: gitignore, text: ".env.local\n" });
   }
