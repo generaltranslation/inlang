@@ -175,6 +175,7 @@ export async function signInToGt(args: {
   });
 
   let createdProject = false;
+  let addedIgnoreRule = false;
   if (!projectId) {
     const orgs = [];
     for await (const org of paginate(listOrgs, { client })) orgs.push(org);
@@ -210,6 +211,12 @@ export async function signInToGt(args: {
     });
     projectId = data.id;
     createdProject = true;
+    // Saved before the key is made: if that fails, the next run makes a key
+    // for this project instead of creating another.
+    addedIgnoreRule = await appendToEnvLocal({
+      dir,
+      text: `GT_PROJECT_ID=${projectId}\n`,
+    });
   }
   const { data: key } = await createProjectApiKey({
     client,
@@ -225,15 +232,20 @@ export async function signInToGt(args: {
     );
   });
 
-  const addedIgnoreRule = await appendToEnvLocal({
+  // readGtCredentials pairs the key with the unprefixed project ID of the
+  // .env files, which may name this project already.
+  const savedProjectId = (await readEnvFiles(dir)).GT_PROJECT_ID === projectId;
+  const addedIgnoreRuleWithKey = await appendToEnvLocal({
     dir,
-    text: `GT_PROJECT_ID=${projectId}\nGT_DEV_API_KEY=${key.key}\n`,
+    text: `${savedProjectId ? "" : `GT_PROJECT_ID=${projectId}\n`}GT_DEV_API_KEY=${key.key}\n`,
   });
   log.success(
     [
       ...(createdProject ? ["Created the General Translation project."] : []),
       "Saved the API key to .env.local.",
-      ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
+      ...(addedIgnoreRule || addedIgnoreRuleWithKey
+        ? ["Added .env.local to .gitignore."]
+        : []),
     ].join("\n"),
   );
   return { apiKey: key.key, projectId };
@@ -289,18 +301,22 @@ async function envLocalProblem(dir: string): Promise<string | undefined> {
  * Appends `text` to `dir/.env.local`, which only the user can read if it is
  * new, and resolves whether it added a `.gitignore` rule for the file first.
  * It does unless git ignores the file: outside a work tree too, or a later
- * `git init` would commit it.
+ * `git init` would commit it. There, where git can't tell, a `.env.local`
+ * line in `.gitignore` counts, so the rule isn't added twice.
  */
 async function appendToEnvLocal(args: {
   dir: string;
   text: string;
 }): Promise<boolean> {
-  const ignored = await git(args.dir, "check-ignore", "-q", "--", ".env.local");
+  const gitignore = nodePath.join(args.dir, ".gitignore");
+  const ignored =
+    (await git(args.dir, "check-ignore", "-q", "--", ".env.local")) ||
+    (!(await git(args.dir, "rev-parse", "--is-inside-work-tree")) &&
+      (await fs.readFile(gitignore, "utf8").catch(() => ""))
+        .split(/\r?\n/)
+        .includes(".env.local"));
   if (!ignored) {
-    await appendToFile({
-      file: nodePath.join(args.dir, ".gitignore"),
-      text: ".env.local\n",
-    });
+    await appendToFile({ file: gitignore, text: ".env.local\n" });
   }
   await appendToFile({
     file: nodePath.join(args.dir, ".env.local"),
