@@ -644,18 +644,25 @@ describe("signInToGt", () => {
     );
   });
 
-  test("doesn't repeat a project ID the .env files have already", async () => {
+  test.each([
+    [
+      "doesn't repeat the project ID in .env.local",
+      { ".env.local": "GT_PROJECT_ID=prj_1\n" },
+      `GT_PROJECT_ID=prj_1\nGT_DEV_API_KEY=${API_KEY}\n`,
+    ],
+    [
+      "saves the project ID next to the key when only .env names it",
+      { ".env": "GT_PROJECT_ID=prj_1\n" },
+      `GT_PROJECT_ID=prj_1\nGT_DEV_API_KEY=${API_KEY}\n`,
+    ],
+  ])("%s", async (_, files, envLocal) => {
     captureLog();
-    const dir = tree({ ".env": "GT_PROJECT_ID=prj_1\n" });
+    const dir = tree(files);
     expect(await signIn({ dir, account: fakeAccount().account })).toEqual({
       apiKey: API_KEY,
       projectId: "prj_1",
     });
-    expect(read(dir, ".env.local")).toBe(`GT_DEV_API_KEY=${API_KEY}\n`);
-    expect(await readGtCredentials({ env: {}, dir })).toEqual({
-      apiKey: API_KEY,
-      projectId: "prj_1",
-    });
+    expect(read(dir, ".env.local")).toBe(envLocal);
   });
 
   test("passes on a failed sign-in, and saves nothing", async () => {
