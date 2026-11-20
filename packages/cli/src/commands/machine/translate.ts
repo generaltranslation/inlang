@@ -45,8 +45,8 @@ export const translate = new Command()
   });
 
 /**
- * Thrown when a translation failed. The message is for the user as is.
- * `translated` translations came back before the failure and were added to
+ * Thrown when a translation failed or was rejected. The message is for the
+ * user as is. `translated` translations came back intact and were added to
  * the project.
  */
 export class MachineTranslateError extends Error {
@@ -110,7 +110,9 @@ export async function translateAndSave(args: {
  * When a translation fails, it still adds those that came back, so that the
  * next run doesn't pay for them again, and throws a `MachineTranslateError`
  * with their number. A bundle gets a new message only with all its
- * translations: half a plural would match nothing.
+ * translations: half a plural would match nothing. A translation that came
+ * back empty or with a placeholder dropped or changed isn't added (see
+ * `planBundleTranslation`), and the run throws too.
  */
 export async function translateCommandAction(args: {
   project: InlangProject;
@@ -206,18 +208,26 @@ export async function translateCommandAction(args: {
             result.translations.get(translation)!,
           ]),
       );
-      return { id, plan, notCreated, translations };
+      // Applied before the warnings, which writes nothing: a new message
+      // with a rejected translation isn't created either.
+      const bundle =
+        translations.size > 0 ? plan.apply(translations) : undefined;
+      for (const { locale } of bundle?.rejected ?? []) {
+        if (plan.newLocales.has(locale)) notCreated.add(locale);
+      }
+      return { id, plan, notCreated, translations, bundle };
     });
 
     // Before writing, so that a failed write doesn't lose them.
     warnAboutPlurals(writes);
 
+    /** why translations were rejected, by bundle id, by locale */
+    const rejected = new Map<string, Map<string, Set<string>>>();
     let translated = 0;
-    for (const { plan, translations } of writes) {
+    for (const { translations, bundle } of writes) {
       // Unchanged bundles aren't written back.
-      if (translations.size === 0) continue;
+      if (!bundle) continue;
       translated += translations.size;
-      const bundle = plan.apply(translations);
       await upsertBundleNested(args.project.db, bundle.data);
       // variants that got a new id to keep the order of the source
       // message; deleted after the write, so that nothing is lost if it
@@ -228,16 +238,35 @@ export async function translateCommandAction(args: {
           .where("id", "in", bundle.replacedVariantIds)
           .execute();
       }
+      for (const { locale, reasons } of bundle.rejected) {
+        const byId = rejected.get(locale) ?? new Map<string, Set<string>>();
+        const bundleReasons = byId.get(bundle.data.id!) ?? new Set();
+        for (const reason of reasons) bundleReasons.add(reason);
+        rejected.set(locale, byId.set(bundle.data.id!, bundleReasons));
+        translated--;
+      }
     }
 
-    if (!result.ok) {
-      throw new MachineTranslateError(
-        translated > 0
-          ? `${result.error}\nSaved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back. Run again to translate the rest.`
-          : result.error,
-        translated,
-        result.error,
-      );
+    if (!result.ok || rejected.size > 0) {
+      const lines = result.ok ? [] : [result.error];
+      if (rejected.size > 0) {
+        lines.push(
+          "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:",
+          ...[...rejected].map(
+            ([locale, byId]) =>
+              `  ${locale}: ${[...byId].map(([id, reasons]) => `${id} (${[...reasons].join(", ")})`).join(", ")}`,
+          ),
+        );
+      }
+      // why translation stopped, without what was saved: a failed save
+      // reports it next to its own error
+      const failure = lines.join("\n");
+      if (translated > 0) {
+        lines.push(
+          `Saved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back${rejected.size > 0 ? " intact" : ""}. Run again to translate the rest.`,
+        );
+      }
+      throw new MachineTranslateError(lines.join("\n"), translated, failure);
     }
     return { translated, bundles: bundles.length };
   } catch (error) {
@@ -248,8 +277,8 @@ export async function translateCommandAction(args: {
 
 /**
  * Warns about the plurals of each bundle (see `PluralReport`), but not about a
- * new message that isn't created because one of its translations failed: the
- * next run translates it whole.
+ * new message that isn't created because one of its translations failed or
+ * was rejected: the next run translates it whole.
  */
 function warnAboutPlurals(
   writes: Array<{

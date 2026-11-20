@@ -1241,6 +1241,137 @@ test("plurals that need forms the source lacks get the source's forms and are re
   }
 });
 
+/** `{name}` as a placeholder of a pattern. */
+const name = {
+  type: "expression" as const,
+  arg: { type: "variable-reference" as const, name: "name" },
+};
+
+/** Removes the placeholders the provider gets as `notranslate` spans. */
+const dropPlaceholders = (text: string) =>
+  text.replace(/<span class="notranslate">[^<]*<\/span>/g, "");
+
+test("rejected translations are reported by bundle and locale, the others are saved, and the run fails", async () => {
+  const project = await projectWithTextBundles(["en", "de", "fr"], 0);
+  // a plural with two forms and a text, each using {name}
+  const cart = pluralBundle("cart");
+  cart.declarations!.push({ type: "input-variable", name: "name" });
+  const items = textBundle("items", "Items of ");
+  for (const variant of [
+    ...cart.messages[0]!.variants,
+    ...items.messages[0]!.variants,
+  ]) {
+    variant.pattern!.push(name);
+  }
+  await insertBundleNested(project.db, cart);
+  await insertBundleNested(project.db, items);
+  await insertBundleNested(project.db, textBundle("title", "Title"));
+  // drops the placeholders in German, and French "Title" comes back empty
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: true,
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts).map(([key, { text }]) => [
+        key,
+        args.targetLocale === "de"
+          ? dropPlaceholders(text)
+          : text === "Title"
+            ? ""
+            : `${text} (${args.targetLocale})`,
+      ]),
+    ),
+  }));
+  try {
+    const thrown = await translateCommandAction({ project, provider }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect((thrown as Error).message).toBe(
+      "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:\n" +
+        "  de: cart ({name}), items ({name})\n" +
+        "  fr: title (empty)\n" +
+        "Saved the 4 translations that came back intact. Run again to translate the rest.",
+    );
+    const bundles = await selectBundleNested(project.db).execute();
+    expect(
+      Object.fromEntries(
+        bundles.map((bundle) => [
+          bundle.id,
+          bundle.messages.map((message) => message.locale).sort(),
+        ]),
+      ),
+    ).toEqual({
+      cart: ["en", "fr"],
+      items: ["en", "fr"],
+      title: ["de", "en"],
+    });
+  } finally {
+    await project.close();
+  }
+});
+
+test("a failed request and rejected translations are reported in one error", async () => {
+  const project = await projectWithTextBundles(["en", "de"], 2);
+  const items = textBundle("items", "Items of ");
+  items.messages[0]!.variants[0]!.pattern!.push(name);
+  await insertBundleNested(project.db, items);
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: false,
+    error: "1 of 3 translations failed: model refused",
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts)
+        .filter(([, { text }]) => text !== "Text 0")
+        .map(([key, { text }]) => [key, `${dropPlaceholders(text)} (de)`]),
+    ),
+  }));
+  try {
+    const thrown = await translateCommandAction({ project, provider }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect((thrown as Error).message).toBe(
+      "1 of 3 translations failed: model refused\n" +
+        "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:\n" +
+        "  de: items ({name})\n" +
+        "Saved the 1 translation that came back intact. Run again to translate the rest.",
+    );
+  } finally {
+    await project.close();
+  }
+});
+
+test("a failed save still lists the rejected translations, without what it saved", async () => {
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
+  const { project, path, read, cleanup } = await projectOnDisk({
+    en: `{"alpha": "Alpha", "beta": "Beta"}`,
+    de: `{}`,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      const query = new URL(url).searchParams;
+      const text = query.get("q") === "Beta" ? "" : `${query.get("q")} (de)`;
+      return Response.json({
+        data: { translations: [{ translatedText: text }] },
+      });
+    }),
+  );
+  const de = nodePath.join(path, "../messages/de.json");
+  fs.chmodSync(de, 0o444);
+  try {
+    const error = await translateAndSave({ project, path }).catch(
+      (error: unknown) => error as Error,
+    );
+    expect((error as Error).message).toMatch(
+      /^Some translations weren't saved: .*\n {2}de: beta \(empty\)\nThe translations couldn't be saved: .*EACCES/,
+    );
+    expect((error as Error).message).not.toContain("Saved the");
+    expect(read("de")).toBe(`{}`);
+  } finally {
+    fs.chmodSync(de, 0o644);
+    await cleanup();
+  }
+});
+
 /** A Russian message with neither selectors nor forms, such as an editor adds. */
 function withEmptyRussianMessage(bundle: NewBundleNested): NewBundleNested {
   bundle.messages.push({
@@ -1402,6 +1533,66 @@ test("plurals are reported before anything is written, so a failed write keeps t
     ]);
   } finally {
     vi.restoreAllMocks();
+    await project.close();
+  }
+});
+
+test("a new message with a rejected translation isn't created, and isn't reported then", async () => {
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  const withCatchAll = (bundle: NewBundleNested, text: string) => {
+    bundle.messages[0]!.variants[1]!.pattern = [{ type: "text", value: text }];
+    return bundle;
+  };
+  await insertBundleNested(
+    project.db,
+    withCatchAll(pluralBundle("cart"), "Carts"),
+  );
+  // a Russian message that exists, with its `one`
+  const bag = withCatchAll(pluralBundle("bag"), "Bags");
+  bag.messages.push({
+    id: "bag_ru",
+    bundle_id: "bag",
+    locale: "ru",
+    selectors: bag.messages[0]!.selectors,
+    variants: [
+      {
+        id: "bag_ru_one",
+        message_id: "bag_ru",
+        matches: bag.messages[0]!.variants[0]!.matches,
+        pattern: [{ type: "text", value: "Сумка" }],
+      },
+    ],
+  } as never);
+  await insertBundleNested(project.db, bag);
+  await insertBundleNested(project.db, pluralBundle("items"));
+  const warn = vi.spyOn(log, "warn");
+  // "Carts" and "Bags" come back empty, so they are rejected
+  const { provider } = fakeBatchProvider(async (args) => ({
+    ok: true,
+    translatedTexts: Object.fromEntries(
+      Object.entries(args.texts).map(([key, { text }]) => [
+        key,
+        text === "Carts" || text === "Bags"
+          ? ""
+          : `${text} (${args.targetLocale})`,
+      ]),
+    ),
+  }));
+  try {
+    await expect(translateCommandAction({ project, provider })).rejects.toThrow(
+      "Some translations weren't saved",
+    );
+    // the message that exists is still reported; the one not created isn't
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): bag, items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+    ]);
+    expect(await russianMessage(project, "cart")).toBeUndefined();
+    expect((await russianMessage(project, "bag")).variants).toHaveLength(1);
+  } finally {
     await project.close();
   }
 });

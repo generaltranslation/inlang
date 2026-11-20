@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import type { BundleNested, Declaration, NewBundleNested } from "@inlang/sdk";
+import type {
+  BundleNested,
+  Declaration,
+  NewBundleNested,
+  Pattern,
+} from "@inlang/sdk";
 import {
   planBundleTranslation,
   translateMissing,
@@ -259,7 +264,7 @@ const countPlural = [input("count"), plural("countPlural", "count")];
 
 /**
  * A bundle with a message per locale. Forms are keyed by their matches,
- * `"countPlural=one,gender=*"`.
+ * `"countPlural=one,gender=*"`, or `""` for a message without selectors.
  */
 function formsBundle(
   declarations: Declaration[],
@@ -280,7 +285,7 @@ function formsBundle(
       variants: Object.entries(forms).map(([key, text], index) => ({
         id: `01900000-0000-7000-8000-${locale.padStart(6, "0")}${String(index).padStart(6, "0")}`,
         messageId: locale,
-        matches: key.split(",").map((pair) => {
+        matches: (key === "" ? [] : key.split(",")).map((pair) => {
           const [key, value] = pair.split("=") as [string, string];
           return value === "*"
             ? { type: "catchall-match", key }
@@ -644,6 +649,326 @@ test("forms the source lacks in its own locale too aren't reported", async () =>
   ]);
 });
 
+/** A pattern from text whose `{name}` are variables and `<b>`, `</b>` markup. */
+function patternOf(text: string): Pattern {
+  return text
+    .split(/(\{\w+\}|<\/?\w+>)/)
+    .filter(Boolean)
+    .map((part) =>
+      part.startsWith("{")
+        ? {
+            type: "expression",
+            arg: { type: "variable-reference", name: part.slice(1, -1) },
+          }
+        : part.startsWith("</")
+          ? { type: "markup-end", name: part.slice(2, -1) }
+          : part.startsWith("<")
+            ? { type: "markup-start", name: part.slice(1, -1) }
+            : { type: "text", value: part },
+    );
+}
+
+/** The text `patternOf` reads a pattern from. */
+function textOf(pattern: Pattern): string {
+  return pattern
+    .map((part) =>
+      part.type === "text"
+        ? part.value
+        : part.type === "expression"
+          ? `{${(part.arg as { name: string }).name}}`
+          : part.type === "markup-end"
+            ? `</${part.name}>`
+            : `<${part.name}>`,
+    )
+    .join("");
+}
+
+/** Reads the `{name}` in the bundle's texts as variables, `<b>` as markup. */
+function withPlaceholders(bundle: BundleNested): BundleNested {
+  for (const message of bundle.messages) {
+    for (const variant of message.variants) {
+      variant.pattern = patternOf(textOf(variant.pattern));
+    }
+  }
+  return bundle;
+}
+
+/** Translates from English to `[locale] text`, then applies `edit`. */
+function translateEditing(
+  bundle: BundleNested,
+  targetLocales: string[],
+  edit: (text: string) => string,
+) {
+  return machineTranslateBundle({
+    bundle,
+    sourceLocale: "en",
+    targetLocales,
+    provider: {
+      translateText: async ({ text, targetLocale }) => ({
+        ok: true,
+        translatedText: edit(`[${targetLocale}] ${text}`),
+      }),
+    },
+  });
+}
+
+/** A placeholder as the provider gets it: a `notranslate` span. */
+const span = '<span class="notranslate">[^<]*</span>';
+
+/** Removes the placeholders the provider gets. */
+const dropPlaceholders = (text: string) =>
+  text.replace(new RegExp(span, "g"), "");
+
+const nameAndCount = [input("name"), ...countPlural];
+
+test("a translation that drops a markup end is rejected", async () => {
+  const result = await translateEditing(
+    withPlaceholders(
+      formsBundle([], [], { en: { "": "Read the <link>Terms</link>" } }),
+    ),
+    ["de"],
+    (text) =>
+      text.replace(
+        '<span class="notranslate">{"type":"markup-end","name":"link"}</span>',
+        "",
+      ),
+  );
+
+  expect(result.rejected).toEqual([{ locale: "de", reasons: ["</link>"] }]);
+});
+
+test("a translation that changes an option of a placeholder is rejected", async () => {
+  const bundle = formsBundle([input("price")], [], { en: { "": "Total: " } });
+  bundle.messages[0]!.variants[0]!.pattern.push({
+    type: "expression",
+    arg: { type: "variable-reference", name: "price" },
+    annotation: {
+      type: "function-reference",
+      name: "number",
+      options: [
+        { name: "style", value: { type: "literal", value: "currency" } },
+        { name: "currency", value: { type: "literal", value: "USD" } },
+      ],
+    },
+  });
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.replace('"USD"', '"EUR"'),
+  );
+
+  expect(result.rejected).toEqual([{ locale: "de", reasons: ["{price}"] }]);
+});
+
+test("a translation may move placeholders and reorder their keys", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, [], { en: { "": "{name}: <b>{count}</b>" } }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) => {
+    const [name, start, count, end] = text.match(new RegExp(span, "g"))!;
+    return `${start}${count}${end} ${name!.replace(
+      '{"type":"expression","arg":{"type":"variable-reference","name":"name"}}',
+      '{"arg":{"name":"name","type":"variable-reference"},"type":"expression"}',
+    )}`;
+  });
+
+  expect(result.rejected).toEqual([]);
+});
+
+test("a translation that repeats a placeholder is rejected", async () => {
+  const bundle = withPlaceholders(
+    formsBundle([input("name")], [], { en: { "": "Hello {name}" } }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.replace(new RegExp(span), "$& $&"),
+  );
+
+  expect(result.rejected).toEqual([{ locale: "de", reasons: ["{name}"] }]);
+});
+
+test("markup that doesn't nest is rejected, unless the source's doesn't either", async () => {
+  const crossed = await translateEditing(
+    withPlaceholders(
+      formsBundle([], [], { en: { "": "<b>Bold <i>both</i></b>" } }),
+    ),
+    ["de"],
+    // <b>Bold <i>both</b></i>
+    (text) => text.replace(new RegExp(`(${span})(${span})$`), "$2$1"),
+  );
+  expect(crossed.rejected).toEqual([
+    { locale: "de", reasons: ["</b>", "<b>"] },
+  ]);
+
+  const unclosed = await translateEditing(
+    withPlaceholders(formsBundle([], [], { en: { "": "<b>Bold" } })),
+    ["de"],
+    (text) => text.replace(new RegExp(`(${span})(.*)`), "$2 $1"),
+  );
+  expect(unclosed.rejected).toEqual([]);
+});
+
+test("an empty translation of a text is rejected", async () => {
+  const result = await translateEditing(
+    formsBundle([], [], { en: { "": "Hello" } }),
+    ["fr"],
+    () => " ",
+  );
+  expect(result.rejected).toEqual([{ locale: "fr", reasons: ["empty"] }]);
+
+  const blank = await translateEditing(
+    formsBundle([], [], { en: { "": " " } }),
+    ["de"],
+    () => "",
+  );
+  expect(blank.rejected).toEqual([]);
+});
+
+const itemCount = {
+  "countPlural=one": "{count} item",
+  "countPlural=*": "{count} items",
+};
+
+test("a German singular and an exact number may omit their own count", async () => {
+  const singular = await translateEditing(
+    withPlaceholders(
+      formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+    ),
+    ["de"],
+    (text) => (text.endsWith(" item") ? dropPlaceholders(text) : text),
+  );
+  expect(singular.rejected).toEqual([]);
+  const exact = await translateEditing(
+    withPlaceholders(
+      formsBundle([input("count")], ["count"], {
+        en: { "count=4": "{count} items", "count=*": "{count} things" },
+      }),
+    ),
+    ["ru"],
+    (text) => (text.endsWith(" items") ? dropPlaceholders(text) : text),
+  );
+  expect(exact.rejected).toEqual([]);
+});
+
+test("a single-number form still requires other variables and rejects added counts", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=one": "{name}: {count} item",
+        "countPlural=*": "{name}: {count} items",
+      },
+    }),
+  );
+  const missingName = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+  expect(missingName.rejected).toContainEqual({
+    locale: "de",
+    reasons: ["{name}"],
+  });
+  const repeated = await translateEditing(
+    withPlaceholders(
+      formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+    ),
+    ["de"],
+    (text) =>
+      text.endsWith(" item") ? text.replace(new RegExp(span), "$&$&") : text,
+  );
+  expect(repeated.rejected).toContainEqual({
+    locale: "de",
+    reasons: ["{count}"],
+  });
+});
+
+test("a single-number form cannot change or omit a formatted count", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  const count = bundle.messages[0]!.variants[0]!.pattern.find(
+    (part) => part.type === "expression",
+  )!;
+  if (count.type !== "expression") throw Error("Expected count");
+  count.annotation = {
+    type: "function-reference",
+    name: "number",
+    options: [
+      { name: "style", value: { type: "literal", value: "currency" } },
+      { name: "currency", value: { type: "literal", value: "USD" } },
+    ],
+  };
+  for (const edit of [
+    (text: string) => text.replace('"USD"', '"EUR"'),
+    (text: string) => (text.endsWith(" item") ? dropPlaceholders(text) : text),
+  ]) {
+    const result = await translateEditing(bundle, ["de"], edit);
+    expect(result.rejected).toContainEqual({
+      locale: "de",
+      reasons: ["{count}"],
+    });
+  }
+});
+
+test("a single-number form may spell out ICU's #", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  for (const variant of bundle.messages[0]!.variants) {
+    for (const part of variant.pattern)
+      if (part.type === "expression") {
+        part.annotation = {
+          type: "function-reference",
+          name: "icu:pound",
+          options: [],
+        };
+      }
+  }
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+  expect(result.rejected).toEqual([]);
+});
+
+test("a new message with a rejected translation isn't created: French `one` (0 and 1) drops `{count}`", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount }),
+  );
+  const result = await translateEditing(bundle, ["fr"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+
+  expect(result.rejected).toEqual([
+    { locale: "fr", reasons: ["{count}"] },
+    { locale: "fr", reasons: [] },
+  ]);
+});
+
+test("a translation that drops a placeholder doesn't reject the other translations of a message that exists", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], {
+      en: itemCount,
+      de: { "countPlural=*": "" },
+    }),
+  );
+  const result = await translateEditing(bundle, ["de"], (text) =>
+    text.endsWith(" items") ? dropPlaceholders(text) : text,
+  );
+
+  expect(result.rejected).toEqual([{ locale: "de", reasons: ["{count}"] }]);
+});
+
+test("a placeholder dropped from a form whose source lacks another one is rejected", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(nameAndCount, ["countPlural"], {
+      en: {
+        "countPlural=one": "{name} has one item",
+        "countPlural=*": "{name} has {count} items",
+      },
+      fr: { "countPlural=*": "{name} a {count} articles" },
+    }),
+  );
+  // French `one` (0 and 1) lacks `{count}` with the source's text too
+  const result = await translateEditing(bundle, ["fr"], dropPlaceholders);
+
+  expect(result.rejected).toEqual([{ locale: "fr", reasons: ["{name}"] }]);
+});
+
 test("a blank catch-all is copied, so a new message matches every number", async () => {
   const bundle = pluralBundle([]);
   bundle.messages[0]!.variants[1]!.pattern = [];
@@ -688,6 +1013,24 @@ test("copied blank sources count toward progress", async () => {
   });
 
   expect(progress).toBe(plan.missing.length);
+});
+
+test("a message without forms isn't filled when one of its translations is rejected", async () => {
+  const bundle = withPlaceholders(
+    formsBundle(countPlural, ["countPlural"], { en: itemCount, fr: {} }),
+  );
+  // as an editor adds it
+  bundle.messages[1]!.selectors = [];
+  const result = await translateEditing(bundle, ["fr"], (text) =>
+    text.endsWith(" item") ? dropPlaceholders(text) : text,
+  );
+
+  expect(result.rejected).toEqual([
+    { locale: "fr", reasons: ["{count}"] },
+    { locale: "fr", reasons: [] },
+  ]);
+  const fr = result.data!.messages.find((m) => m.locale === "fr")!;
+  expect(fr.variants).toEqual([]);
 });
 
 test("a translation that isn't text, such as {}, fails instead of being saved blank", async () => {
