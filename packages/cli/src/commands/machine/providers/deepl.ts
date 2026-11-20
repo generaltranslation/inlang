@@ -1,5 +1,5 @@
 import type { MachineTranslateProvider, TranslateTextArgs } from "./types.js";
-import { rateLimitOf } from "./rateLimit.js";
+import { rateLimitOf, scopeOf } from "./rateLimit.js";
 
 export function toDeepLSourceLocale(locale: string): string {
   const [language] = locale.split("-");
@@ -43,9 +43,7 @@ export function createDeepLTranslateProvider(
       if (!response.ok) {
         return {
           ok: false,
-          scope: [400, 413, 422].includes(response.status)
-            ? "text"
-            : "provider",
+          scope: scopeOf(response.status),
           ...rateLimitOf(response),
           error: `${response.status} ${response.statusText}: translating from ${args.sourceLocale} to ${args.targetLocale}`,
         };
