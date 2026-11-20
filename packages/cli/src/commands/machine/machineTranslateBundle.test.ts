@@ -2025,3 +2025,35 @@ test("a form added without a later form of the source goes before a variant that
     [],
   ]);
 });
+
+test("with context, a form added in one select branch goes before that branch's catch-all, though a later branch has a form of the source", async () => {
+  const { result } = await expand(
+    formsBundle([input("gender"), ...countPlural], ["gender", "countPlural"], {
+      en: {
+        "gender=female,countPlural=one": "She has one item",
+        "gender=female,countPlural=other": "She has items",
+        "gender=*,countPlural=one": "They have one item",
+        "gender=*,countPlural=other": "They have items",
+      },
+      ru: {
+        "gender=female,countPlural=one": "У неё один товар",
+        "gender=female,countPlural=*": "У неё товары",
+        "gender=*,countPlural=one": "У них один товар",
+        "gender=*,countPlural=*": "У них товары",
+      },
+    }),
+    ["ru"],
+  );
+
+  // runtimes that select the first matching variant would pick
+  // `female, *` for a woman with 2 items
+  const order = Object.keys(formsOf(result, "ru")!);
+  for (const gender of ["female", "*"]) {
+    const catchAll = order.indexOf(`gender=${gender},countPlural=*`);
+    for (const form of ["few", "many"]) {
+      const index = order.indexOf(`gender=${gender},countPlural=${form}`);
+      expect(index, `${gender} ${form} in ${order}`).not.toBe(-1);
+      expect(index, `${gender} ${form} in ${order}`).toBeLessThan(catchAll);
+    }
+  }
+});
