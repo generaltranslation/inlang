@@ -207,12 +207,6 @@ export function planBundleTranslation(
   let sourceMissing: ReturnType<typeof missingVariants> | undefined;
   const missing: MissingTranslation[] = [];
   const newLocales = new Set<string>();
-  /**
-   * Locales whose target has a variant for every form its language needs,
-   * counting a literal `other` only for the catch-all (see
-   * `findMatchingVariant`)
-   */
-  const complete = new Set<string>();
   const report: PluralReport = {
     incompletePlurals: [],
     differentSelectors: [],
@@ -245,16 +239,6 @@ export function planBundleTranslation(
     if (
       target.selectors.some(({ name }) => isPluralSelector(name, declarations))
     ) {
-      // With the source's forms, which the plan adds: a catch-all covers no
-      // category such as `one`. Empty variants count, as an empty `other` is
-      // filled from the catch-all.
-      if (
-        missingVariants(target, declarations, {
-          variants: [...target.variants, ...sourceMessage.variants],
-        }).length === 0
-      ) {
-        complete.add(targetLocale);
-      }
       const lackedBySource = (sourceMissing ??= missingVariants(
         sourceMessage,
         declarations,
@@ -307,13 +291,10 @@ export function planBundleTranslation(
 
     const missingBefore = missing.length;
     for (const sourceVariant of sourceMessage.variants) {
-      const existingVariant = findMatchingVariant({
-        variants: target.variants,
-        matches: sourceVariant.matches,
-        sourceVariants: sourceMessage.variants,
-        declarations,
-        otherIsCatchAll: complete.has(targetLocale),
-      });
+      const existingVariant = findMatchingVariant(
+        target.variants,
+        sourceVariant.matches,
+      );
 
       // A blank variant is missing, as `inlang check` reports it, unless its
       // source is blank too: then a translation can't fill it.
@@ -364,13 +345,10 @@ export function planBundleTranslation(
         );
 
         if (targetMessage) {
-          const existingVariant = findMatchingVariant({
-            variants: targetMessage.variants,
-            matches: sourceVariant.matches,
-            sourceVariants: sourceMessage.variants,
-            declarations: copy.declarations,
-            otherIsCatchAll: complete.has(targetLocale),
-          });
+          const existingVariant = findMatchingVariant(
+            targetMessage.variants,
+            sourceVariant.matches,
+          );
 
           // only an empty variant is missing a translation
           if (existingVariant) {
@@ -413,12 +391,7 @@ export function planBundleTranslation(
       const replacedVariantIds: string[] = [];
       for (const [message, added] of addedVariants) {
         replacedVariantIds.push(
-          ...orderLikeSource(
-            message,
-            sourceMessage.variants,
-            added,
-            copy.declarations,
-          ),
+          ...orderLikeSource(message, sourceMessage.variants, added),
         );
       }
       return replacedVariantIds.length > 0
@@ -666,19 +639,10 @@ export function orderLikeSource(
   message: { variants: VariantRow[] },
   sourceVariants: VariantRow[],
   added: Set<VariantRow>,
-  declarations: BundleNested["declarations"],
 ): string[] {
   const sourceIndex = (variant: VariantRow) =>
     sourceVariants.findIndex(
-      (source) =>
-        findMatchingVariant({
-          variants: [variant],
-          matches: source.matches,
-          sourceVariants,
-          declarations,
-          // only for the order: an `other` goes where the catch-all would
-          otherIsCatchAll: true,
-        }) !== undefined,
+      (source) => findMatchingVariant([variant], source.matches) !== undefined,
     );
   let previous = -1;
   const keyed = message.variants.map((variant, position) => {
