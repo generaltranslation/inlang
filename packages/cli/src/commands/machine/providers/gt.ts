@@ -4,7 +4,7 @@ import type {
 } from "./types.js";
 import { rateLimitOf, scopeOf } from "./rateLimit.js";
 
-const GT_TRANSLATE_API_URL = "https://api.gtx.dev/v2/translate";
+export const GT_API_URL = "https://api.gtx.dev";
 /**
  * The API contract the request and the response parsing are written for.
  * Without it, the API answers with its oldest supported contract.
@@ -46,7 +46,7 @@ export function createGtTranslateProvider(args: {
 
       let response: Response;
       try {
-        response = await fetch(GT_TRANSLATE_API_URL, {
+        response = await fetch(`${GT_API_URL}/v2/translate`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${args.apiKey}`,

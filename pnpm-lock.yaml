@@ -87,6 +87,9 @@ importers:
       cross-env:
         specifier: ^7.0.3
         version: 7.0.3
+      dotenv:
+        specifier: ^16.4.5
+        version: 16.5.0
       esbuild:
         specifier: ^0.19.2
         version: 0.19.12

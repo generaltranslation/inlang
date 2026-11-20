@@ -184,10 +184,10 @@ export async function resolveMachineTranslateProvider(args: {
       }
       if (choice === "community") {
         const provider = createCommunityProvider(env);
-        const addedIgnoreRule = await appendToEnvLocal(
+        const addedIgnoreRule = await appendToEnvLocal({
           dir,
-          `${PROVIDER_ENV}=demosjarco\n`,
-        );
+          text: `${PROVIDER_ENV}=demosjarco\n`,
+        });
         log.info(
           [
             `Saved your choice to .env.local. To be asked again, remove ${PROVIDER_ENV} from it.`,
