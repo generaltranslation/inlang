@@ -990,6 +990,30 @@ describe("signInToGt", () => {
       );
     });
 
+    test("fails instead of asking which project, and creates nothing", async () => {
+      captureLog();
+      const dir = tree();
+      const gt = fakeAccount(
+        fakeApi({
+          projects: [
+            { id: "prj_a", name: "Website", orgId: "org_1", orgName: "Emails" },
+          ],
+        }),
+        { signedIn: true },
+      );
+      const { prompts, prompt } = fakePrompt("prj_a");
+      await expect(
+        signIn({ dir, interactive: false, prompt, account: gt.account }),
+      ).rejects.toThrow(
+        "Your General Translation account has projects. Run this command in a terminal to choose one or create another, or set GT_PROJECT_ID to one of them from https://dash.generaltranslation.com.",
+      );
+      expect(prompts).toEqual([]);
+      expect(gt.requests.map((request) => request.path)).toEqual([
+        "/v2/projects",
+      ]);
+      expect(fs.readdirSync(dir)).toEqual([]);
+    });
+
     test("fails instead of asking for the organization, and creates nothing", async () => {
       captureLog();
       const dir = tree();

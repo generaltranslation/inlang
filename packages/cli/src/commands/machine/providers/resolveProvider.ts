@@ -111,6 +111,8 @@ export async function resolveMachineTranslateProvider(args: {
   settings: ProjectSettings;
   /** Whether the user can be asked to sign in. */
   interactive: boolean;
+  /** Sign in with a code instead of a browser on this machine. */
+  noBrowser?: boolean;
   signIn?: typeof signInToGt;
 }): Promise<AnyMachineTranslateProvider> {
   const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
@@ -201,6 +203,7 @@ export async function resolveMachineTranslateProvider(args: {
           dir,
           settings: args.settings,
           env,
+          noBrowser: args.noBrowser,
         }).catch((error: Error) => {
           // Its errors are for the user, so they print without a stack trace.
           throw new MachineTranslateError(error.message);

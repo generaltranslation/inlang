@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, test, expect, vi } from "vitest";
 import {
+  signInWithCode,
   translate,
   translateAndSave,
   translateCommandAction,
@@ -1908,4 +1909,36 @@ test("with a provider that uses context, a translation without forms gets every 
   } finally {
     await project.close();
   }
+});
+
+test.each([
+  [
+    "--no-browser",
+    { browser: false, platform: "darwin" as const, env: {} },
+    true,
+  ],
+  [
+    "Linux without a display, as over SSH or in a container",
+    { browser: true, platform: "linux" as const, env: {} },
+    true,
+  ],
+  [
+    "CI",
+    { browser: true, platform: "darwin" as const, env: { CI: "1" } },
+    true,
+  ],
+  [
+    "Linux with a display",
+    { browser: true, platform: "linux" as const, env: { DISPLAY: ":0" } },
+    false,
+  ],
+  ["macOS", { browser: true, platform: "darwin" as const, env: {} }, false],
+])("signs in with a code for %s: %s", (_, args, expected) => {
+  expect(signInWithCode({ ...args, isTTY: true })).toBe(expected);
+});
+
+test("translate has a --no-browser option", () => {
+  expect(
+    translate.options.find((option) => option.long === "--no-browser"),
+  ).toBeDefined();
 });

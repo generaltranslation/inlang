@@ -228,6 +228,11 @@ async function signInAndSaveKey(args: {
     for await (const project of paginate(listProjects, { client })) {
       projects.push(project);
     }
+    if (projects.length > 0 && !interactive) {
+      throw new Error(
+        `Your General Translation account has projects. Run this command in a terminal to choose one or create another, or set GT_PROJECT_ID to one of them from ${GT_DASHBOARD_URL}.`,
+      );
+    }
     const choice =
       projects.length === 0
         ? NEW_PROJECT
