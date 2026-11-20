@@ -203,6 +203,16 @@ describe("readGtCredentials", () => {
     });
   });
 
+  test("reads values in backticks, as gt does", async () => {
+    const dir = tree({
+      ".env.local": "GT_PROJECT_ID=`prj_1`\nGT_DEV_API_KEY=`key`\n",
+    });
+    expect(await readGtCredentials({ env: {}, dir })).toEqual({
+      apiKey: "key",
+      projectId: "prj_1",
+    });
+  });
+
   test("skips an empty key", async () => {
     expect(
       await readGtCredentials({
@@ -443,6 +453,29 @@ describe("signInToGt", () => {
     );
     expect(gt.login).not.toHaveBeenCalled();
     expect(read(dir, "tracked.env")).toBe("OTHER=1\n");
+  });
+
+  test("refuses a symlinked .gitignore before signing in, which git doesn't read", async () => {
+    captureLog();
+    const dir = gitTree({ "shared.gitignore": "node_modules\n" });
+    fs.symlinkSync("shared.gitignore", nodePath.join(dir, ".gitignore"));
+    const gt = fakeAccount();
+    await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+      ".gitignore is a symbolic link",
+    );
+    expect(gt.login).not.toHaveBeenCalled();
+    expect(read(dir, "shared.gitignore")).toBe("node_modules\n");
+    expect(fs.existsSync(nodePath.join(dir, ".env.local"))).toBe(false);
+  });
+
+  test("accepts a symlinked .gitignore when git ignores .env.local otherwise", async () => {
+    captureLog();
+    const dir = gitTree({ "shared.gitignore": "node_modules\n" });
+    fs.symlinkSync("shared.gitignore", nodePath.join(dir, ".gitignore"));
+    fs.appendFileSync(nodePath.join(dir, ".git/info/exclude"), ".env.local\n");
+    await signIn({ dir, account: fakeAccount().account });
+    expect(read(dir, ".env.local")).toContain(API_KEY);
+    expect(read(dir, "shared.gitignore")).toBe("node_modules\n");
   });
 
   test.each([

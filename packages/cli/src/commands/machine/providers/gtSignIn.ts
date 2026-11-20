@@ -17,6 +17,7 @@ import {
   UserAuthError,
 } from "@generaltranslation/auth";
 import type { ProjectSettings } from "@inlang/sdk";
+import { parse as parseEnvFile } from "dotenv";
 import { log } from "../../../utilities/log.js";
 // The API the translate provider calls. Passed to the sign-in, which
 // otherwise follows the GT_API_URL variable, so a gt developer's setting can't
@@ -90,18 +91,6 @@ async function readEnvFiles(dir: string): Promise<Record<string, string>> {
         throw error;
       });
     Object.assign(variables, parseEnvFile(content));
-  }
-  return variables;
-}
-
-function parseEnvFile(content: string): Record<string, string> {
-  const variables: Record<string, string> = {};
-  for (const line of content.split(/\r?\n/)) {
-    const match =
-      /^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^#]*?))\s*(?:#.*)?$/.exec(
-        line,
-      );
-    if (match) variables[match[1]!] = match[2] ?? match[3] ?? match[4] ?? "";
   }
   return variables;
 }
@@ -269,8 +258,10 @@ async function isSignedIn(account: GtAccount): Promise<boolean> {
 
 /**
  * Why a key must not be saved to `dir/.env.local`, as the start of a
- * sentence that says how to fix it: git tracks it, or it is a symlink, through
- * which an ignored .env.local could still write the key to a tracked file.
+ * sentence that says how to fix it: git tracks it; it is a symlink, through
+ * which an ignored .env.local could still write the key to a tracked file; or
+ * git doesn't ignore it and can't be made to, as git doesn't read a symlinked
+ * .gitignore.
  */
 async function envLocalProblem(dir: string): Promise<string | undefined> {
   if (await git(dir, "ls-files", "--error-unmatch", "--", ".env.local")) {
@@ -281,6 +272,15 @@ async function envLocalProblem(dir: string): Promise<string | undefined> {
     .catch(() => undefined);
   if (envLocal?.isSymbolicLink()) {
     return ".env.local is a symbolic link. Replace it with a regular file";
+  }
+  const gitignore = await fs
+    .lstat(nodePath.join(dir, ".gitignore"))
+    .catch(() => undefined);
+  if (
+    gitignore?.isSymbolicLink() &&
+    !(await git(dir, "check-ignore", "-q", "--", ".env.local"))
+  ) {
+    return ".gitignore is a symbolic link, which git doesn't read, so it can't ignore .env.local. Replace it with a regular file";
   }
   return undefined;
 }
