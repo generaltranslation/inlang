@@ -1,9 +1,27 @@
+import nodePath from "node:path";
+import type { ProjectSettings } from "@inlang/sdk";
+import { version } from "../../../../package.json";
 import { log } from "../../../utilities/log.js";
 import { createDeepLTranslateProvider } from "./deepl.js";
 import { createGoogleTranslateProvider } from "./google.js";
 import { createDemosjarcoTranslateProvider } from "./demosjarco.js";
+import { createGtTranslateProvider, GT_DASHBOARD_URL } from "./gt.js";
+import {
+  appendToEnvLocal,
+  envLocalProblem,
+  findGtProjectId,
+  projectIdMismatch,
+  readEnvFiles,
+  readGtConfigProjectId,
+  readGtCredentials,
+  shareGtProjectId,
+  signInToGt,
+} from "./gtSignIn.js";
 import { createOpenAITranslateProvider } from "./openai.js";
-import type { MachineTranslateProvider } from "./types.js";
+import type {
+  AnyMachineTranslateProvider,
+  MachineTranslateProvider,
+} from "./types.js";
 
 export const PROVIDER_ENV = "INLANG_MACHINE_TRANSLATE_PROVIDER";
 export const GOOGLE_API_KEY_ENV = "INLANG_GOOGLE_TRANSLATE_API_KEY";
@@ -15,23 +33,46 @@ export const DEMOSJARCO_MODEL_ENV = "DEMOSJARCO_TRANSLATE_MODEL";
 export const DEMOSJARCO_ZDR_ENV = "DEMOSJARCO_TRANSLATE_ZDR";
 
 export type MachineTranslateProviderName =
-  "google" | "deepl" | "openai" | "demosjarco";
+  | "google"
+  | "deepl"
+  | "openai"
+  | "gt"
+  | "demosjarco";
 
 const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+export const GT_SETUP_URL =
+  "https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate";
 const DEEPL_DOCS_URL =
   "https://developers.deepl.com/docs/getting-started/quickstart";
+
+/**
+ * An error whose message is for the user as is: the command prints it
+ * without a stack trace. When translations failed or were rejected,
+ * `translated` translations came back intact and were added to the project.
+ */
+export class MachineTranslateError extends Error {
+  override name = "MachineTranslateError";
+  constructor(
+    message: string,
+    readonly translated = 0,
+  ) {
+    super(message);
+  }
+}
+
+type Env = Record<string, string | undefined>;
 
 /**
  * Determines which provider to use.
  *
  * When `INLANG_MACHINE_TRANSLATE_PROVIDER` is set, that provider is used. When
- * it is unset, an already-configured BYOK provider (Google, DeepL or OpenAI) is used if
- * its API key is present; otherwise the CLI falls back to a free, third-party,
- * community-operated translation service at translate.demosjarco.dev that is
- * not owned, operated, or maintained by inlang.
+ * it is unset, an already-configured BYOK provider (Google, DeepL or OpenAI)
+ * is used if its API key is present; otherwise General Translation.
  */
-function resolveMachineTranslateProviderName(): MachineTranslateProviderName {
-  const rawProvider = process.env[PROVIDER_ENV]?.trim();
+function resolveMachineTranslateProviderName(
+  env: Env,
+): MachineTranslateProviderName {
+  const rawProvider = env[PROVIDER_ENV]?.trim();
 
   if (rawProvider && rawProvider.length > 0) {
     const providerName = rawProvider.toLowerCase();
@@ -39,58 +80,230 @@ function resolveMachineTranslateProviderName(): MachineTranslateProviderName {
       providerName !== "google" &&
       providerName !== "deepl" &&
       providerName !== "openai" &&
+      providerName !== "gt" &&
       providerName !== "demosjarco"
     ) {
-      throw new Error(
+      throw new MachineTranslateError(
         [
-          `Unsupported ${PROVIDER_ENV} value: "${process.env[PROVIDER_ENV]}".`,
-          "Supported values: google, deepl, openai, demosjarco.",
+          `Unsupported ${PROVIDER_ENV} value: "${env[PROVIDER_ENV]}".`,
+          "Supported values: google, deepl, openai, gt, demosjarco.",
         ].join("\n"),
       );
     }
     return providerName;
   }
 
-  // No provider configured: prefer a BYOK provider whose key is already set,
-  // otherwise fall back to the free, community-operated translation service.
-  if (process.env[GOOGLE_API_KEY_ENV]) {
+  // No provider configured: prefer a BYOK provider whose key is already set.
+  if (env[GOOGLE_API_KEY_ENV]) {
     return "google";
   }
-  if (process.env[DEEPL_API_KEY_ENV]) {
+  if (env[DEEPL_API_KEY_ENV]) {
     return "deepl";
   }
-  if (process.env[OPENAI_API_KEY_ENV]) {
+  if (env[OPENAI_API_KEY_ENV]) {
     return "openai";
   }
-  return "demosjarco";
+  return "gt";
 }
 
-export function resolveMachineTranslateProvider(): MachineTranslateProvider {
-  const providerName = resolveMachineTranslateProviderName();
-
-  if (providerName === "demosjarco") {
-    log.warn(
-      [
-        "Using the community-operated translation service at translate.demosjarco.dev. Stability is not guaranteed.",
-        "This service is not owned, operated, or maintained by inlang.",
-        "Provide your own API key for higher reliability and control.",
-        `Set ${PROVIDER_ENV} to "google", "deepl", or "openai" and the matching API key to use your own provider.`,
-        `See ${BYOK_URL}`,
-      ].join("\n"),
-    );
-    // Scoped to the free service only: opt in to Zero Data Retention upstream.
-    const zdr =
-      process.env[DEMOSJARCO_ZDR_ENV]?.trim().toLowerCase() === "true";
-    return createDemosjarcoTranslateProvider(
-      process.env[DEMOSJARCO_MODEL_ENV],
-      zdr,
-    );
+export async function resolveMachineTranslateProvider(args: {
+  env: Env;
+  /** The project.inlang path. General Translation credentials, and a choice of community translation, are read from and saved to the folder that contains it. */
+  projectPath: string;
+  settings: ProjectSettings;
+  /** Whether the user can be asked to sign in. */
+  interactive: boolean;
+  /** Sign in with a code instead of a browser on this machine. */
+  noBrowser?: boolean;
+  /**
+   * `--no-browser` was passed: outside a terminal too, sign in to General
+   * Translation with a code, as `gt login --no-browser` does. Coding agents
+   * sign in this way.
+   */
+  noBrowserRequested?: boolean;
+  signIn?: typeof signInToGt;
+}): Promise<AnyMachineTranslateProvider> {
+  const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
+  const fileEnv = await readEnvFiles(dir);
+  const env = { ...fileEnv, ...args.env };
+  // The provider setting comes first, wherever it is set (the shell over
+  // .env.local over .env); only without one does an API key choose.
+  const providerFromShell = args.env[PROVIDER_ENV]?.trim();
+  env[PROVIDER_ENV] = providerFromShell || fileEnv[PROVIDER_ENV];
+  const providerName = resolveMachineTranslateProviderName(env);
+  if (providerName !== "gt") {
+    const provider = resolveNamedProvider(providerName, env);
+    if (providerName === "demosjarco" && !providerFromShell) {
+      log.info(
+        `You chose this service in .env or .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
+      );
+    }
+    return provider;
   }
 
+  // Keep GT keys paired with project IDs from the same source.
+  const found = await readGtCredentials({ env: args.env, dir });
+  let credentials: { apiKey: string; projectId?: string };
+  if (found) {
+    // As gt does: a key for another project would translate into that one.
+    const configured = await readGtConfigProjectId(dir).catch(configError);
+    if (configured && found.projectId && found.projectId !== configured) {
+      throw new MachineTranslateError(
+        projectIdMismatch(configured, found.source, found.projectId),
+      );
+    }
+    credentials = found;
+  } else {
+    // A project that chose GT, by name or with a project ID (a committed
+    // gt.config.json), never sends its text to another service: not when a
+    // CI secret is missing, as in a pull request from a fork, nor when a
+    // teammate without a key would pick another service in the menu.
+    const projectChoseGt =
+      Boolean(env[PROVIDER_ENV]?.trim()) ||
+      Boolean(await findGtProjectId(dir, env).catch(configError));
+    if (!projectChoseGt && !args.interactive && !args.noBrowserRequested) {
+      // Keyless automation keeps the community service it used before GT was
+      // the default.
+      log.info(
+        `No translation provider configured. Using the community service. General Translation setup for CI and coding agents: ${GT_SETUP_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
+      );
+      return createCommunityProvider(env);
+    }
+    if (!projectChoseGt && args.interactive) {
+      // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
+      const choice = await log.prompt(
+        "Which translation provider should this project use?",
+        {
+          type: "select",
+          options: [
+            { value: "gt", label: "General Translation (recommended)" },
+            { value: "community", label: "Community translation service" },
+            { value: "other", label: "Other" },
+          ],
+          initial: "gt",
+          cancel: "undefined",
+        },
+      );
+      if (choice === "other") {
+        // Nothing is saved: the provider set up from the docs is used without asking.
+        throw new MachineTranslateError(
+          `To use another translation provider, see ${BYOK_URL}, then run this command again.`,
+        );
+      }
+      if (choice === "community") {
+        const provider = createCommunityProvider(env);
+        const addedIgnoreRule = await appendToEnvLocal({
+          dir,
+          text: `${PROVIDER_ENV}=demosjarco\n`,
+        }).catch((error: Error) => {
+          throw new MachineTranslateError(
+            `Couldn't save your choice to .env.local: ${error.message}`,
+          );
+        });
+        log.info(
+          [
+            `Saved your choice to .env.local. To be asked again, remove ${PROVIDER_ENV} from it.`,
+            ...(addedIgnoreRule ? ["Added .env.local to .gitignore."] : []),
+          ].join("\n"),
+        );
+        return provider;
+      }
+      if (choice !== "gt") throw noProviderError();
+    } else if (args.interactive) {
+      log.info("This project uses General Translation. Sign in to translate.");
+    }
+    // Outside a terminal, a `gt` sign-in on this machine still makes a key,
+    // without asking, and `--no-browser` signs in with a code. The sign-in
+    // saves the key and its project ID to .env.local.
+    const signedIn = await (args.signIn ?? signInToGt)({
+      dir,
+      settings: args.settings,
+      env,
+      interactive: args.interactive,
+      login: args.interactive || Boolean(args.noBrowserRequested),
+      noBrowser: args.noBrowser,
+    }).catch(userError);
+    if (!signedIn) {
+      throw args.interactive ? noProviderError() : await missingGtKeyError(dir);
+    }
+    credentials = signedIn;
+  }
+  if (await shareGtProjectId(dir, credentials)) {
+    log.info(
+      "Saved the General Translation project ID to gt.config.json. Commit it so teammates use the same project.",
+    );
+  }
+  return createGtTranslateProvider({
+    apiKey: credentials.apiKey,
+    projectId: credentials.projectId,
+    userAgent: `inlang-cli/${version}`,
+  });
+}
+
+/**
+ * Rethrows `error` as a MachineTranslateError: its message is for the user,
+ * so it prints without a stack trace.
+ */
+function userError(error: Error): never {
+  throw new MachineTranslateError(error.message);
+}
+
+/**
+ * Rethrows an invalid gt.config.json or a project ID mismatch as a
+ * MachineTranslateError. A file system error, such as an unreadable
+ * gt.config.json, keeps its code.
+ */
+function configError(error: Error & { code?: unknown }): never {
+  if (error.code !== undefined) throw error;
+  throw new MachineTranslateError(error.message);
+}
+
+function noProviderError(): MachineTranslateError {
+  return new MachineTranslateError(
+    `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+  );
+}
+
+/** CI and agents that chose GT, without a `gt` sign-in, are told how to get a key. */
+async function missingGtKeyError(dir: string): Promise<MachineTranslateError> {
+  // Sign-in saves the key to .env.local, so it is held back where sign-in
+  // would refuse to save it.
+  const problem = await envLocalProblem(dir);
+  return new MachineTranslateError(
+    [
+      "Machine translation needs a General Translation API key.",
+      "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output or with CI set. Over SSH, open the printed sign-in URL in your browser.",
+      `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
+      problem
+        ? `- Agents: a development key can't be saved: ${problem}, then run this command again.`
+        : "- Agents: run this command with --no-browser, and give the user the sign-in URL and code it prints. It waits until they sign in, then saves a development key to .env.local and translates. Or have the user run this command in their terminal.",
+      `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,
+      `- Or bring your own key: ${BYOK_URL}`,
+    ].join("\n"),
+  );
+}
+
+function createCommunityProvider(env: Env): MachineTranslateProvider {
+  // Names the service once per run, without arguing against a choice the
+  // user made; a run that fell back to it says why separately.
+  log.info(
+    "Translating with the community-operated service at translate.demosjarco.dev, which inlang doesn't operate.",
+  );
+  // Scoped to the free service only: opt in to Zero Data Retention upstream.
+  const zdr = env[DEMOSJARCO_ZDR_ENV]?.trim().toLowerCase() === "true";
+  return createDemosjarcoTranslateProvider(env[DEMOSJARCO_MODEL_ENV], zdr);
+}
+
+function resolveNamedProvider(
+  providerName: Exclude<MachineTranslateProviderName, "gt">,
+  env: Env,
+): MachineTranslateProvider {
+  if (providerName === "demosjarco") return createCommunityProvider(env);
+
   if (providerName === "deepl") {
-    const apiKey = process.env[DEEPL_API_KEY_ENV];
+    const apiKey = env[DEEPL_API_KEY_ENV];
     if (!apiKey) {
-      throw new Error(
+      throw new MachineTranslateError(
         [
           `${DEEPL_API_KEY_ENV} must be set to use machine translate with DeepL.`,
           "Create your own DeepL API key and export it before running this command.",
@@ -103,9 +316,9 @@ export function resolveMachineTranslateProvider(): MachineTranslateProvider {
   }
 
   if (providerName === "openai") {
-    const apiKey = process.env[OPENAI_API_KEY_ENV];
+    const apiKey = env[OPENAI_API_KEY_ENV];
     if (!apiKey) {
-      throw new Error(
+      throw new MachineTranslateError(
         [
           `${OPENAI_API_KEY_ENV} must be set to use machine translate with OpenAI.`,
           "Create an OpenAI API key and export it before running this command.",
@@ -115,14 +328,14 @@ export function resolveMachineTranslateProvider(): MachineTranslateProvider {
     }
     return createOpenAITranslateProvider(
       apiKey,
-      process.env[OPENAI_MODEL_ENV]?.trim() || undefined,
-      process.env[OPENAI_REASONING_EFFORT_ENV]?.trim() || undefined,
+      env[OPENAI_MODEL_ENV]?.trim() || undefined,
+      env[OPENAI_REASONING_EFFORT_ENV]?.trim() || undefined,
     );
   }
 
-  const apiKey = process.env[GOOGLE_API_KEY_ENV];
+  const apiKey = env[GOOGLE_API_KEY_ENV];
   if (!apiKey) {
-    throw new Error(
+    throw new MachineTranslateError(
       [
         `${GOOGLE_API_KEY_ENV} must be set to use machine translate.`,
         "Create your own Google Cloud Translation API key and export it before running this command.",

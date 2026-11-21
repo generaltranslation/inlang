@@ -7,6 +7,7 @@ import {
   selectBundleNested,
   upsertBundleNested,
   type InlangProject,
+  type VariantRow,
 } from "@inlang/sdk";
 import { projectOption } from "../../utilities/globalFlags.js";
 import progessBar from "cli-progress";
@@ -15,9 +16,15 @@ import {
   planBundleTranslation,
   translateMissing,
   type BundleTranslationPlan,
+  type MissingTranslation,
 } from "./machineTranslateBundle.js";
-import { resolveMachineTranslateProvider } from "./providers/resolveProvider.js";
+import {
+  GT_SETUP_URL,
+  MachineTranslateError,
+  resolveMachineTranslateProvider,
+} from "./providers/resolveProvider.js";
 import type { AnyMachineTranslateProvider } from "./providers/types.js";
+import { isInteractive } from "../cloud/index.js";
 
 export const translate = new Command()
   .command("translate")
@@ -29,6 +36,10 @@ export const translate = new Command()
     "Comma separated list of target locales for translation.",
   )
   .option("-n, --nobar", "disable progress bar", false)
+  .option(
+    "--no-browser",
+    "Sign in to General Translation with a code instead of a browser on this machine, also outside a terminal, as for coding agents.",
+  )
   .description("Machine translate bundles.")
   .action(async (args: { force: boolean; project: string }) => {
     let exitCode = 0;
@@ -45,27 +56,11 @@ export const translate = new Command()
   });
 
 /**
- * Thrown when a translation failed or was rejected. The message is for the
- * user as is. `translated` translations came back intact and were added to
- * the project.
- */
-export class MachineTranslateError extends Error {
-  override name = "MachineTranslateError";
-  constructor(
-    message: string,
-    readonly translated = 0,
-    /** Why translation stopped, without what was saved. */
-    readonly failure = message,
-  ) {
-    super(message);
-  }
-}
-
-/**
- * Translates and writes the translation files, but only if something was
- * translated: saving still rewrites settings.json, and plugins that don't
- * keep unchanged entries reformat their files, which must not change files
- * in git. Reports success only once the files are written.
+ * Translates and writes the translation files after each translated locale,
+ * but only if something was translated: saving still rewrites settings.json,
+ * and plugins that don't keep unchanged entries reformat their files, which
+ * must not change files in git. Reports success only once the files are
+ * written.
  */
 export async function translateAndSave(args: {
   project: InlangProject;
@@ -82,44 +77,65 @@ export async function translateAndSave(args: {
         `The translations couldn't be saved: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
-  const { translated, bundles } = await translateCommandAction(args).catch(
-    async (error) => {
-      if (error instanceof MachineTranslateError && error.translated > 0) {
-        // a failed save mustn't hide why translation stopped
-        await save().catch((saveError: Error) => {
-          throw new MachineTranslateError(
-            `${error.failure}\n${saveError.message}`,
-          );
-        });
-      }
-      throw error;
-    },
-  );
-  if (translated > 0) {
-    await save();
-  } else if (bundles > 0) {
+  const { translated, bundles } = await translateCommandAction({
+    ...args,
+    save,
+    stopOnInterrupt: true,
+  });
+  if (translated === 0 && bundles > 0) {
     log.info("No translations were added, so no files were changed.");
   }
   if (bundles > 0) log.success("Machine translate complete.");
 }
 
 /**
+ * Whether sign-in uses a code instead of a browser: as asked with
+ * `--no-browser`, or where no browser can be shown, as the cloud command
+ * decides (CI, pipes, and Linux without a display, as in SSH and containers).
+ */
+export function signInWithCode(args: {
+  browser: boolean;
+  isTTY: boolean;
+  env: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  return !args.browser || !isInteractive(args);
+}
+
+/**
  * Translates missing translations into the project. Returns how many were
  * added.
+ *
+ * The requests of all target locales share the provider's request slots.
+ * Each locale is added as soon as all its requests have settled, and `save`
+ * is called after each locale that got translations, one save at a time, so a
+ * run that is stopped keeps the locales it finished. A provider failure or
+ * `signal` stops new requests; the translations that came back, from
+ * requests in flight too, are added and saved before it throws. A failed
+ * save stops the run.
  *
  * When a translation fails, it still adds those that came back, so that the
  * next run doesn't pay for them again, and throws a `MachineTranslateError`
  * with their number. A bundle gets a new message only with all its
  * translations: half a plural would match nothing. A translation that came
  * back empty or with a placeholder dropped or changed isn't added (see
- * `planBundleTranslation`), and the run throws too.
+ * `planBundleTranslation`), and the run throws too. A save that fails after
+ * a translation failed or was rejected says so too.
  */
 export async function translateCommandAction(args: {
   project: InlangProject;
   provider?: AnyMachineTranslateProvider;
+  /** Writes the project's files; called after each translated locale. */
+  save?: () => Promise<void>;
+  /**
+   * Stops the run: no request is sent after it, and the translations that
+   * came back, from requests in flight too, are saved before it fails.
+   */
+  signal?: AbortSignal;
+  /** Stops the run as `signal` does on Ctrl+C (SIGINT) or SIGTERM while it translates. */
+  stopOnInterrupt?: boolean;
 }): Promise<{ translated: number; bundles: number }> {
   const options = translate.opts();
-  const provider = args.provider ?? resolveMachineTranslateProvider();
 
   const bar = options.nobar
     ? undefined
@@ -148,6 +164,77 @@ export async function translateCommandAction(args: {
       return { translated: 0, bundles: 0 };
     }
 
+    const planBundles = (supportsContext: boolean) => {
+      const plans: Array<{ id: string; plan: BundleTranslationPlan }> = [];
+      const errors: string[] = [];
+      for (const bundle of bundles) {
+        const plan = planBundleTranslation({
+          bundle,
+          sourceLocale: settings.baseLocale,
+          targetLocales,
+          supportsContext,
+        });
+        if ("error" in plan) {
+          errors.push(plan.error);
+          continue;
+        }
+        plans.push({ id: bundle.id, plan });
+      }
+      return {
+        plans,
+        errors,
+        missing: plans.flatMap(({ plan }) => plan.missing),
+      };
+    };
+
+    // Planned as if the provider uses context, as the default one does.
+    // Without context, a plural that needs forms the source lacks gets only
+    // the source's forms instead of being expanded, and the only forms added
+    // beyond the expanded ones are ones the target never selects. So with
+    // nothing missing there is nothing worth translating and no provider is
+    // resolved: the run doesn't ask to sign in or fail for want of a key.
+    let planned = planBundles(true);
+    const provider =
+      planned.missing.length === 0
+        ? undefined
+        : (args.provider ??
+          (await resolveMachineTranslateProvider({
+            env: process.env,
+            projectPath: options.project,
+            settings,
+            // SSH terminals can use the printed sign-in URL without a display.
+            interactive: Boolean(
+              process.stdin.isTTY && process.stdout.isTTY && !process.env.CI,
+            ),
+            noBrowser: signInWithCode({
+              browser: options.browser,
+              isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+              env: process.env,
+            }),
+            noBrowserRequested: !options.browser,
+          })));
+    if (provider && !provider.supportsContext) planned = planBundles(false);
+    const { plans, missing } = planned;
+    if (planned.errors.length > 0) {
+      log.warn("Some bundles could not be translated.");
+      log.warn(planned.errors.join("\n"));
+    }
+    /** the locales a new message was created in, by plan */
+    const created = new Map<BundleTranslationPlan, Set<string>>();
+    // a provider with context writes every form, unless the selectors differ
+    // or the target has a select value the source lacks
+    const warnPlurals = () =>
+      warnAboutPlurals(
+        plans,
+        created,
+        !provider || provider.supportsContext === true,
+      );
+    // A provider without context finds nothing when only plural forms it
+    // can't add are missing.
+    if (!provider || missing.length === 0) {
+      warnPlurals();
+      return { translated: 0, bundles: bundles.length };
+    }
     if (
       !provider.supportsContext &&
       bundles.some(
@@ -155,119 +242,181 @@ export async function translateCommandAction(args: {
       )
     ) {
       log.warn(
-        "The selected translation provider does not use bundle descriptions. Use OpenAI or DeepL to translate with context.",
+        "The selected translation provider doesn't use bundle descriptions as context.",
       );
     }
-
-    const plans: Array<{ id: string; plan: BundleTranslationPlan }> = [];
-    const errors: string[] = [];
-    for (const bundle of bundles) {
-      const plan = planBundleTranslation({
-        bundle,
-        sourceLocale: settings.baseLocale,
-        targetLocales,
-        supportsContext: provider.supportsContext,
-      });
-      if ("error" in plan) {
-        errors.push(plan.error);
-        continue;
-      }
-      plans.push({ id: bundle.id, plan });
-    }
-    if (errors.length > 0) {
-      log.warn("Some bundles could not be translated.");
-      log.warn(errors.join("\n"));
-    }
-    const missing = plans.flatMap(({ plan }) => plan.missing);
 
     bar?.start(missing.length, 0);
-    const result = await translateMissing({
-      provider,
-      sourceLocale: settings.baseLocale,
-      missing,
-      onProgress: (translated) => bar?.increment(translated),
-    });
-    bar?.stop();
-
-    const writes = plans.map(({ id, plan }) => {
-      // a new message gets a locale only with all its translations
-      const notCreated = new Set(
-        plan.missing
-          .filter((translation) => !result.translations.has(translation))
-          .map((translation) => translation.targetLocale)
-          .filter((locale) => plan.newLocales.has(locale)),
-      );
-      const translations = new Map(
-        plan.missing
-          .filter(
-            (translation) =>
-              result.translations.has(translation) &&
-              !notCreated.has(translation.targetLocale),
-          )
-          .map((translation) => [
-            translation,
-            result.translations.get(translation)!,
-          ]),
-      );
-      // Applied before the warnings, which writes nothing: a new message
-      // with a rejected translation isn't created either.
-      const bundle =
-        translations.size > 0 ? plan.apply(translations) : undefined;
-      for (const { locale } of bundle?.rejected ?? []) {
-        if (plan.newLocales.has(locale)) notCreated.add(locale);
-      }
-      return { id, plan, notCreated, translations, bundle };
-    });
-
-    // Before writing, so that a failed write doesn't lose them.
-    warnAboutPlurals(writes);
-
     /** why translations were rejected, by bundle id, by locale */
     const rejected = new Map<string, Map<string, Set<string>>>();
+    const errors = new Set<string>();
     let translated = 0;
-    for (const { translations, bundle } of writes) {
-      // Unchanged bundles aren't written back.
-      if (!bundle) continue;
-      translated += translations.size;
-      await upsertBundleNested(args.project.db, bundle.data);
-      // variants that got a new id to keep the order of the source
-      // message; deleted after the write, so that nothing is lost if it
-      // fails
-      if (bundle.replacedVariantIds?.length) {
-        await args.project.db
-          .deleteFrom("inlang_variant")
-          .where("id", "in", bundle.replacedVariantIds)
-          .execute();
-      }
-      for (const { locale, reasons } of bundle.rejected) {
-        const byId = rejected.get(locale) ?? new Map<string, Set<string>>();
-        const bundleReasons = byId.get(bundle.data.id!) ?? new Set();
-        for (const reason of reasons) bundleReasons.add(reason);
-        rejected.set(locale, byId.set(bundle.data.id!, bundleReasons));
-        translated--;
-      }
-    }
-
-    if (!result.ok || rejected.size > 0) {
-      const lines = result.ok ? [] : [result.error];
-      if (rejected.size > 0) {
-        lines.push(
-          "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:",
-          ...[...rejected].map(
-            ([locale, byId]) =>
-              `  ${locale}: ${[...byId].map(([id, reasons]) => `${id} (${[...reasons].join(", ")})`).join(", ")}`,
-          ),
+    const localeOrder = (locale: string) => targetLocales.indexOf(locale);
+    /** why translation stopped so far, without what was saved */
+    const failureLines = () => [
+      ...errors,
+      ...(rejected.size > 0
+        ? [
+            "Some translations weren't saved: they came back empty, or their placeholders don't match the source's:",
+            ...[...rejected]
+              .sort(([a], [b]) => localeOrder(a) - localeOrder(b))
+              .map(
+                ([locale, byId]) =>
+                  `  ${locale}: ${[...byId].map(([id, reasons]) => `${id} (${[...reasons].join(", ")})`).join(", ")}`,
+              ),
+          ]
+        : []),
+    ];
+    /** Adds a locale's translations to the project; returns how many. */
+    const applyLocale = async (
+      locale: string,
+      translations: Map<MissingTranslation, VariantRow["pattern"]>,
+    ) => {
+      let translatedInLocale = 0;
+      for (const { plan } of plans) {
+        const ofLocale = plan.missing.filter((t) => t.targetLocale === locale);
+        const returned = ofLocale.filter((t) => translations.has(t));
+        // a new message gets the locale only with all its translations
+        if (
+          returned.length === 0 ||
+          (returned.length < ofLocale.length && plan.newLocales.has(locale))
+        ) {
+          continue;
+        }
+        const bundle = plan.apply(
+          new Map(returned.map((t) => [t, translations.get(t)!])),
         );
+        translatedInLocale += returned.length;
+        // before the write: a failed write still reports the plurals. A
+        // rejected translation drops a new message (see `apply`).
+        if (plan.newLocales.has(locale) && bundle.rejected.length === 0) {
+          created.set(plan, (created.get(plan) ?? new Set()).add(locale));
+        }
+        // only this locale's message: a later locale's write would otherwise
+        // put back the messages of the bundle as planned
+        await upsertBundleNested(args.project.db, {
+          ...bundle.data,
+          messages: bundle.data.messages.filter(
+            (message) => message.locale === locale,
+          ),
+        });
+        // variants that got a new id to keep the order of the source
+        // message; deleted after the write, so that nothing is lost if it
+        // fails
+        if (bundle.replacedVariantIds?.length) {
+          await args.project.db
+            .deleteFrom("inlang_variant")
+            .where("id", "in", bundle.replacedVariantIds)
+            .execute();
+        }
+        for (const { reasons } of bundle.rejected) {
+          const byId = rejected.get(locale) ?? new Map<string, Set<string>>();
+          const bundleReasons = byId.get(bundle.data.id!) ?? new Set();
+          for (const reason of reasons) bundleReasons.add(reason);
+          rejected.set(locale, byId.set(bundle.data.id!, bundleReasons));
+          translatedInLocale--;
+        }
       }
-      // why translation stopped, without what was saved: a failed save
-      // reports it next to its own error
-      const failure = lines.join("\n");
+      return translatedInLocale;
+    };
+
+    // The requests of all locales share the provider's request slots, and
+    // each locale is added and saved as soon as all its requests have
+    // settled, one locale at a time: a run that is stopped, or whose provider
+    // fails, keeps every locale it finished.
+    const locales = [...new Set(missing.map((t) => t.targetLocale))];
+    const done = new Set<string>();
+    /** Stops new requests when a save fails, or when the run is stopped. */
+    const stop = new AbortController();
+    let stopped = false;
+    const abort = () => {
+      stopped = true;
+      stop.abort();
+    };
+    if (args.signal?.aborted) abort();
+    args.signal?.addEventListener("abort", abort, { once: true });
+    // Ctrl+C saves what came back; a second one quits without saving it.
+    const interrupt = () => {
+      if (stop.signal.aborted) process.exit(130);
+      bar?.stop();
+      log.warn(
+        "Stopping: saving the translations that came back. Press Ctrl+C again to quit without saving them.",
+      );
+      abort();
+    };
+    if (args.stopOnInterrupt) {
+      process.on("SIGINT", interrupt);
+      process.on("SIGTERM", interrupt);
+    }
+    let saveError: Error | undefined;
+    /** the locales whose translations a save wrote */
+    const saved: string[] = [];
+    let saving = Promise.resolve();
+    const finish = (
+      locale: string,
+      translations: Map<MissingTranslation, VariantRow["pattern"]>,
+    ) => {
+      if (done.has(locale)) return;
+      done.add(locale);
+      saving = saving.then(async () => {
+        if (saveError) return;
+        try {
+          const translatedInLocale = await applyLocale(locale, translations);
+          translated += translatedInLocale;
+          if (translatedInLocale > 0) {
+            await args.save?.();
+            saved.push(locale);
+          }
+        } catch (error) {
+          saveError = error as Error;
+          stop.abort();
+        }
+      });
+    };
+    try {
+      const result = await translateMissing({
+        provider,
+        sourceLocale: settings.baseLocale,
+        missing,
+        onProgress: (count) => bar?.increment(count),
+        onLocaleDone: finish,
+        signal: stop.signal,
+      });
+      if (!result.ok) errors.add(result.error);
+      // what came back for the locales a failure or a stop cut short
+      for (const locale of locales) finish(locale, result.translations);
+      await saving;
+    } finally {
+      args.signal?.removeEventListener("abort", abort);
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", interrupt);
+      bar?.stop();
+      // However the run ends, so that a failed write doesn't lose them.
+      warnPlurals();
+    }
+    if (saveError) {
+      // a failed save mustn't hide why translation stopped, nor what is on
+      // disk already
+      const savedLine =
+        saved.length > 0
+          ? `Saved before that: ${shortList(saved)}. Run again to translate the rest.`
+          : undefined;
+      const lines = [...failureLines(), saveError.message];
+      if (savedLine) lines.push(savedLine);
+      throw lines.length > 1
+        ? new MachineTranslateError(lines.join("\n"))
+        : saveError;
+    }
+    if (stopped) errors.add("Machine translation was stopped.");
+
+    const lines = failureLines();
+    if (lines.length > 0) {
       if (translated > 0) {
         lines.push(
           `Saved the ${translated} ${translated === 1 ? "translation" : "translations"} that came back${rejected.size > 0 ? " intact" : ""}. Run again to translate the rest.`,
         );
       }
-      throw new MachineTranslateError(lines.join("\n"), translated, failure);
+      throw new MachineTranslateError(lines.join("\n"), translated);
     }
     return { translated, bundles: bundles.length };
   } catch (error) {
@@ -278,16 +427,17 @@ export async function translateCommandAction(args: {
 
 /**
  * Warns about the plurals of each bundle (see `PluralReport`), but not about a
- * new message that isn't created because one of its translations failed or
- * was rejected: the next run translates it whole.
+ * new message that wasn't created, because one of its translations failed or
+ * was rejected, or its locale wasn't reached: the next run translates it
+ * whole.
  */
 function warnAboutPlurals(
-  writes: Array<{
-    id: string;
-    plan: BundleTranslationPlan;
-    notCreated: Set<string>;
-  }>,
+  plans: Array<{ id: string; plan: BundleTranslationPlan }>,
+  created: Map<BundleTranslationPlan, Set<string>>,
+  supportsContext: boolean,
 ): void {
+  const reported = (plan: BundleTranslationPlan, locale: string) =>
+    !plan.newLocales.has(locale) || Boolean(created.get(plan)?.has(locale));
   /** bundle ids and the plural categories they lack, by locale */
   const incomplete = new Map<
     string,
@@ -296,9 +446,9 @@ function warnAboutPlurals(
   /** bundle ids whose message has other selectors than the source's, by locale */
   const differentSelectors = new Map<string, string[]>();
   const unknownPluralRules = new Set<string>();
-  for (const { id, plan, notCreated } of writes) {
+  for (const { id, plan } of plans) {
     for (const { locale, categories } of plan.incompletePlurals) {
-      if (notCreated.has(locale)) continue;
+      if (!reported(plan, locale)) continue;
       const entry = incomplete.get(locale) ?? {
         ids: [],
         categories: new Set(),
@@ -314,7 +464,7 @@ function warnAboutPlurals(
       ]);
     }
     for (const locale of plan.unknownPluralRules) {
-      if (!notCreated.has(locale)) unknownPluralRules.add(locale);
+      if (reported(plan, locale)) unknownPluralRules.add(locale);
     }
   }
 
@@ -327,6 +477,11 @@ function warnAboutPlurals(
             `  ${locale} (${[...categories].join(", ")}): ${shortList(ids)}`,
         ),
         "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+        ...(supportsContext
+          ? []
+          : [
+              `General Translation writes every form a language needs: ${GT_SETUP_URL}`,
+            ]),
       ].join("\n"),
     );
   }

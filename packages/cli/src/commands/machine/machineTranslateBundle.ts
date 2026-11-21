@@ -125,7 +125,7 @@ type MachineTranslateArgs = {
 };
 
 /** A translation that a bundle is missing. */
-type MissingTranslation = {
+export type MissingTranslation = {
   /** The variant the translation is translated from. */
   sourceVariant: VariantRow;
   /** The matches of the translated variant: the form of the target. */
@@ -916,12 +916,20 @@ function categoryOf(variant: Pick<VariantRow, "matches">, selector: string) {
  * Translates the missing translations. A batch provider gets the texts of each
  * target locale in requests of at most `MAX_TEXTS_PER_REQUEST`, with at most
  * `MAX_CONCURRENT_REQUESTS` in flight; a single-text provider gets one request
- * per text, with at most `MAX_CONCURRENT_TEXT_REQUESTS` in flight.
+ * per text, with at most `MAX_CONCURRENT_TEXT_REQUESTS` in flight. The
+ * requests of all target locales share those slots, so a run with a few texts
+ * in each of many locales doesn't send one request at a time.
+ *
+ * `onLocaleDone` is called once for each target locale whose requests have
+ * all settled, failed ones too, so that its translations can be saved while
+ * other locales are still being translated. It isn't called for a locale
+ * whose requests a stop kept from being sent.
  *
  * A failed text does not stop unrelated requests. A rate-limited request is
  * sent again (see `MAX_RATE_LIMIT_RETRIES`). A provider failure (including a
  * thrown network error, or a rate limit that outlasts the retries) stops new
- * requests; those in flight still settle.
+ * requests; those in flight still settle. So does `signal`, without a
+ * failure of its own.
  * Returns every failure and the translations that came back.
  */
 export async function translateMissing(args: {
@@ -930,6 +938,13 @@ export async function translateMissing(args: {
   missing: MissingTranslation[];
   /** Called with the number of texts each successful request translated. */
   onProgress?: (translated: number) => void;
+  /** Called when every request of a target locale has settled. */
+  onLocaleDone?: (
+    locale: string,
+    translations: Map<MissingTranslation, VariantRow["pattern"]>,
+  ) => void;
+  /** Stops new requests, as a provider failure does. */
+  signal?: AbortSignal;
   /** Waits before a rate-limited request is sent again; for tests. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 }): Promise<
@@ -981,67 +996,87 @@ export async function translateMissing(args: {
     byLocale.set(translation.targetLocale, missing);
   }
 
-  /** Aborts on a provider failure: no request is sent after it. */
+  /** Aborts on a provider failure or `signal`: no request is sent after it. */
   const stop = new AbortController();
+  const abort = () => stop.abort();
+  if (args.signal?.aborted) abort();
+  args.signal?.addEventListener("abort", abort, { once: true });
+  /** The requests of each target locale that haven't settled. */
+  const unsettled = new Map<string, number>();
+  for (const { targetLocale } of args.missing) {
+    unsettled.set(targetLocale, 0);
+  }
   /** Each sends one request and records what it translated. */
-  const requests: Array<() => Promise<{ ok: true } | TranslateFailure>> = [];
+  const requests: Array<{
+    locale: string;
+    send: () => Promise<{ ok: true } | TranslateFailure>;
+  }> = [];
   for (const [targetLocale, missing] of byLocale) {
     for (let start = 0; start < missing.length; start += textsPerRequest) {
       const chunk = missing.slice(start, start + textsPerRequest);
-      requests.push(async () => {
-        // keyed by position, not by source variant id, so that one source
-        // variant can have several translations into a locale (e.g. one per
-        // plural form of the target language), each with its own context
-        const result = await retryRateLimited(
-          () =>
-            translateBatch({
-              sourceLocale,
-              targetLocale,
-              texts: Object.fromEntries(
-                chunk.map(({ text, context }, index) => [
-                  String(index),
-                  { text, context },
-                ]),
-              ),
-            }),
-          args.wait ?? sleep,
-          stop.signal,
-        );
-        // The texts that did come back are kept, as with any failure, even
-        // when one of them is missing or isn't a valid pattern.
-        let textError: string | undefined;
-        for (const [index, translation] of chunk.entries()) {
-          const text: unknown = result.translatedTexts?.[String(index)];
-          if (text === undefined) {
-            textError ??= `No translation was returned for "${translation.text}".`;
-            continue;
+      unsettled.set(targetLocale, unsettled.get(targetLocale)! + 1);
+      requests.push({
+        locale: targetLocale,
+        send: async () => {
+          // keyed by position, not by source variant id, so that one source
+          // variant can have several translations into a locale (e.g. one per
+          // plural form of the target language), each with its own context
+          const result = await retryRateLimited(
+            () =>
+              translateBatch({
+                sourceLocale,
+                targetLocale,
+                texts: Object.fromEntries(
+                  chunk.map(({ text, context }, index) => [
+                    String(index),
+                    { text, context },
+                  ]),
+                ),
+              }),
+            args.wait ?? sleep,
+            stop.signal,
+          );
+          // The texts that did come back are kept, as with any failure, even
+          // when one of them is missing or isn't a valid pattern.
+          let textError: string | undefined;
+          for (const [index, translation] of chunk.entries()) {
+            const text: unknown = result.translatedTexts?.[String(index)];
+            if (text === undefined) {
+              textError ??= `No translation was returned for "${translation.text}".`;
+              continue;
+            }
+            // a malformed answer, such as 42 or {}, would parse as a blank text
+            if (typeof text !== "string") {
+              textError ??= `The translation of "${translation.text}" isn't text.`;
+              continue;
+            }
+            try {
+              translations.set(translation, deserializePattern(text));
+            } catch (error) {
+              textError ??= String(error);
+            }
           }
-          // a malformed answer, such as 42 or {}, would parse as a blank text
-          if (typeof text !== "string") {
-            textError ??= `The translation of "${translation.text}" isn't text.`;
-            continue;
-          }
-          try {
-            translations.set(translation, deserializePattern(text));
-          } catch (error) {
-            textError ??= String(error);
-          }
-        }
-        if (!result.ok) return result;
-        if (textError !== undefined)
-          return { ok: false, error: textError, scope: "text" };
-        args.onProgress?.(chunk.length);
-        return result;
+          if (!result.ok) return result;
+          if (textError !== undefined)
+            return { ok: false, error: textError, scope: "text" };
+          args.onProgress?.(chunk.length);
+          return result;
+        },
       });
     }
+  }
+  // a locale whose texts are all blank has nothing to send
+  for (const [locale, count] of unsettled) {
+    if (count === 0) args.onLocaleDone?.(locale, translations);
   }
 
   const errors = new Set<string>();
   let next = 0;
   const worker = async () => {
     while (!stop.signal.aborted && next < requests.length) {
+      const request = requests[next++]!;
       // Thrown errors, such as network failures, are provider-wide.
-      const result = await requests[next++]!().catch(
+      const result = await request.send().catch(
         (error): TranslateFailure => ({ ok: false, error: String(error) }),
       );
       if (!result.ok) {
@@ -1052,6 +1087,9 @@ export async function translateMissing(args: {
         }
         if (result.scope !== "text") stop.abort();
       }
+      const left = unsettled.get(request.locale)! - 1;
+      unsettled.set(request.locale, left);
+      if (left === 0) args.onLocaleDone?.(request.locale, translations);
     }
   };
   await Promise.all(
@@ -1064,8 +1102,15 @@ export async function translateMissing(args: {
       () => worker(),
     ),
   );
+  args.signal?.removeEventListener("abort", abort);
   return errors.size > 0
-    ? { ok: false, error: [...errors].join("\n"), translations }
+    ? {
+        ok: false,
+        error: [...errors].join("\n"),
+        // whether the failures stopped the requests not yet sent
+        scope: stop.signal.aborted ? "provider" : "text",
+        translations,
+      }
     : { ok: true, translations };
 }
 

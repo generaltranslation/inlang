@@ -4,12 +4,14 @@ import type {
   Declaration,
   NewBundleNested,
   Pattern,
+  VariantRow,
 } from "@inlang/sdk";
 import { checkTranslation } from "@inlang/sdk";
 import {
   orderLikeSource,
   planBundleTranslation,
   translateMissing,
+  type MissingTranslation,
 } from "./machineTranslateBundle.js";
 import { machineTranslateBundle } from "./machineTranslateBundle.test-util.js";
 import type { TranslateBatchArgs } from "./providers/types.js";
@@ -1789,6 +1791,55 @@ test("a blank catch-all is copied, so a new message matches every number", async
   const translated = result.data!.messages.find((m) => m.locale === "de")!;
   expect(valuesOf(translated)).toEqual(["one", "*"]);
   expect(translated.variants[1]!.pattern).toEqual([]);
+});
+
+test("onLocaleDone is called once for each locale when its requests have settled, and at once for a locale whose texts are all blank", async () => {
+  const variant = (pattern: VariantRow["pattern"]): VariantRow => ({
+    id: "v",
+    message_id: "m",
+    matches: [],
+    pattern,
+  });
+  const missing: MissingTranslation[] = [
+    {
+      sourceVariant: variant([{ type: "text", value: "Hi" }]),
+      matches: [],
+      targetLocale: "de",
+      text: "Hi",
+    },
+    {
+      sourceVariant: variant([{ type: "text", value: "Bye" }]),
+      matches: [],
+      targetLocale: "de",
+      text: "Bye",
+    },
+    { sourceVariant: variant([]), matches: [], targetLocale: "fr", text: "" },
+  ];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const done: string[] = [];
+  const run = translateMissing({
+    provider: {
+      translateBatch: async ({ texts }) => {
+        await held;
+        return {
+          ok: true,
+          translatedTexts: Object.fromEntries(
+            Object.keys(texts).map((key) => [key, "Hallo"]),
+          ),
+        };
+      },
+    },
+    sourceLocale: "en",
+    missing,
+    onLocaleDone: (locale, translations) =>
+      done.push(`${locale} ${translations.size}`),
+  });
+
+  expect(done).toEqual(["fr 1"]);
+  release();
+  await run;
+  expect(done).toEqual(["fr 1", "de 3"]);
 });
 
 test("copied blank sources count toward progress", async () => {

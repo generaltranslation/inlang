@@ -1,11 +1,12 @@
-import { afterEach, test, expect, vi } from "vitest";
+import { afterEach, beforeEach, test, expect, vi } from "vitest";
 import {
-  MachineTranslateError,
+  signInWithCode,
   translate,
   translateAndSave,
   translateCommandAction,
 } from "./translate.js";
 import { log } from "../../utilities/log.js";
+import { MachineTranslateError } from "./providers/resolveProvider.js";
 import type {
   BatchMachineTranslateProvider,
   TranslateBatchArgs,
@@ -22,6 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { createRequire } from "node:module";
+import progressBar from "cli-progress";
 import {
   insertBundleNested,
   loadProjectFromDirectory,
@@ -31,10 +33,29 @@ import {
   type NewBundleNested,
 } from "@inlang/sdk";
 
+const BYOK_URL = "https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok";
+
+let providerDirectory: string;
+beforeEach(() => {
+  providerDirectory = fs.mkdtempSync(
+    nodePath.join(os.tmpdir(), "inlang-command-env-"),
+  );
+  const opts = translate.opts.bind(translate);
+  vi.spyOn(translate, "opts").mockImplementation(() => {
+    const options = opts();
+    return {
+      ...options,
+      project:
+        options.project ?? nodePath.join(providerDirectory, "project.inlang"),
+    };
+  });
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  fs.rmSync(providerDirectory, { recursive: true, force: true });
 });
 
 test("skipping the retry waits leaves other timers alone (Lix's close watchdog is 5000 ms)", async () => {
@@ -44,33 +65,6 @@ test("skipping the retry waits leaves other timers alone (Lix's close watchdog i
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(fired).toBe(false);
   clearTimeout(timer);
-});
-
-test("requires INLANG_GOOGLE_TRANSLATE_API_KEY", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
-  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
-
-  await expect(translateCommandAction({ project: {} as any })).rejects.toThrow(
-    "INLANG_GOOGLE_TRANSLATE_API_KEY must be set",
-  );
-});
-
-test("requires INLANG_DEEPL_API_KEY when provider is deepl", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "deepl");
-  vi.stubEnv("INLANG_DEEPL_API_KEY", "");
-
-  await expect(translateCommandAction({ project: {} as any })).rejects.toThrow(
-    "INLANG_DEEPL_API_KEY must be set",
-  );
-});
-
-test("requires INLANG_OPENAI_API_KEY when provider is openai", async () => {
-  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "openai");
-  vi.stubEnv("INLANG_OPENAI_API_KEY", "");
-
-  await expect(translateCommandAction({ project: {} as any })).rejects.toThrow(
-    "INLANG_OPENAI_API_KEY must be set",
-  );
 });
 
 function unavailableResponse() {
@@ -279,7 +273,7 @@ test.runIf(process.env.INLANG_DEEPL_API_KEY)(
   { timeout: 10000 },
 );
 
-/** A project on disk with the message-format plugin and the given message files. */
+/** A project on disk with the message-format plugin and a message file per locale. */
 async function projectOnDisk(messages: Record<string, string>) {
   const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "inlang-translate-"));
   const path = nodePath.join(root, "project.inlang");
@@ -292,7 +286,7 @@ async function projectOnDisk(messages: Record<string, string>) {
     nodePath.join(path, "settings.json"),
     JSON.stringify({
       baseLocale: "en",
-      locales: ["en", "de"],
+      locales: Object.keys(messages),
       modules: ["./project.inlang/plugins/message-format.js"],
       "plugin.inlang.messageFormat": {
         pathPattern: "./messages/{locale}.json",
@@ -324,11 +318,13 @@ test("doesn't rewrite translation files when nothing was translated", async () =
   const { project, path, read, cleanup } = await projectOnDisk({ en, de });
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
+  const success = vi.spyOn(log, "success");
   try {
     await translateAndSave({ project, path });
     expect(fetch).not.toHaveBeenCalled();
     expect(read("en")).toBe(en);
     expect(read("de")).toBe(de);
+    expect(success).toHaveBeenCalledTimes(1);
   } finally {
     await cleanup();
   }
@@ -836,11 +832,8 @@ test("a provider failure stops requests the community service has queued", async
 });
 
 test("at most 4 batch requests are in flight", async () => {
-  // a batch per target locale
-  const project = await projectWithTextBundles(
-    ["en", "de", "fr", "es", "it", "nl", "pt"],
-    1,
-  );
+  // locales are translated one after another: 6 batches of 50 texts in one
+  const project = await projectWithTextBundles(["en", "de"], 300);
   const pending: Array<() => void> = [];
   const provider = {
     translateBatch: ({ texts }: { texts: Record<string, unknown> }) =>
@@ -865,7 +858,7 @@ test("at most 4 batch requests are in flight", async () => {
       await vi.waitFor(() => expect(pending.length).toBeGreaterThan(index));
       pending[index]!();
     }
-    expect(await run).toMatchObject({ translated: 6 });
+    expect(await run).toMatchObject({ translated: 300 });
   } finally {
     await project.close();
   }
@@ -1188,7 +1181,8 @@ test("a long list of messages is shortened, and translations with other selector
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): a, b, c, d, e, … and 2 more\n" +
-          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
       [
         "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:\n" +
@@ -1217,17 +1211,23 @@ test("plurals that need forms the source lacks get the source's forms and are re
     await insertBundleNested(project.db, pluralBundle(id));
   }
   const warn = vi.spyOn(log, "warn");
-  const { provider } = fakeBatchProvider();
-  // a provider that uses context gets every form instead
-  provider.supportsContext = false;
+  // Google doesn't use context; a provider that does gets every form instead
+  clearProviderEnv();
+  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "google-key");
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    Response.json({
+      data: { translations: [{ translatedText: "Übersetzt" }] },
+    }),
+  );
   try {
-    await translateCommandAction({ project, provider });
+    await translateCommandAction({ project });
     expect(warn.mock.calls).toEqual([
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): cart, items\n" +
           "  ar (zero, two, few, many): cart, items\n" +
-          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
       ["Plural rules unknown for x-foo; copied the source's forms."],
     ]);
@@ -1247,24 +1247,38 @@ test("plurals that need forms the source lacks get the source's forms and are re
   }
 });
 
-test("with a provider that uses context, every plural form is translated", async () => {
-  const project = await projectWithTextBundles(["en", "ru"], 0);
-  await insertBundleNested(project.db, pluralBundle("items"));
-  const { provider } = fakeBatchProvider();
+test("General Translation, the default provider, gets every plural form", async () => {
+  clearProviderEnv();
+  vi.stubEnv("GT_API_KEY", "gt-key");
+  // translates each text to itself
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (_, init) => {
+    const { requests } = JSON.parse(String(init!.body));
+    return Response.json(
+      Object.fromEntries(
+        Object.entries<{ source: string }>(requests).map(([key, request]) => [
+          key,
+          { success: true, translation: request.source },
+        ]),
+      ),
+    );
+  });
+  vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  const { path, read, cleanup } = await projectOnDisk({
+    en: `{"items": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "One item", "countPlural=*": "Items"}}]}`,
+    ru: `{}`,
+  });
   try {
-    await translateCommandAction({ project, provider });
-    const [bundle] = await selectBundleNested(project.db).execute();
-    expect(
-      bundle!.messages
-        .find((message) => message.locale === "ru")!
-        .variants.map((variant) =>
-          variant.matches[0]!.type === "literal-match"
-            ? variant.matches[0]!.value
-            : "*",
-        ),
-    ).toEqual(["one", "few", "many", "*"]);
+    await translate.parseAsync(["--project", path, "--nobar"], {
+      from: "user",
+    });
+    expect(Object.keys(JSON.parse(read("ru")).items[0].match)).toEqual([
+      "countPlural=one",
+      "countPlural=few",
+      "countPlural=many",
+      "countPlural=*",
+    ]);
   } finally {
-    await project.close();
+    await cleanup();
   }
 });
 
@@ -1336,6 +1350,147 @@ test("rejected translations are reported by bundle and locale, the others are sa
   }
 });
 
+/**
+ * Unsets every variable that selects a provider, including GT keys such as
+ * `VITE_GT_DEV_API_KEY` from the developer's shell, which would otherwise
+ * reach General Translation's API.
+ */
+function clearProviderEnv() {
+  for (const name of Object.keys(process.env)) {
+    if (/^INLANG_|GT_(DEV_)?API_KEY$|GT_PROJECT_ID$/.test(name))
+      vi.stubEnv(name, "");
+  }
+}
+
+test.each([
+  { stdinTTY: false, stdoutTTY: true, ci: "", asks: false },
+  { stdinTTY: true, stdoutTTY: false, ci: "", asks: false },
+  { stdinTTY: true, stdoutTTY: true, ci: "", asks: true },
+  { stdinTTY: true, stdoutTTY: true, ci: "1", asks: false },
+])(
+  "unconfigured runs translate unattended and ask only at a terminal (%o)",
+  async ({ stdinTTY, stdoutTTY, ci, asks }) => {
+    clearProviderEnv();
+    vi.stubEnv("CI", ci);
+    vi.stubEnv("DISPLAY", undefined);
+    vi.stubEnv("WAYLAND_DISPLAY", undefined);
+    const restoreTTY = [
+      stubIsTTY(process.stdin, stdinTTY),
+      stubIsTTY(process.stdout, stdoutTTY),
+    ];
+    // Ctrl+C or Esc at the sign-in question, which consola's types leave out
+    const prompt = vi
+      .spyOn(log, "prompt")
+      .mockResolvedValue(undefined as never);
+    vi.spyOn(log, "log").mockImplementation(() => undefined);
+    const fetch = vi.fn().mockImplementation(async () =>
+      Response.json({
+        data: { translations: [{ translatedText: "Alpha DE" }] },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const { path, read, cleanup } = await projectOnDisk({
+      en: `{"alpha": "Alpha"}`,
+      de: `{}`,
+    });
+    const root = nodePath.dirname(path);
+    vi.stubEnv("PATH", nodePath.join(root, "no-npx"));
+    const error = vi.spyOn(log, "error");
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      await translate.parseAsync(["--project", path, "--nobar"], {
+        from: "user",
+      });
+      expect(prompt).toHaveBeenCalledTimes(asks ? 1 : 0);
+      expect(exit).toHaveBeenCalledWith(asks ? 1 : 0);
+      const requests = fetch.mock.calls.filter(([url]) =>
+        String(url).startsWith("https://"),
+      );
+      if (asks) {
+        expect(error.mock.calls).toEqual([
+          [
+            `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+          ],
+        ]);
+        expect(requests).toEqual([]);
+        expect(JSON.parse(read("de"))).toEqual({});
+      } else {
+        expect(error).not.toHaveBeenCalled();
+        expect(requests).toHaveLength(1);
+        expect(String(requests[0]![0])).toMatch(
+          /^https:\/\/translate\.demosjarco\.dev\//,
+        );
+        expect(JSON.parse(read("de"))).toMatchObject({ alpha: "Alpha DE" });
+        expect(fs.existsSync(nodePath.join(root, ".env.local"))).toBe(false);
+        expect(fs.existsSync(nodePath.join(root, "gt.config.json"))).toBe(
+          false,
+        );
+      }
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      for (const restore of restoreTTY) restore();
+      await cleanup();
+    }
+  },
+);
+
+function stubIsTTY(
+  stream: NodeJS.ReadStream | NodeJS.WriteStream,
+  value: boolean,
+) {
+  const original = Object.getOwnPropertyDescriptor(stream, "isTTY");
+  Object.defineProperty(stream, "isTTY", { value, configurable: true });
+  return () => {
+    if (original) Object.defineProperty(stream, "isTTY", original);
+    else delete (stream as { isTTY?: boolean }).isTTY;
+  };
+}
+
+test("a run with nothing to translate needs no provider and reports what it skipped", async () => {
+  // would fail for the missing key if the provider were resolved
+  vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "google");
+  vi.stubEnv("INLANG_GOOGLE_TRANSLATE_API_KEY", "");
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  // a Russian plural of an English text, skipped instead of expanded
+  const items = textBundle("items", "Items");
+  const {
+    declarations,
+    messages: [plural],
+  } = pluralBundle("plural");
+  await insertBundleNested(project.db, {
+    ...items,
+    declarations,
+    messages: [
+      ...items.messages,
+      { ...plural!, bundle_id: "items", locale: "ru" },
+    ],
+  });
+  const warn = vi.spyOn(log, "warn");
+  try {
+    expect(await translateCommandAction({ project })).toEqual({
+      translated: 0,
+      bundles: 1,
+    });
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+      ],
+      [
+        "Some translations choose their forms by other selectors than the source, such as none or no exact number, so the source's forms can't be added to them; translate them by hand:\n" +
+          "  ru: items",
+      ],
+    ]);
+  } finally {
+    await project.close();
+  }
+});
+
 test("a failed request and rejected translations are reported in one error", async () => {
   const project = await projectWithTextBundles(["en", "de"], 2);
   const items = textBundle("items", "Items of ");
@@ -1365,6 +1520,93 @@ test("a failed request and rejected translations are reported in one error", asy
     await project.close();
   }
 });
+
+test("a provider without context that finds nothing to translate starts no translation", async () => {
+  // Russian needs forms the English plural lacks: missing with context. It
+  // has the source's forms, all a provider without context could add.
+  const project = await projectWithTextBundles(["en", "ru"], 0);
+  const bundle = pluralBundle("items");
+  const [en] = bundle.messages;
+  await insertBundleNested(project.db, {
+    ...bundle,
+    description: "How many items are in the cart",
+    messages: [
+      en!,
+      {
+        ...en!,
+        id: "items_ru",
+        locale: "ru",
+        variants: en!.variants.map((variant) => ({
+          ...variant,
+          id: `${variant.id}_ru`,
+          message_id: "items_ru",
+          pattern: [{ type: "text" as const, value: "Товары" }],
+        })),
+      },
+    ],
+  });
+  const start = vi.spyOn(progressBar.SingleBar.prototype, "start");
+  const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+  const { provider, calls } = fakeBatchProvider();
+  try {
+    expect(
+      await translateCommandAction({
+        project,
+        provider: { ...provider, supportsContext: false },
+      }),
+    ).toEqual({ translated: 0, bundles: 1 });
+    expect(start).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    // Only the incomplete plural, not that descriptions aren't used.
+    expect(warn.mock.calls).toEqual([
+      [
+        "Some plurals lack forms their language needs; add them by hand:\n" +
+          "  ru (few, many): items\n" +
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
+      ],
+    ]);
+  } finally {
+    await project.close();
+  }
+});
+
+test.each([
+  {
+    supportsContext: false,
+    description: "A greeting on the home page",
+    warnings: [
+      [
+        "The selected translation provider doesn't use bundle descriptions as context.",
+      ],
+    ],
+  },
+  {
+    supportsContext: true,
+    description: "A greeting on the home page",
+    warnings: [],
+  },
+])(
+  "warns only when the provider ignores bundle descriptions (supportsContext: $supportsContext, description: $description)",
+  async ({ supportsContext, description, warnings }) => {
+    const project = await projectWithTextBundles(["en", "de"], 0);
+    await insertBundleNested(project.db, {
+      ...textBundle("hello", "Hello"),
+      description,
+    });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const { provider } = fakeBatchProvider();
+    try {
+      await translateCommandAction({
+        project,
+        provider: { ...provider, supportsContext },
+      });
+      expect(warn.mock.calls).toEqual(warnings);
+    } finally {
+      await project.close();
+    }
+  },
+);
 
 test("a failed save still lists the rejected translations, without what it saved", async () => {
   vi.stubEnv("INLANG_MACHINE_TRANSLATE_PROVIDER", "demosjarco");
@@ -1434,7 +1676,8 @@ test("a translation without forms gets the source's selectors with its forms, an
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): cart\n" +
-          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
     ]);
     const ru = await russianMessage(project, "cart");
@@ -1506,7 +1749,8 @@ test("a message isn't created, or filled, without all its translations, and isn'
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): items\n" +
-          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
     ]);
     expect(await russianMessage(project, "cart")).toBeUndefined();
@@ -1547,7 +1791,7 @@ test("unknown plural rules aren't reported for a message that isn't created", as
   }
 });
 
-test("plurals are reported before anything is written, so a failed write keeps the report", async () => {
+test("a failed write keeps the plural report", async () => {
   const project = await projectWithTextBundles(["en", "ru"], 0);
   await insertBundleNested(project.db, pluralBundle("cart"));
   const warn = vi.spyOn(log, "warn");
@@ -1567,7 +1811,8 @@ test("plurals are reported before anything is written, so a failed write keeps t
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): cart\n" +
-          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
     ]);
   } finally {
@@ -1630,7 +1875,8 @@ test("a new message with a rejected translation isn't created, and isn't reporte
       [
         "Some plurals lack forms their language needs; add them by hand:\n" +
           "  ru (few, many): bag, items\n" +
-          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.",
+          "Until then, whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key.\n" +
+          "General Translation writes every form a language needs: https://inlang.com/m/2qj2w8pu/app-inlang-cli#machine-translate",
       ],
     ]);
     expect(await russianMessage(project, "cart")).toBeUndefined();
@@ -1663,4 +1909,36 @@ test("with a provider that uses context, a translation without forms gets every 
   } finally {
     await project.close();
   }
+});
+
+test.each([
+  [
+    "--no-browser",
+    { browser: false, platform: "darwin" as const, env: {} },
+    true,
+  ],
+  [
+    "Linux without a display, as over SSH or in a container",
+    { browser: true, platform: "linux" as const, env: {} },
+    true,
+  ],
+  [
+    "CI",
+    { browser: true, platform: "darwin" as const, env: { CI: "1" } },
+    true,
+  ],
+  [
+    "Linux with a display",
+    { browser: true, platform: "linux" as const, env: { DISPLAY: ":0" } },
+    false,
+  ],
+  ["macOS", { browser: true, platform: "darwin" as const, env: {} }, false],
+])("signs in with a code for %s: %s", (_, args, expected) => {
+  expect(signInWithCode({ ...args, isTTY: true })).toBe(expected);
+});
+
+test("translate has a --no-browser option", () => {
+  expect(
+    translate.options.find((option) => option.long === "--no-browser"),
+  ).toBeDefined();
 });

@@ -51,11 +51,15 @@ type Prompt = (
 export async function readGtCredentials(args: {
   env: Record<string, string | undefined>;
   dir: string;
-}): Promise<GtCredentials | undefined> {
-  return (
-    findCredentials(args.env) ?? findCredentials(await readEnvFiles(args.dir))
-  );
+}): Promise<(GtCredentials & { source: CredentialSource }) | undefined> {
+  const fromEnv = findCredentials(args.env);
+  if (fromEnv) return { ...fromEnv, source: "the environment" };
+  const fromFiles = findCredentials(await readEnvFiles(args.dir));
+  return fromFiles && { ...fromFiles, source: ".env.local or .env" };
 }
+
+/** Where a key was found, as error messages name it. */
+export type CredentialSource = "the environment" | ".env.local or .env";
 
 /** The key's prefix is group 1. */
 const API_KEY = /^(?:GT_API_KEY|((?:\w*_)?)GT_DEV_API_KEY)$/;
@@ -86,7 +90,9 @@ function findCredentials(
   return undefined;
 }
 
-async function readEnvFiles(dir: string): Promise<Record<string, string>> {
+export async function readEnvFiles(
+  dir: string,
+): Promise<Record<string, string>> {
   return {
     ...(await readEnvFile(dir, ".env")),
     ...(await readEnvFile(dir, ".env.local")),
@@ -132,9 +138,12 @@ const defaultAccount: GtAccount = {
  * machine is still valid, and makes a key for the project `dir`'s .env files,
  * gt.config.json or `env` name, creating one in the user's organization
  * otherwise. The key may only translate. It and its project ID are appended
- * to `dir/.env.local`, and the key is never printed. It may ask for an
- * organization, so call it only in an interactive terminal. Resolves
- * `undefined` if the user cancels that.
+ * to `dir/.env.local`, and the key is never printed. Resolves `undefined` if
+ * the user cancels the question for the organization.
+ *
+ * Without `interactive`, it doesn't ask: it fails if it would have to. It
+ * then signs in only with `login`, and otherwise resolves `undefined`
+ * without a valid sign-in.
  *
  * `.env.local` gets a `.gitignore` rule unless git ignores it already, and a
  * tracked or symlinked `.env.local` fails before the sign-in.
@@ -164,6 +173,9 @@ async function signInAndSaveKey(args: {
   dir: string;
   settings: ProjectSettings;
   env: Record<string, string | undefined>;
+  interactive?: boolean;
+  /** Whether to sign in without a valid sign-in; by default, if `interactive`. */
+  login?: boolean;
   /** Sign in with a code instead of in this machine's browser. */
   noBrowser?: boolean;
   prompt?: Prompt;
@@ -173,11 +185,17 @@ async function signInAndSaveKey(args: {
     dir,
     settings,
     env,
+    interactive = true,
+    login = interactive,
     noBrowser,
     // consola's prompt reads `this`.
     prompt = (message, options) => log.prompt(message, options),
     account = defaultAccount,
   } = args;
+  const signedIn = await isSignedIn(account);
+  // Before the checks: CI without a key must hear how to set one, not why
+  // a key can't be saved here.
+  if (!login && !signedIn) return undefined;
   const problem = await envLocalProblem(dir);
   if (problem) {
     throw new Error(
@@ -186,7 +204,7 @@ async function signInAndSaveKey(args: {
   }
   let projectId = await findGtProjectId(dir, env);
 
-  if (!(await isSignedIn(account))) {
+  if (!signedIn) {
     await account.login({
       baseUrl: GT_API_URL,
       noBrowser,
@@ -218,6 +236,11 @@ async function signInAndSaveKey(args: {
     for await (const project of paginate(listProjects, { client })) {
       projects.push(project);
     }
+    if (projects.length > 0 && !interactive) {
+      throw new Error(
+        `Your General Translation account has projects. Run this command in a terminal to choose one or create another, or set GT_PROJECT_ID to one of them from ${GT_DASHBOARD_URL}.`,
+      );
+    }
     const choice =
       projects.length === 0
         ? NEW_PROJECT
@@ -245,6 +268,11 @@ async function signInAndSaveKey(args: {
     if (orgs.length === 0) {
       throw new Error(
         `Your General Translation account has no organization. Create one at ${GT_DASHBOARD_URL}, then run again.`,
+      );
+    }
+    if (orgs.length > 1 && !interactive) {
+      throw new Error(
+        `Your General Translation account has several organizations. Run this command in a terminal to choose one, or set GT_PROJECT_ID to a project from ${GT_DASHBOARD_URL}.`,
       );
     }
     const orgId =
@@ -363,7 +391,9 @@ async function isSignedIn(account: GtAccount): Promise<boolean> {
  * git doesn't ignore it and can't be made to, as git doesn't read a symlinked
  * .gitignore.
  */
-async function envLocalProblem(dir: string): Promise<string | undefined> {
+export async function envLocalProblem(
+  dir: string,
+): Promise<string | undefined> {
   const tracked = await gitTracksEnvLocal(dir);
   if (typeof tracked === "string") return tracked;
   if (tracked) {
@@ -437,7 +467,7 @@ async function envLocalIgnored(dir: string): Promise<boolean> {
  * last line of `.gitignore` counts too: the rule this run added isn't added
  * again, while an earlier line, which a later one may undo, doesn't count.
  */
-async function appendToEnvLocal(args: {
+export async function appendToEnvLocal(args: {
   dir: string;
   text: string;
 }): Promise<boolean> {
@@ -457,22 +487,98 @@ async function appendToEnvLocal(args: {
 }
 
 /**
+ * Copies the project ID of the key in `dir/.env.local` to gt.config.json, if
+ * that key and project ID are `inUse`, unless gt.config.json names a project
+ * or isn't a JSON object, and resolves whether it did. .env.local isn't
+ * shared, so a teammate's sign-in would otherwise create another project. A
+ * key from elsewhere, such as the shell, may belong to another project.
+ */
+export async function shareGtProjectId(
+  dir: string,
+  inUse: GtCredentials,
+): Promise<boolean> {
+  const envLocal = await fs
+    .readFile(nodePath.join(dir, ".env.local"), "utf8")
+    .catch(() => "");
+  const saved = findCredentials(parseEnvFile(envLocal));
+  const projectId = saved?.projectId;
+  if (
+    !projectId ||
+    saved.apiKey !== inUse.apiKey ||
+    projectId !== inUse.projectId
+  ) {
+    return false;
+  }
+  const path = nodePath.join(dir, "gt.config.json");
+  const text = await fs.readFile(path, "utf8").catch(() => undefined);
+  const config = text === undefined ? {} : parseJson(text);
+  if (
+    typeof config !== "object" ||
+    config === null ||
+    Array.isArray(config) ||
+    config.projectId
+  ) {
+    return false;
+  }
+  await fs.writeFile(
+    path,
+    `${JSON.stringify({ ...config, projectId }, null, 2)}\n`,
+  );
+  return true;
+}
+
+/**
  * The General Translation project that `dir`'s .env files, gt.config.json or
  * the environment name. One in .env or .env.local comes first: a new key is
  * saved next to it, and readGtCredentials pairs a key with the project ID from
  * the same source. A missing gt.config.json is allowed; an unreadable or
- * invalid one throws, rather than a second project being created.
+ * invalid one throws, rather than a second project being created or, without
+ * a key, the text being sent to the community service.
  */
-async function findGtProjectId(
+export async function findGtProjectId(
   dir: string,
   env: Record<string, string | undefined>,
+): Promise<string | undefined> {
+  const projectId = await readGtConfigProjectId(dir);
+  // .env.local overrides .env, as for the app.
+  const fromEnvFiles =
+    findVariable(await readEnvFile(dir, ".env.local"), PROJECT_ID) ||
+    findVariable(await readEnvFile(dir, ".env"), PROJECT_ID);
+  const fromEnv = findVariable(env, PROJECT_ID);
+  // As gt does: a key for either project would be wrong for some of the
+  // project's users.
+  for (const [where, other] of [
+    [".env.local or .env", fromEnvFiles],
+    ["the environment", fromEnv],
+  ] as const) {
+    if (projectId && other && other !== projectId) {
+      throw new Error(projectIdMismatch(projectId, where, other));
+    }
+  }
+  return fromEnvFiles || projectId || fromEnv;
+}
+
+/** The error for a project ID other than gt.config.json's, as gt words it. */
+export function projectIdMismatch(
+  configured: string,
+  where: CredentialSource,
+  other: string,
+): string {
+  return `Project ID mismatch: gt.config.json uses ${configured}, but ${where} uses ${other}. Use the same project ID in both, then run again.`;
+}
+
+/**
+ * The project ID in `dir/gt.config.json`, if any. A missing file is allowed;
+ * an unreadable or invalid one throws.
+ */
+export async function readGtConfigProjectId(
+  dir: string,
 ): Promise<string | undefined> {
   const configPath = nodePath.join(dir, "gt.config.json");
   const text = await fs.readFile(configPath, "utf8").catch((error) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  let projectId: string | undefined;
   if (text !== undefined) {
     let config: unknown;
     try {
@@ -497,27 +603,10 @@ async function findGtProjectId(
           `Invalid General Translation config at ${configPath}: projectId must be a non-empty string.`,
         );
       }
-      projectId = config.projectId.trim();
+      return config.projectId.trim();
     }
   }
-  // .env.local overrides .env, as for the app.
-  const fromEnvFiles =
-    findVariable(await readEnvFile(dir, ".env.local"), PROJECT_ID) ||
-    findVariable(await readEnvFile(dir, ".env"), PROJECT_ID);
-  const fromEnv = findVariable(env, PROJECT_ID);
-  // As gt does: a key for either project would be wrong for some of the
-  // project's users.
-  for (const [where, other] of [
-    [".env.local or .env", fromEnvFiles],
-    ["the environment", fromEnv],
-  ] as const) {
-    if (projectId && other && other !== projectId) {
-      throw new Error(
-        `Project ID mismatch: gt.config.json uses ${projectId}, but ${where} uses ${other}. Use the same project ID in both, then run again.`,
-      );
-    }
-  }
-  return fromEnvFiles || projectId || fromEnv;
+  return undefined;
 }
 
 /**
@@ -586,4 +675,12 @@ async function appendToFile({
   const content = await fs.readFile(file, "utf8").catch(() => "");
   const separator = content && !content.endsWith("\n") ? "\n" : "";
   await fs.appendFile(file, separator + text, { mode });
+}
+
+function parseJson(text: string): any {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
