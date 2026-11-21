@@ -196,6 +196,7 @@ describe("readGtCredentials", () => {
     expect(await readGtCredentials({ env: {}, dir })).toEqual({
       apiKey: "server-key",
       projectId: "prj_server",
+      source: ".env.local or .env",
     });
   });
 
@@ -206,7 +207,11 @@ describe("readGtCredentials", () => {
         env: { GT_API_KEY: "env-key", GT_PROJECT_ID: "prj_env" },
         dir,
       }),
-    ).toEqual({ apiKey: "env-key", projectId: "prj_env" });
+    ).toEqual({
+      apiKey: "env-key",
+      projectId: "prj_env",
+      source: "the environment",
+    });
   });
 
   test("reads .env, which .env.local overrides, as gt does", async () => {
@@ -217,6 +222,7 @@ describe("readGtCredentials", () => {
     expect(await readGtCredentials({ env: {}, dir })).toEqual({
       apiKey: "new",
       projectId: "prj_env_file",
+      source: ".env.local or .env",
     });
   });
 
@@ -232,6 +238,7 @@ describe("readGtCredentials", () => {
     expect(await readGtCredentials({ env: {}, dir })).toEqual({
       apiKey: "key # not a comment",
       projectId: "prj_1",
+      source: ".env.local or .env",
     });
   });
 
@@ -242,6 +249,7 @@ describe("readGtCredentials", () => {
     expect(await readGtCredentials({ env: {}, dir })).toEqual({
       apiKey: "key",
       projectId: "prj_1",
+      source: ".env.local or .env",
     });
   });
 
@@ -251,7 +259,11 @@ describe("readGtCredentials", () => {
         env: { GT_API_KEY: "", VITE_GT_DEV_API_KEY: "key" },
         dir: tree(),
       }),
-    ).toEqual({ apiKey: "key", projectId: undefined });
+    ).toEqual({
+      apiKey: "key",
+      projectId: undefined,
+      source: "the environment",
+    });
   });
 
   test("rethrows a read error other than a missing file", async () => {
@@ -272,14 +284,17 @@ const read = (dir: string, file: string) =>
   fs.readFileSync(nodePath.join(dir, file), "utf8");
 
 describe("shareGtProjectId", () => {
+  /** The key and project ID in ENV_LOCAL. */
+  const KEY = { apiKey: API_KEY, projectId: "prj_1" };
+
   test("after a sign-in for the project an ignored .env names, a clean checkout still uses that project", async () => {
     captureLog();
     const dir = gitTree({
       ".gitignore": ".env\n.env.local\n",
       ".env": "GT_PROJECT_ID=prj_1\n",
     });
-    await signIn({ dir, account: fakeAccount().account });
-    expect(await shareGtProjectId(dir)).toBe(true);
+    const credentials = await signIn({ dir, account: fakeAccount().account });
+    expect(await shareGtProjectId(dir, credentials!)).toBe(true);
 
     const git = (cwd: string, ...args: string[]) =>
       execFileSync("git", args, { cwd });
@@ -304,7 +319,7 @@ describe("shareGtProjectId", () => {
       ".env.local": ENV_LOCAL,
       "gt.config.json": '{"defaultLocale":"en"}',
     });
-    expect(await shareGtProjectId(dir)).toBe(true);
+    expect(await shareGtProjectId(dir, KEY)).toBe(true);
     expect(JSON.parse(read(dir, "gt.config.json"))).toEqual({
       defaultLocale: "en",
       projectId: "prj_1",
@@ -313,13 +328,25 @@ describe("shareGtProjectId", () => {
 
   test("leaves a gt.config.json that isn't JSON alone", async () => {
     const dir = tree({ ".env.local": ENV_LOCAL, "gt.config.json": "{" });
-    expect(await shareGtProjectId(dir)).toBe(false);
+    expect(await shareGtProjectId(dir, KEY)).toBe(false);
     expect(read(dir, "gt.config.json")).toBe("{");
+  });
+
+  test("shares no project ID unless the key in use is the one in .env.local", async () => {
+    const dir = tree({ ".env.local": ENV_LOCAL });
+    for (const inUse of [
+      { apiKey: "gtx-other", projectId: "prj_1" },
+      { apiKey: API_KEY, projectId: "prj_other" },
+      { apiKey: API_KEY },
+    ]) {
+      expect(await shareGtProjectId(dir, inUse)).toBe(false);
+    }
+    expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
   });
 
   test("shares no project ID from .env, which may be shared already", async () => {
     const dir = tree({ ".env": ENV_LOCAL });
-    expect(await shareGtProjectId(dir)).toBe(false);
+    expect(await shareGtProjectId(dir, KEY)).toBe(false);
     expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
   });
 });
@@ -695,6 +722,36 @@ describe("signInToGt", () => {
     expect(gt.login).not.toHaveBeenCalled();
   });
 
+  test("signs in with a read-only .gitignore that already ignores .env.local", async () => {
+    captureLog();
+    const dir = gitTree({ ".gitignore": ".env*\n" });
+    fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o444);
+    try {
+      expect(await signIn({ dir, account: fakeAccount().account })).toEqual({
+        apiKey: API_KEY,
+        projectId: "prj_new",
+      });
+      expect(read(dir, ".gitignore")).toBe(".env*\n");
+    } finally {
+      fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o644);
+    }
+  });
+
+  test("refuses a read-only .gitignore that needs a rule for .env.local before signing in", async () => {
+    captureLog();
+    const dir = gitTree({ ".gitignore": "node_modules\n" });
+    fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o444);
+    const gt = fakeAccount();
+    try {
+      await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+        "Can't save the General Translation key: .gitignore can't be written. Make it writable, then run again.",
+      );
+      expect(gt.login).not.toHaveBeenCalled();
+    } finally {
+      fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o644);
+    }
+  });
+
   test("refuses a .gitignore that is a folder before signing in", async () => {
     captureLog();
     const dir = tree();
@@ -993,6 +1050,24 @@ describe("signInToGt", () => {
       ).toBeUndefined();
       expect(gt.login).not.toHaveBeenCalled();
       expect(gt.requests).toEqual([]);
+    });
+
+    test("with login, signs in with a code and makes the key", async () => {
+      captureLog();
+      const dir = tree();
+      const gt = fakeAccount();
+      expect(
+        await signIn({
+          dir,
+          interactive: false,
+          login: true,
+          noBrowser: true,
+          account: gt.account,
+        }),
+      ).toEqual({ apiKey: API_KEY, projectId: "prj_new" });
+      expect(gt.login).toHaveBeenCalledWith(
+        expect.objectContaining({ noBrowser: true }),
+      );
     });
 
     test("makes the key with gt's sign-in", async () => {

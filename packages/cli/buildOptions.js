@@ -12,7 +12,7 @@ export function buildOptions(args) {
     outdir: args?.outdir ?? "./dist",
     platform: "node",
     format: "esm",
-    target: "node16",
+    target: "node20",
     // for easier debugging production issues, don't minify. KB size is not a concern for a node CLI
     minify: false,
     // https://github.com/evanw/esbuild/issues/1921#issuecomment-1403107887
