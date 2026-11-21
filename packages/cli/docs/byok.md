@@ -23,7 +23,7 @@ Set `INLANG_MACHINE_TRANSLATE_PROVIDER` to choose the translation service:
 
 When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set, and otherwise General Translation. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI. Set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation even when one of these keys is set.
 
-Provider settings and keys can also be saved in `.env` or `.env.local` next to `project.inlang`; `.env.local` overrides `.env`. A provider or BYOK key in the shell takes precedence over a provider saved in those files, and shell values override file values for keys and options. GT keys stay paired with a project ID from the same source: the shell, or the project env files.
+Provider settings and keys can also be saved in `.env` or `.env.local` next to `project.inlang`; `.env.local` overrides `.env`. A provider setting takes precedence over API keys wherever either is set, so a key in your shell profile never overrides the provider a project chose. Shell values override file values for the provider, keys and options. GT keys stay paired with a project ID from the same source: the shell, or the project env files.
 
 DeepL and OpenAI use bundle descriptions and plural forms as context; Google Translate doesn't.
 
