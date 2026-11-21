@@ -51,11 +51,15 @@ type Prompt = (
 export async function readGtCredentials(args: {
   env: Record<string, string | undefined>;
   dir: string;
-}): Promise<GtCredentials | undefined> {
-  return (
-    findCredentials(args.env) ?? findCredentials(await readEnvFiles(args.dir))
-  );
+}): Promise<(GtCredentials & { source: CredentialSource }) | undefined> {
+  const fromEnv = findCredentials(args.env);
+  if (fromEnv) return { ...fromEnv, source: "the environment" };
+  const fromFiles = findCredentials(await readEnvFiles(args.dir));
+  return fromFiles && { ...fromFiles, source: ".env.local or .env" };
 }
+
+/** Where a key was found, as error messages name it. */
+export type CredentialSource = "the environment" | ".env.local or .env";
 
 /** The key's prefix is group 1. */
 const API_KEY = /^(?:GT_API_KEY|((?:\w*_)?)GT_DEV_API_KEY)$/;
@@ -460,17 +464,28 @@ export async function appendToEnvLocal(args: {
 }
 
 /**
- * Copies the project ID of the key in `dir/.env.local` to gt.config.json, unless that
- * names a project or isn't a JSON object, and resolves whether it did.
- * .env.local isn't shared, so a teammate's sign-in would otherwise create
- * another project.
+ * Copies the project ID of the key in `dir/.env.local` to gt.config.json, if
+ * that key and project ID are `inUse`, unless gt.config.json names a project
+ * or isn't a JSON object, and resolves whether it did. .env.local isn't
+ * shared, so a teammate's sign-in would otherwise create another project. A
+ * key from elsewhere, such as the shell, may belong to another project.
  */
-export async function shareGtProjectId(dir: string): Promise<boolean> {
+export async function shareGtProjectId(
+  dir: string,
+  inUse: GtCredentials,
+): Promise<boolean> {
   const envLocal = await fs
     .readFile(nodePath.join(dir, ".env.local"), "utf8")
     .catch(() => "");
-  const projectId = findCredentials(parseEnvFile(envLocal))?.projectId;
-  if (!projectId) return false;
+  const saved = findCredentials(parseEnvFile(envLocal));
+  const projectId = saved?.projectId;
+  if (
+    !projectId ||
+    saved.apiKey !== inUse.apiKey ||
+    projectId !== inUse.projectId
+  ) {
+    return false;
+  }
   const path = nodePath.join(dir, "gt.config.json");
   const text = await fs.readFile(path, "utf8").catch(() => undefined);
   const config = text === undefined ? {} : parseJson(text);
@@ -501,12 +516,46 @@ export async function findGtProjectId(
   dir: string,
   env: Record<string, string | undefined>,
 ): Promise<string | undefined> {
+  const projectId = await readGtConfigProjectId(dir);
+  // .env.local overrides .env, as for the app.
+  const fromEnvFiles =
+    findVariable(await readEnvFile(dir, ".env.local"), PROJECT_ID) ||
+    findVariable(await readEnvFile(dir, ".env"), PROJECT_ID);
+  const fromEnv = findVariable(env, PROJECT_ID);
+  // As gt does: a key for either project would be wrong for some of the
+  // project's users.
+  for (const [where, other] of [
+    [".env.local or .env", fromEnvFiles],
+    ["the environment", fromEnv],
+  ] as const) {
+    if (projectId && other && other !== projectId) {
+      throw new Error(projectIdMismatch(projectId, where, other));
+    }
+  }
+  return fromEnvFiles || projectId || fromEnv;
+}
+
+/** The error for a project ID other than gt.config.json's, as gt words it. */
+export function projectIdMismatch(
+  configured: string,
+  where: CredentialSource,
+  other: string,
+): string {
+  return `Project ID mismatch: gt.config.json uses ${configured}, but ${where} uses ${other}. Use the same project ID in both, then run again.`;
+}
+
+/**
+ * The project ID in `dir/gt.config.json`, if any. A missing file is allowed;
+ * an unreadable or invalid one throws.
+ */
+export async function readGtConfigProjectId(
+  dir: string,
+): Promise<string | undefined> {
   const configPath = nodePath.join(dir, "gt.config.json");
   const text = await fs.readFile(configPath, "utf8").catch((error) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  let projectId: string | undefined;
   if (text !== undefined) {
     let config: unknown;
     try {
@@ -531,27 +580,10 @@ export async function findGtProjectId(
           `Invalid General Translation config at ${configPath}: projectId must be a non-empty string.`,
         );
       }
-      projectId = config.projectId.trim();
+      return config.projectId.trim();
     }
   }
-  // .env.local overrides .env, as for the app.
-  const fromEnvFiles =
-    findVariable(await readEnvFile(dir, ".env.local"), PROJECT_ID) ||
-    findVariable(await readEnvFile(dir, ".env"), PROJECT_ID);
-  const fromEnv = findVariable(env, PROJECT_ID);
-  // As gt does: a key for either project would be wrong for some of the
-  // project's users.
-  for (const [where, other] of [
-    [".env.local or .env", fromEnvFiles],
-    ["the environment", fromEnv],
-  ] as const) {
-    if (projectId && other && other !== projectId) {
-      throw new Error(
-        `Project ID mismatch: gt.config.json uses ${projectId}, but ${where} uses ${other}. Use the same project ID in both, then run again.`,
-      );
-    }
-  }
-  return fromEnvFiles || projectId || fromEnv;
+  return undefined;
 }
 
 /**

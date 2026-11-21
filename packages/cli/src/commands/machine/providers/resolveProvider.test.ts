@@ -173,7 +173,7 @@ test("an invalid file provider fails instead of falling back", async () => {
 });
 
 test("GT credentials still pair a shell key only with the shell's project ID", async () => {
-  const { projectPath } = projectIn({
+  const { dir, projectPath } = projectIn({
     ".env.local": "GT_API_KEY=local-key\nGT_PROJECT_ID=local-project\n",
   });
   const provider = await resolve({
@@ -183,6 +183,47 @@ test("GT credentials still pair a shell key only with the shell's project ID", a
   const { headers } = await firstRequest(provider);
   expect(headers.Authorization).toBe("Bearer shell-key");
   expect(headers).not.toHaveProperty("gt-project-id");
+  // .env.local's project belongs to another key.
+  expect(fs.existsSync(nodePath.join(dir, "gt.config.json"))).toBe(false);
+});
+
+test.each([
+  [
+    { GT_API_KEY: "shell-key", GT_PROJECT_ID: "prj_old" },
+    {},
+    "the environment",
+  ],
+  [
+    {},
+    { ".env.local": "GT_API_KEY=local-key\nGT_PROJECT_ID=prj_old\n" },
+    ".env.local or .env",
+  ],
+])(
+  "a key for another project than gt.config.json's fails (%j %j)",
+  async (env, files, where) => {
+    const { projectPath } = projectIn({
+      "gt.config.json": '{"projectId":"prj_shared"}',
+      ...files,
+    });
+    await expect(resolve({ projectPath, env })).rejects.toThrowError(
+      new MachineTranslateError(
+        `Project ID mismatch: gt.config.json uses prj_shared, but ${where} uses prj_old. Use the same project ID in both, then run again.`,
+      ),
+    );
+  },
+);
+
+test("a key without a project ID is used with gt.config.json", async () => {
+  const { projectPath } = projectIn({
+    "gt.config.json": '{"projectId":"prj_shared"}',
+  });
+  const provider = await resolve({
+    projectPath,
+    env: { GT_API_KEY: "shell-key" },
+  });
+  expect((await firstRequest(provider)).headers.Authorization).toBe(
+    "Bearer shell-key",
+  );
 });
 
 test("a bring-your-own key beats a General Translation key", async () => {
@@ -265,7 +306,13 @@ test("signs in to General Translation in an interactive terminal without credent
       },
     ],
   ]);
-  expect(signIn).toHaveBeenCalledWith({ dir, settings, env });
+  expect(signIn).toHaveBeenCalledWith({
+    dir,
+    settings,
+    env,
+    interactive: true,
+    noBrowser: undefined,
+  });
   expect((await firstRequest(provider)).headers).toMatchObject({
     Authorization: "Bearer gt-signed-in-key",
     "gt-project-id": "prj_new",
@@ -463,15 +510,43 @@ test("uses the choice saved in .env.local without asking, and says where it is",
   );
 });
 
-test("a bring-your-own key beats the choice saved in .env.local", async () => {
+test("the choice saved in .env.local beats a bring-your-own key in the shell", async () => {
+  vi.spyOn(log, "info").mockImplementation(() => undefined);
   const provider = await resolve({
     env: { INLANG_DEEPL_API_KEY: "deepl-key" },
     projectPath: projectIn({
       ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n",
     }).projectPath,
   });
-  expect((await firstRequest(provider)).url).toMatch(/deepl\.com\//);
+  expect((await firstRequest(provider)).url).toMatch(
+    /^https:\/\/translate\.demosjarco\.dev\//,
+  );
 });
+
+// A key in a developer's shell profile must not send a project's text to
+// another service than the one the project chose.
+test.each([
+  [".env", "gt", "Bearer gt-local-key"],
+  [".env.local", "deepl", "DeepL-Auth-Key deepl-local-key"],
+])(
+  "a provider set in %s beats a bring-your-own key in the shell",
+  async (file, providerName, authorization) => {
+    const { projectPath } = projectIn({
+      [file]: [
+        `INLANG_MACHINE_TRANSLATE_PROVIDER=${providerName}`,
+        "INLANG_DEEPL_API_KEY=deepl-local-key",
+        "GT_API_KEY=gt-local-key",
+      ].join("\n"),
+    });
+    const provider = await resolve({
+      projectPath,
+      env: { INLANG_OPENAI_API_KEY: "openai-shell-key" },
+    });
+    expect((await firstRequest(provider)).headers.Authorization).toBe(
+      authorization,
+    );
+  },
+);
 
 test("the environment's provider beats the choice saved in .env.local", async () => {
   const provider = await resolve({
@@ -542,6 +617,75 @@ test("a failed sign-in outside an interactive terminal is a MachineTranslateErro
   expect(error.message).toBe(
     "Your General Translation account has several organizations.",
   );
+});
+
+// A teammate without a key must not send the text of a project that chose
+// General Translation to another service.
+test.each([
+  [
+    "a GT project ID in gt.config.json",
+    {},
+    { "gt.config.json": '{"projectId":"prj_shared"}' },
+  ],
+  ["gt in .env", {}, { ".env": "INLANG_MACHINE_TRANSLATE_PROVIDER=gt\n" }],
+  [
+    "gt in the shell over a choice saved in .env.local",
+    { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" },
+    { ".env.local": "INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco\n" },
+  ],
+])(
+  "in a terminal, a project that chose GT with %s signs in without offering other services",
+  async (_, env, files) => {
+    const prompt = vi.spyOn(log, "prompt");
+    const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    const { dir, projectPath } = projectIn(files);
+    const envLocalBefore = fs.existsSync(nodePath.join(dir, ".env.local"))
+      ? fs.readFileSync(nodePath.join(dir, ".env.local"), "utf8")
+      : undefined;
+    const signIn = vi.fn<NonNullable<ResolveArgs["signIn"]>>(async () => ({
+      apiKey: "gtx-dev",
+      projectId: "prj_shared",
+    }));
+    const provider = await resolve({
+      projectPath,
+      env,
+      interactive: true,
+      noBrowser: true,
+      signIn,
+    });
+    expect(prompt).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "This project uses General Translation. Sign in to translate.",
+    );
+    expect(signIn).toHaveBeenCalledWith(
+      expect.objectContaining({ dir, interactive: true, noBrowser: true }),
+    );
+    expect((await firstRequest(provider)).headers.Authorization).toBe(
+      "Bearer gtx-dev",
+    );
+    // Nothing is appended to .env.local, so later runs don't ask either.
+    expect(
+      fs.existsSync(nodePath.join(dir, ".env.local"))
+        ? fs.readFileSync(nodePath.join(dir, ".env.local"), "utf8")
+        : undefined,
+    ).toBe(envLocalBefore);
+  },
+);
+
+test("in a terminal, a cancelled sign-in for a project that chose GT offers no other service", async () => {
+  const prompt = vi.spyOn(log, "prompt");
+  vi.spyOn(log, "info").mockImplementation(() => undefined);
+  const { projectPath } = projectIn({
+    "gt.config.json": '{"projectId":"prj_shared"}',
+  });
+  await expect(
+    resolve({ projectPath, interactive: true, signIn: async () => undefined }),
+  ).rejects.toThrowError(
+    new MachineTranslateError(
+      `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+    ),
+  );
+  expect(prompt).not.toHaveBeenCalled();
 });
 
 test("passes noBrowser to the sign-in chosen in the menu", async () => {

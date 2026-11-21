@@ -10,7 +10,9 @@ import {
   appendToEnvLocal,
   envLocalProblem,
   findGtProjectId,
+  projectIdMismatch,
   readEnvFiles,
+  readGtConfigProjectId,
   readGtCredentials,
   shareGtProjectId,
   signInToGt,
@@ -118,20 +120,14 @@ export async function resolveMachineTranslateProvider(args: {
   const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
   const fileEnv = await readEnvFiles(dir);
   const env = { ...fileEnv, ...args.env };
-  // Preserve explicit providers and BYOK keys in the shell ahead of saved
-  // preferences. Otherwise all providers read the same project env files.
-  const environmentSelectsProvider =
-    args.env[PROVIDER_ENV]?.trim() ||
-    [GOOGLE_API_KEY_ENV, DEEPL_API_KEY_ENV, OPENAI_API_KEY_ENV].some(
-      (key) => args.env[key],
-    );
-  env[PROVIDER_ENV] = args.env[PROVIDER_ENV]?.trim() || fileEnv[PROVIDER_ENV];
-  const providerName = resolveMachineTranslateProviderName(
-    environmentSelectsProvider ? args.env : env,
-  );
+  // The provider setting comes first, wherever it is set (the shell over
+  // .env.local over .env); only without one does an API key choose.
+  const providerFromShell = args.env[PROVIDER_ENV]?.trim();
+  env[PROVIDER_ENV] = providerFromShell || fileEnv[PROVIDER_ENV];
+  const providerName = resolveMachineTranslateProviderName(env);
   if (providerName !== "gt") {
     const provider = resolveNamedProvider(providerName, env);
-    if (providerName === "demosjarco" && !environmentSelectsProvider) {
+    if (providerName === "demosjarco" && !providerFromShell) {
       log.info(
         `You chose this service in .env or .env.local. To be asked about General Translation again, remove ${PROVIDER_ENV} from it.`,
       );
@@ -140,30 +136,34 @@ export async function resolveMachineTranslateProvider(args: {
   }
 
   // Keep GT keys paired with project IDs from the same source.
-  let credentials = await readGtCredentials({ env: args.env, dir });
-  if (!credentials) {
-    if (!args.interactive) {
+  const found = await readGtCredentials({ env: args.env, dir });
+  let credentials: { apiKey: string; projectId?: string };
+  if (found) {
+    // As gt does: a key for another project would translate into that one.
+    const configured = await readGtConfigProjectId(dir);
+    if (configured && found.projectId && found.projectId !== configured) {
+      throw new MachineTranslateError(
+        projectIdMismatch(configured, found.source, found.projectId),
+      );
+    }
+    credentials = found;
+  } else {
+    // A project that chose GT, by name or with a project ID (a committed
+    // gt.config.json), never sends its text to another service: not when a
+    // CI secret is missing, as in a pull request from a fork, nor when a
+    // teammate without a key would pick another service in the menu.
+    const projectChoseGt =
+      Boolean(env[PROVIDER_ENV]?.trim()) ||
+      Boolean(await findGtProjectId(dir, env));
+    if (!projectChoseGt && !args.interactive) {
       // Keyless automation keeps the community service it used before GT was
-      // the default. A project that chose GT, by name or with a project ID (a
-      // committed gt.config.json), fails instead: a missing CI secret, as in a
-      // pull request from a fork, must not send its text to another service.
-      if (!env[PROVIDER_ENV]?.trim() && !(await findGtProjectId(dir, env))) {
-        log.info(
-          `No translation provider configured. Using the community service. General Translation setup for CI and coding agents: ${GT_SETUP_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
-        );
-        return createCommunityProvider(env);
-      }
-      // A `gt` sign-in on this machine still makes a key, without asking.
-      credentials = await (args.signIn ?? signInToGt)({
-        dir,
-        settings: args.settings,
-        env,
-        interactive: false,
-      }).catch((error: Error) => {
-        throw new MachineTranslateError(error.message);
-      });
-      if (!credentials) throw await missingGtKeyError(dir);
-    } else {
+      // the default.
+      log.info(
+        `No translation provider configured. Using the community service. General Translation setup for CI and coding agents: ${GT_SETUP_URL}. To use this service without this message, set ${PROVIDER_ENV}=demosjarco.`,
+      );
+      return createCommunityProvider(env);
+    }
+    if (!projectChoseGt) {
       // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
       const choice = await log.prompt(
         "Which translation provider should this project use?",
@@ -198,33 +198,49 @@ export async function resolveMachineTranslateProvider(args: {
         );
         return provider;
       }
-      if (choice === "gt") {
-        credentials = await (args.signIn ?? signInToGt)({
-          dir,
-          settings: args.settings,
-          env,
-          noBrowser: args.noBrowser,
-        }).catch((error: Error) => {
-          // Its errors are for the user, so they print without a stack trace.
-          throw new MachineTranslateError(error.message);
-        });
-      }
-      if (!credentials) {
-        throw new MachineTranslateError(
-          `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
-        );
-      }
+      if (choice !== "gt") throw noProviderError();
+    } else if (args.interactive) {
+      log.info("This project uses General Translation. Sign in to translate.");
     }
+    // Outside a terminal, a `gt` sign-in on this machine still makes a key,
+    // without asking. The sign-in saves the key and its project ID to
+    // .env.local.
+    const signedIn = await (args.signIn ?? signInToGt)({
+      dir,
+      settings: args.settings,
+      env,
+      interactive: args.interactive,
+      noBrowser: args.noBrowser,
+    }).catch(userError);
+    if (!signedIn) {
+      throw args.interactive ? noProviderError() : await missingGtKeyError(dir);
+    }
+    credentials = signedIn;
   }
-  if (await shareGtProjectId(dir)) {
+  if (await shareGtProjectId(dir, credentials)) {
     log.info(
       "Saved the General Translation project ID to gt.config.json. Commit it so teammates use the same project.",
     );
   }
   return createGtTranslateProvider({
-    ...credentials,
+    apiKey: credentials.apiKey,
+    projectId: credentials.projectId,
     userAgent: `inlang-cli/${version}`,
   });
+}
+
+/**
+ * Rethrows `error` as a MachineTranslateError: its message is for the user,
+ * so it prints without a stack trace.
+ */
+function userError(error: Error): never {
+  throw new MachineTranslateError(error.message);
+}
+
+function noProviderError(): MachineTranslateError {
+  return new MachineTranslateError(
+    `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
+  );
 }
 
 /** CI and agents that chose GT, without a `gt` sign-in, are told how to get a key. */
