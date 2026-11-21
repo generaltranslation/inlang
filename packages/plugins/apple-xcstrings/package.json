@@ -36,5 +36,5 @@
     "url": "https://github.com/generaltranslation/inlang.git",
     "directory": "packages/plugins/apple-xcstrings"
   },
-  "license": "Apache-2.0"
+  "license": "MIT"
 }
