@@ -18,9 +18,9 @@ Read the announcement: [inlang check: find missing translations and unused keys 
 
 ## Features
 
-- **Machine Translation** — Translate missing messages automatically via a free, third-party translation service by default, or with your own Google Cloud Translation or DeepL API key
+- **Machine Translation** — Translate missing messages with General Translation by default, or [bring your own key](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok)
 - **Checks** — Find missing translations, missing variables and unused messages before they ship. Exits with `1` on findings, so CI fails. See [`check`](#check)
-- **CI/CD Ready** — Run non-interactively with `--force` for pipelines
+- **CI/CD Ready** — Run non-interactively in pipelines
 - **Plugin System** — Supports JSON, i18next, next-intl, ICU message format, and more
 
 # Getting Started
@@ -74,36 +74,11 @@ Create `messages/en.json`:
 
 **3. Machine translate to other languages**
 
-By default, the CLI uses a free, third-party translation service (not owned, operated, or maintained by inlang), so you can run it without any setup:
-
 ```bash
 npx @inlang/cli machine translate --project ./project.inlang
 ```
 
-Stability is not guaranteed. Provide your own API key for higher reliability and control. Use Google Translate:
-
-```bash
-export INLANG_MACHINE_TRANSLATE_PROVIDER="google"
-export INLANG_GOOGLE_TRANSLATE_API_KEY="your-google-api-key"
-```
-
-Or use DeepL:
-
-```bash
-export INLANG_MACHINE_TRANSLATE_PROVIDER="deepl"
-export INLANG_DEEPL_API_KEY="your-deepl-api-key"
-```
-
-Or use OpenAI, optionally selecting a model and reasoning effort:
-
-```bash
-export INLANG_MACHINE_TRANSLATE_PROVIDER="openai"
-export INLANG_OPENAI_API_KEY="your-openai-api-key"
-# Optional: defaults to gpt-6-luna
-export INLANG_OPENAI_MODEL="your-model"
-# Optional: supported values depend on the selected model
-export INLANG_OPENAI_REASONING_EFFORT="none"
-```
+In a terminal, the first run asks which translation provider the project should use: General Translation (recommended; signing up is free), the community translation service, or Other. For CI, coding agents and your own translation API key, see [`machine translate`](#machine-translate).
 
 This creates `messages/de.json` and `messages/fr.json` with translations.
 
@@ -147,7 +122,7 @@ If one of the commands can't be found, you probably use an outdated CLI version.
 | --------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **CLI Version** | `npx @inlang/cli@latest [command]`            | Get the latest version of the inlang CLI.                                                                                                                           |
 | **Check**       | `npx @inlang/cli check [options]`             | Check translations for missing, empty or inconsistent messages, and source code for unused messages. Exits with 1 on findings, for CI.                              |
-| **Machine**     | `npx @inlang/cli machine translate [options]` | Automate translation processes. Options include `-f, --force`, `--project <path>`, `--locale <source>` and `--targetLocales <targets...>`                           |
+| **Machine**     | `npx @inlang/cli machine translate [options]` | Automate translation processes. Options include `--project <path>` and `--targetLocales <targets...>`                                                               |
 | **Cloud**       | `npx @inlang/cli cloud`                       | See what's coming in inlang Cloud and tell us what your team needs.                                                                                                 |
 | **Plugin**      | `npx @inlang/cli plugin [command]`            | Interact with Inlang plugins, including initialization and building. `build [options]` build an inlang module. Options include `--type`, `--entry`, and `--outdir`. |
 
@@ -195,28 +170,48 @@ The machine command is used to automate localization processes.
 
 The translate command machine translates all resources.
 
-By default, the CLI uses a free, third-party translation service that is not owned, operated, or maintained by inlang. Stability is not guaranteed. For higher reliability and control, set `INLANG_MACHINE_TRANSLATE_PROVIDER` to `google` or `deepl` and bring your own API key. See the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
-
 For many projects, coding agents can produce better translation drafts than generic machine translation because they can use surrounding product and code context. Consider using an agent-driven workflow when translation quality matters more than fully automated CI output.
 
 To initiate machine translation, run the following command:
 
 ```sh
-npx @inlang/cli machine translate
+npx @inlang/cli machine translate --project ./project.inlang
 ```
 
 **Options**
 
 The translate command has the following options:
 
-- `-f, --force`: If this option is set, the command will not prompt confirmation. This is useful for CI/CD build pipelines. **We advise you to only use `machine translate` in build pipelines to avoid out-of-context/wrong translations.**
-- `--project <path>`: Specifies the path to the project root. The default project root is the current working directory.
-- `--locale <source>`: Specifies the base locale.
+- `--project <path>`: Path to the inlang project (required).
+- `--locale <source>`: Has no effect. The source locale is always the project's `baseLocale` in `settings.json`.
 - `--targetLocales <targets...>`: Specifies the target locales as comma seperated list (e.g. sk,zh,pt-BR).
+- `--no-browser`: Signs in to General Translation with a code you enter in any browser, instead of opening a browser on this machine. Works outside a terminal too, as for coding agents.
 
-When a bundle has a description, OpenAI and DeepL receive it as translation context. Other providers translate the source text without that guidance. Descriptions are preserved in the project and are never included in translated strings.
+**General Translation**
 
-The translations are performed with the configured provider (`INLANG_MACHINE_TRANSLATE_PROVIDER`). The community-operated translation service at translate.demosjarco.dev (not affiliated with inlang) is used by default; set `INLANG_GOOGLE_TRANSLATE_API_KEY`, `INLANG_DEEPL_API_KEY`, or `INLANG_OPENAI_API_KEY` to use your own provider. You can also set `DEMOSJARCO_TRANSLATE_MODEL` to pin a model for the community-operated service (and `DEMOSJARCO_TRANSLATE_ZDR=true` to request Zero Data Retention from it). If the selected provider is unavailable or throttles requests, the command fails with a non-zero exit code instead of reporting success. OpenAI Responses that are incomplete are not accepted as translations and also cause the command to fail. The translated messages are added to the respective language resources. Finally, the updated resources are written back to the file system.
+Translations come from [General Translation](https://generaltranslation.com) by default. The first time you run the command in a terminal, it asks which translation provider the project should use: General Translation (recommended), the community translation service, or Other. A project that already chose General Translation (see below) skips the question and signs you in. If you choose General Translation, it signs you in, opening General Translation in your browser if you aren't signed in yet; signing up is free. A sign-in to the `gt` CLI on the same machine counts too. Where no browser can be shown, as over SSH, in a container or on Linux without a display, it shows a sign-in code to enter in any browser instead; `--no-browser` does the same anywhere. Unless the project names one, it asks which of your General Translation projects to use, or creates a new one, asking which organization should own it if you have several. The CLI saves a development API key, which can only translate, to `.env.local` next to `project.inlang` and adds `.env.local` to `.gitignore` unless git already ignores it. It also saves the project ID to `gt.config.json`; commit that file so teammates who sign in use the same project instead of creating their own.
+
+If you choose the community translation service, the command uses the community-operated translation service at translate.demosjarco.dev (not affiliated with inlang), the previous default. It saves that choice as `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` in `.env.local`, so later runs don't ask; remove that line to be asked again. In CI, set the same variable to choose that service explicitly.
+
+If you choose Other, the command links to the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok) and saves nothing: once another provider is set up, later runs use it without asking.
+
+Later runs read the key from the environment, or else from `.env.local` (or `.env`) next to `project.inlang`. Sign-in saves `GT_DEV_API_KEY` and `GT_PROJECT_ID`. `GT_API_KEY` works too, and so do framework-prefixed names such as `VITE_GT_DEV_API_KEY` and `VITE_GT_PROJECT_ID`.
+
+SSH and other terminals without a display show the same provider choices, and sign in with a code. Without a terminal, as in CI and most coding agents, or through a task runner that captures the output, the command doesn't ask. Without a key, it uses the community-operated service, as before, and links to GT setup. A project that chose General Translation, with a project ID in `gt.config.json` or `GT_PROJECT_ID`, or with `INLANG_MACHINE_TRANSLATE_PROVIDER=gt`, fails instead and prints the steps to get a key, so a missing CI secret doesn't send its text to another service. If you are signed in to General Translation on that machine, it saves a development key instead, without asking. Without a project ID, it creates a project only if your account has none yet; otherwise it asks you to set `GT_PROJECT_ID` or run it in a terminal to choose. In CI, set `GT_API_KEY` and `GT_PROJECT_ID` from your project at [dash.generaltranslation.com](https://dash.generaltranslation.com). Coding agents can run the command with `--no-browser`: it prints a sign-in URL and code for a person to open, waits until they sign in, then saves a development key and translates.
+
+**Bring your own key**
+
+To use your own translation API key instead, see the [BYOK setup guide](https://inlang.com/m/2qj2w8pu/app-inlang-cli/byok).
+
+**What gets translated**
+
+When a bundle has a description, providers that support context, including General Translation, receive it as translation context. Descriptions are preserved in the project and are never included in translated strings.
+
+With a provider that supports context, a plural gets every form the target language needs: an English message with `one` and `other` gets `one`, `few`, `many` and `other` in Russian. With a provider without context, such a plural gets the source's forms, as before, and the forms it lacks stay missing until they are added. Whether those numbers fall back to another form depends on the message format: i18next, for example, shows the message key. The command lists these plurals by locale when it finishes, even if it fails, leaving out messages it didn't create, so you can add the forms by hand, or translate them with a provider that supports context. A translation whose selectors differ from the source's is listed and left as it is. A translation with a select value the source lacks, such as a hand-written `neuter`, gets the source's forms and is listed: no form can be translated for that value, and added forms would take its numbers.
+
+The requests of all locales share the provider's request slots, and the command writes the translation files as each locale finishes, so a run that is stopped or times out keeps the locales it finished. If one translation fails, the command continues with unrelated messages and other locales. A rate-limited request (HTTP 429, or Google's per-minute quota error) is sent again up to 3 times, after the provider's `Retry-After` or 2, 4 and 8 seconds, waiting at most a minute in total; other failures aren't retried. If the provider is unavailable, rejects the key or keeps throttling requests, the command starts no more requests. In either case, it saves successful translations and exits with code 1; run it again to translate the rest. Ctrl+C or SIGTERM also stops new requests: the command waits for the requests in flight, saves what came back and exits with code 1. Press Ctrl+C again to quit at once without saving them. A new message, or one without forms, gets a language only when all its forms succeed, and then gets the source's selectors.
+
+A translation that comes back empty, drops, adds or changes a variable or markup tag, or breaks markup nesting isn't saved. Fixed-count plural forms can spell out the count instead of repeating its variable, as in “one item” or “two items”; other variables and formatting still have to match. The command lists rejected translations, saves the other messages and exits with code 1. General Translation requests time out after 5 minutes.
 
 ## `check`
 
