@@ -117,7 +117,10 @@ async function localesOf(
 }
 
 test("the requests of all locales are in flight at once, and each locale is saved as soon as it is done", async () => {
-  const translations = await project(["en", "de", "fr", "es"], ["Hello", "Bye"]);
+  const translations = await project(
+    ["en", "de", "fr", "es"],
+    ["Hello", "Bye"],
+  );
   const events: string[] = [];
   const { provider, answer } = heldProvider(events);
   try {
@@ -331,6 +334,94 @@ test("Ctrl+C stops the run and saves what the requests in flight return, and the
       "Machine translation was stopped.\nSaved the 4 translations that came back. Run again to translate the rest.",
     );
     expect(process.listenerCount("SIGINT")).toBe(listeners);
+  } finally {
+    await translations.close();
+  }
+});
+
+test("a locale that finishes later doesn't put back the old text of a locale saved before it", async () => {
+  const translations = await project(["en", "de", "fr"], []);
+  const variant = (locale: string, value: string, text: string) => ({
+    id: `items_${locale}_${value}`,
+    message_id: `items_${locale}`,
+    matches: [
+      value === "*"
+        ? { type: "catchall-match" as const, key: "countPlural" }
+        : { type: "literal-match" as const, key: "countPlural", value },
+    ],
+    pattern: text ? [{ type: "text" as const, value: text }] : [],
+  });
+  const message = (
+    locale: string,
+    variants: ReturnType<typeof variant>[],
+  ) => ({
+    id: `items_${locale}`,
+    bundle_id: "items",
+    locale,
+    selectors: [{ type: "variable-reference" as const, name: "countPlural" }],
+    variants,
+  });
+  await insertBundleNested(translations.db, {
+    id: "items",
+    declarations: [
+      { type: "input-variable", name: "count" },
+      {
+        type: "local-variable",
+        name: "countPlural",
+        value: {
+          type: "expression",
+          arg: { type: "variable-reference", name: "count" },
+          annotation: {
+            type: "function-reference",
+            name: "plural",
+            options: [],
+          },
+        },
+      },
+    ],
+    // German and French have an empty `one`, which is translated
+    messages: [
+      message("en", [
+        variant("en", "one", "One item"),
+        variant("en", "*", "Items"),
+      ]),
+      message("de", [variant("de", "one", ""), variant("de", "*", "Dinge")]),
+      message("fr", [
+        variant("fr", "one", ""),
+        variant("fr", "*", "Articles"),
+      ]),
+    ],
+  });
+  const events: string[] = [];
+  const { provider, answer } = heldProvider(events);
+  try {
+    const run = translateCommandAction({
+      project: translations,
+      provider,
+      save: async () => void events.push("save"),
+    });
+    await vi.waitFor(() => expect(requested(events)).toBe(2));
+    answer("fr");
+    await vi.waitFor(() => expect(events).toContain("save"));
+    answer("de");
+    await run;
+
+    const [bundle] = await selectBundleNested(translations.db)
+      .selectAll()
+      .execute();
+    const forms = (locale: string) =>
+      Object.fromEntries(
+        bundle.messages
+          .find((each: { locale: string }) => each.locale === locale)
+          .variants.map(
+            (each: {
+              matches: Array<{ value?: string }>;
+              pattern: Array<{ value: string }>;
+            }) => [each.matches[0]!.value ?? "*", each.pattern[0]?.value],
+          ),
+      );
+    expect(forms("fr")).toEqual({ one: "Items (fr)", "*": "Articles" });
+    expect(forms("de")).toEqual({ one: "One item (de)", "*": "Dinge" });
   } finally {
     await translations.close();
   }
