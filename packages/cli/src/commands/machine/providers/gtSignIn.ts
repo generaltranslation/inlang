@@ -7,6 +7,7 @@ import {
   createProject,
   createProjectApiKey,
   listOrgs,
+  listProjects,
   paginate,
   ProjectApiKeyPermission,
   type UserTokenProvider,
@@ -27,6 +28,8 @@ import { log } from "../../../utilities/log.js";
 import { GT_API_URL, GT_DASHBOARD_URL } from "./gt.js";
 
 const KEY_NAME = "Development key (inlang machine translate)";
+// The choice to create a project; project IDs are never empty.
+const NEW_PROJECT = "";
 
 type GtCredentials = { apiKey: string; projectId?: string };
 
@@ -166,6 +169,8 @@ async function signInAndSaveKey(args: {
   settings: ProjectSettings;
   env: Record<string, string | undefined>;
   interactive?: boolean;
+  /** Sign in with a code instead of in this machine's browser. */
+  noBrowser?: boolean;
   prompt?: Prompt;
   account?: GtAccount;
 }): Promise<GtCredentials | undefined> {
@@ -174,6 +179,7 @@ async function signInAndSaveKey(args: {
     settings,
     env,
     interactive = true,
+    noBrowser,
     // consola's prompt reads `this`.
     prompt = (message, options) => log.prompt(message, options),
     account = defaultAccount,
@@ -193,15 +199,13 @@ async function signInAndSaveKey(args: {
   if (!signedIn) {
     await account.login({
       baseUrl: GT_API_URL,
+      noBrowser,
       onWarning: warn,
-      // The browser sign-in returns to a server on this machine, which a
-      // browser elsewhere can't reach, as from a remote container. gt's sign-in
-      // is shared, and its --no-browser uses a code instead.
       onAuthorizationUrl: (url) =>
         log.log(
-          `Opening your browser to sign in to General Translation. If it doesn't open, visit:\n${url}\nIf the browser runs on another machine, as with a remote container, press Ctrl+C, run \`npx gt login --no-browser\`, then run this again.`,
+          `Opening your browser to sign in to General Translation. If it doesn't open, visit:\n${url}`,
         ),
-      // Over SSH, or where no browser can be opened.
+      // With noBrowser, and over SSH.
       onDeviceCode: ({ userCode, verificationUri, verificationUriComplete }) =>
         log.log(
           verificationUriComplete
@@ -223,6 +227,39 @@ async function signInAndSaveKey(args: {
   // There is no overall deadline: one that ended the run while a project was
   // being created could leave a project whose ID was never saved, and the
   // next run would create another.
+  if (!projectId) {
+    // As gt init does: one of the user's projects, or a new one.
+    log.start("Loading your General Translation projects...");
+    const projects = [];
+    for await (const project of paginate(listProjects, { client })) {
+      projects.push(project);
+    }
+    if (projects.length > 0 && !interactive) {
+      throw new Error(
+        `Your General Translation account has projects. Run this command in a terminal to choose one or create another, or set GT_PROJECT_ID to one of them from ${GT_DASHBOARD_URL}.`,
+      );
+    }
+    const choice =
+      projects.length === 0
+        ? NEW_PROJECT
+        : await prompt(
+            "Which General Translation project should this inlang project use?",
+            {
+              type: "select",
+              options: [
+                ...projects.map((project) => ({
+                  label: project.name,
+                  value: project.id,
+                  hint: project.orgName,
+                })),
+                { label: "Create a new project", value: NEW_PROJECT },
+              ],
+              cancel: "undefined",
+            },
+          );
+    if (typeof choice !== "string") return undefined;
+    if (choice !== NEW_PROJECT) projectId = choice;
+  }
   if (!projectId) {
     log.start("Loading your General Translation organizations...");
     const orgs = [];
@@ -292,7 +329,11 @@ async function signInAndSaveKey(args: {
     throw new Error(
       `Couldn't create a General Translation API key for project ${projectId}: ${
         noAccess
-          ? `${error.message.replace(/\.?$/, ".")} If you aren't a member of its organization, ask to be invited, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.`
+          ? `${error.message.replace(/\.?$/, ".")} ${
+              error.status === 403
+                ? "If you are a member of its organization, ask a project admin for project:api_keys:write. If you aren't, ask to be invited"
+                : "If you aren't a member of its organization, ask to be invited"
+            }, or remove the project ID from gt.config.json and the .env files to create your own project, then run again.`
           : error.message
       }`,
       { cause: error },
@@ -327,8 +368,11 @@ async function signInAndSaveKey(args: {
 /**
  * Whether gt's stored sign-in can still make requests. One whose refresh
  * token expired or was revoked stays stored, and only a new sign-in replaces
- * it. A refresh that fails offline counts as signed out too: the new sign-in
- * then fails with its own error.
+ * it. The auth package reports that and a temporary failure to refresh, such
+ * as being offline, with the same `oauth` code, so both count as signed out:
+ * the second then signs in again, or fails with the sign-in's own error. That
+ * is rare and harmless, and telling the two apart belongs in
+ * `@generaltranslation/auth`, which this CLI doesn't change.
  */
 async function isSignedIn(account: GtAccount): Promise<boolean> {
   if (!(await account.hasLogin())) return false;
