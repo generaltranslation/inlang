@@ -385,8 +385,12 @@ async function envLocalProblem(dir: string): Promise<string | undefined> {
     return ".gitignore is a symbolic link, which git doesn't read, so it can't ignore .env.local. Replace it with a regular file";
   }
   // Checked before a project is created: a project whose ID can't be saved
-  // would be created again on every run.
-  for (const file of [".env.local", ".gitignore"]) {
+  // would be created again on every run. .gitignore only if a rule for
+  // .env.local will be added to it.
+  const files = (await envLocalIgnored(dir))
+    ? [".env.local"]
+    : [".env.local", ".gitignore"];
+  for (const file of files) {
     const path = nodePath.join(dir, file);
     const stat = await fs.stat(path).catch(() => undefined);
     if (stat && !stat.isFile()) {
@@ -404,6 +408,28 @@ async function envLocalProblem(dir: string): Promise<string | undefined> {
 }
 
 /**
+ * Whether `dir/.env.local` needs no `.gitignore` rule: git ignores it, or,
+ * where git can't tell, `.env.local` is the last line of `.gitignore`.
+ */
+async function envLocalIgnored(dir: string): Promise<boolean> {
+  return (
+    (await git(dir, "check-ignore", "-q", "--", ".env.local")) ||
+    (
+      await fs
+        .readFile(nodePath.join(dir, ".gitignore"), "utf8")
+        .catch(() => "")
+    )
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      // git ignores trailing spaces, and a leading slash anchors the rule
+      // to this folder.
+      .at(-1)
+      ?.trimEnd()
+      .replace(/^\//, "") === ".env.local"
+  );
+}
+
+/**
  * Appends `text` to `dir/.env.local`, which only the user can read if it is
  * new, and resolves whether it added a `.gitignore` rule for the file first.
  * It does unless git ignores the file: outside a work tree too, or a later
@@ -415,19 +441,12 @@ async function appendToEnvLocal(args: {
   dir: string;
   text: string;
 }): Promise<boolean> {
-  const gitignore = nodePath.join(args.dir, ".gitignore");
-  const ignored =
-    (await git(args.dir, "check-ignore", "-q", "--", ".env.local")) ||
-    (await fs.readFile(gitignore, "utf8").catch(() => ""))
-      .split(/\r?\n/)
-      .filter((line) => line.trim())
-      // git ignores trailing spaces, and a leading slash anchors the rule
-      // to this folder.
-      .at(-1)
-      ?.trimEnd()
-      .replace(/^\//, "") === ".env.local";
+  const ignored = await envLocalIgnored(args.dir);
   if (!ignored) {
-    await appendToFile({ file: gitignore, text: ".env.local\n" });
+    await appendToFile({
+      file: nodePath.join(args.dir, ".gitignore"),
+      text: ".env.local\n",
+    });
   }
   await appendToFile({
     file: nodePath.join(args.dir, ".env.local"),

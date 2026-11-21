@@ -636,6 +636,36 @@ describe("signInToGt", () => {
     expect(gt.login).not.toHaveBeenCalled();
   });
 
+  test("signs in with a read-only .gitignore that already ignores .env.local", async () => {
+    captureLog();
+    const dir = gitTree({ ".gitignore": ".env*\n" });
+    fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o444);
+    try {
+      expect(await signIn({ dir, account: fakeAccount().account })).toEqual({
+        apiKey: API_KEY,
+        projectId: "prj_new",
+      });
+      expect(read(dir, ".gitignore")).toBe(".env*\n");
+    } finally {
+      fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o644);
+    }
+  });
+
+  test("refuses a read-only .gitignore that needs a rule for .env.local before signing in", async () => {
+    captureLog();
+    const dir = gitTree({ ".gitignore": "node_modules\n" });
+    fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o444);
+    const gt = fakeAccount();
+    try {
+      await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+        "Can't save the General Translation key: .gitignore can't be written. Make it writable, then run again.",
+      );
+      expect(gt.login).not.toHaveBeenCalled();
+    } finally {
+      fs.chmodSync(nodePath.join(dir, ".gitignore"), 0o644);
+    }
+  });
+
   test("refuses a .gitignore that is a folder before signing in", async () => {
     captureLog();
     const dir = tree();
