@@ -230,8 +230,14 @@ async function signInAndSaveKey(args: {
 
   let createdProject = false;
   let addedIgnoreRule = false;
+  // Each request can take minutes on a bad connection (the client retries a
+  // read up to 3 times after 60-second timeouts), so say what is waiting.
+  // There is no overall deadline: one that ended the run while a project was
+  // being created could leave a project whose ID was never saved, and the
+  // next run would create another.
   if (!projectId) {
     // As gt init does: one of the user's projects, or a new one.
+    log.start("Loading your General Translation projects...");
     const projects = [];
     for await (const project of paginate(listProjects, { client })) {
       projects.push(project);
@@ -263,6 +269,7 @@ async function signInAndSaveKey(args: {
     if (choice !== NEW_PROJECT) projectId = choice;
   }
   if (!projectId) {
+    log.start("Loading your General Translation organizations...");
     const orgs = [];
     for await (const org of paginate(listOrgs, { client })) orgs.push(org);
     if (orgs.length === 0) {
@@ -287,6 +294,7 @@ async function signInAndSaveKey(args: {
             },
           );
     if (typeof orgId !== "string") return undefined;
+    log.start("Creating the General Translation project...");
     const { data } = await createProject({
       client,
       path: { orgId },
@@ -310,6 +318,7 @@ async function signInAndSaveKey(args: {
       text: `GT_PROJECT_ID=${projectId}\n`,
     });
   }
+  log.start("Creating a General Translation API key...");
   const { data: key } = await createProjectApiKey({
     client,
     path: { projectId },
