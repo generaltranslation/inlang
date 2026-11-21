@@ -17,6 +17,6 @@
   ],
   "publisherName": "inlang",
   "publisherIcon": "https://inlang.com/favicon/safari-pinned-tab.svg",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "module": "https://cdn.jsdelivr.net/npm/@inlang/plugin-apple-xcstrings@latest/dist/index.js"
 }

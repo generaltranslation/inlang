@@ -30,6 +30,6 @@
 	"recommends": ["m/r7kp499g", "m/3i8bor92"],
 	"publisherName": "inlang",
 	"publisherIcon": "https://inlang.com/favicon/safari-pinned-tab.svg",
-	"license": "Apache-2.0",
+	"license": "MIT",
 	"module": "https://cdn.jsdelivr.net/npm/@inlang/plugin-t-function-matcher@latest/dist/index.js"
 }
