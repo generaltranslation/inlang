@@ -308,6 +308,36 @@ test("a failed save sends no other request, and saves nothing after it", async (
   }
 });
 
+test("a failed save names the locales saved before it", async () => {
+  const translations = await project(["en", "de", "fr"], ["Hello"]);
+  const events: string[] = [];
+  const { provider, answer } = heldProvider(events);
+  let saves = 0;
+  try {
+    const run = translateCommandAction({
+      project: translations,
+      provider,
+      save: async () => {
+        if (saves++ > 0) {
+          throw new Error("The translations couldn't be saved: disk full");
+        }
+      },
+    }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(requested(events)).toBe(2));
+    answer("fr");
+    await vi.waitFor(() => expect(saves).toBe(1));
+    answer("de");
+    const thrown = await run;
+
+    expect(thrown).toBeInstanceOf(MachineTranslateError);
+    expect((thrown as Error).message).toBe(
+      "The translations couldn't be saved: disk full\nSaved before that: fr. Run again to translate the rest.",
+    );
+  } finally {
+    await translations.close();
+  }
+});
+
 test("Ctrl+C stops the run and saves what the requests in flight return, and the handler is removed after", async () => {
   vi.spyOn(log, "warn").mockImplementation(() => undefined);
   const translations = await project(sixLocales, ["Hello"]);

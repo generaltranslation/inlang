@@ -141,8 +141,9 @@ const defaultAccount: GtAccount = {
  * to `dir/.env.local`, and the key is never printed. Resolves `undefined` if
  * the user cancels the question for the organization.
  *
- * Without `interactive`, it neither signs in nor asks: it resolves
- * `undefined` without a valid sign-in, and fails if it would have to ask.
+ * Without `interactive`, it doesn't ask: it fails if it would have to. It
+ * then signs in only with `login`, and otherwise resolves `undefined`
+ * without a valid sign-in.
  *
  * `.env.local` gets a `.gitignore` rule unless git ignores it already, and a
  * tracked or symlinked `.env.local` fails before the sign-in.
@@ -173,6 +174,8 @@ async function signInAndSaveKey(args: {
   settings: ProjectSettings;
   env: Record<string, string | undefined>;
   interactive?: boolean;
+  /** Whether to sign in without a valid sign-in; by default, if `interactive`. */
+  login?: boolean;
   /** Sign in with a code instead of in this machine's browser. */
   noBrowser?: boolean;
   prompt?: Prompt;
@@ -183,6 +186,7 @@ async function signInAndSaveKey(args: {
     settings,
     env,
     interactive = true,
+    login = interactive,
     noBrowser,
     // consola's prompt reads `this`.
     prompt = (message, options) => log.prompt(message, options),
@@ -191,7 +195,7 @@ async function signInAndSaveKey(args: {
   const signedIn = await isSignedIn(account);
   // Before the checks: CI without a key must hear how to set one, not why
   // a key can't be saved here.
-  if (!interactive && !signedIn) return undefined;
+  if (!login && !signedIn) return undefined;
   const problem = await envLocalProblem(dir);
   if (problem) {
     throw new Error(

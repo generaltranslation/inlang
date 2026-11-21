@@ -1052,6 +1052,24 @@ describe("signInToGt", () => {
       expect(gt.requests).toEqual([]);
     });
 
+    test("with login, signs in with a code and makes the key", async () => {
+      captureLog();
+      const dir = tree();
+      const gt = fakeAccount();
+      expect(
+        await signIn({
+          dir,
+          interactive: false,
+          login: true,
+          noBrowser: true,
+          account: gt.account,
+        }),
+      ).toEqual({ apiKey: API_KEY, projectId: "prj_new" });
+      expect(gt.login).toHaveBeenCalledWith(
+        expect.objectContaining({ noBrowser: true }),
+      );
+    });
+
     test("makes the key with gt's sign-in", async () => {
       captureLog();
       const dir = tree();

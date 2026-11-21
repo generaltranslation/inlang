@@ -311,6 +311,7 @@ test("signs in to General Translation in an interactive terminal without credent
     settings,
     env,
     interactive: true,
+    login: true,
     noBrowser: undefined,
   });
   expect((await firstRequest(provider)).headers).toMatchObject({
@@ -409,7 +410,7 @@ test("an explicit GT provider fails without credentials outside an interactive t
         "Machine translation needs a General Translation API key.",
         "- In a terminal: run this command directly to sign in. It can't ask through a task runner that captures its output or with CI set. Over SSH, open the printed sign-in URL in your browser.",
         "- CI: set GT_API_KEY and GT_PROJECT_ID from your project at https://dash.generaltranslation.com.",
-        "- Agents: have the user run this command in their terminal, or sign in with `npx gt login --no-browser`, then run this command again. Signed in, it saves a development key to .env.local.",
+        "- Agents: run this command with --no-browser, and give the user the sign-in URL and code it prints. It waits until they sign in, then saves a development key to .env.local and translates. Or have the user run this command in their terminal.",
         "- Or use the community-operated service: set INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco.",
         `- Or bring your own key: ${BYOK_URL}`,
       ].join("\n"),
@@ -686,6 +687,92 @@ test("in a terminal, a cancelled sign-in for a project that chose GT offers no o
     ),
   );
   expect(prompt).not.toHaveBeenCalled();
+});
+
+// Coding agents sign in this way, as with `gt login --no-browser`.
+test.each([
+  ["a project that didn't choose GT", {}],
+  ["a project that chose GT", { "gt.config.json": '{"projectId":"prj_shared"}' }],
+])(
+  "outside a terminal, --no-browser signs in to GT with a code for %s",
+  async (_, files) => {
+    const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    const { dir, projectPath } = projectIn(files);
+    const signIn = vi.fn<NonNullable<ResolveArgs["signIn"]>>(async () => ({
+      apiKey: "gtx-dev",
+      projectId: "prj_shared",
+    }));
+    const provider = await resolve({
+      projectPath,
+      noBrowser: true,
+      noBrowserRequested: true,
+      signIn,
+    });
+    expect(signIn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir,
+        interactive: false,
+        login: true,
+        noBrowser: true,
+      }),
+    );
+    expect(info).not.toHaveBeenCalledWith(COMMUNITY_NOTICE);
+    expect((await firstRequest(provider)).headers.Authorization).toBe(
+      "Bearer gtx-dev",
+    );
+  },
+);
+
+test("outside a terminal, a code that isn't asked for (as in CI) starts no sign-in", async () => {
+  const signIn = vi.fn<NonNullable<ResolveArgs["signIn"]>>(signedOut);
+  await expect(
+    resolve({
+      env: { INLANG_MACHINE_TRANSLATE_PROVIDER: "gt" },
+      noBrowser: true,
+      signIn,
+    }),
+  ).rejects.toThrow("Machine translation needs a General Translation API key.");
+  expect(signIn).toHaveBeenCalledWith(
+    expect.objectContaining({ interactive: false, login: false }),
+  );
+});
+
+test.each([
+  ["an invalid gt.config.json", { "gt.config.json": "{" }, {}],
+  [
+    "a project ID mismatch",
+    { "gt.config.json": '{"projectId":"prj_shared"}' },
+    { GT_PROJECT_ID: "prj_other" },
+  ],
+  ["an unsupported provider", {}, { INLANG_MACHINE_TRANSLATE_PROVIDER: "x" }],
+  ["a missing DeepL key", {}, { INLANG_MACHINE_TRANSLATE_PROVIDER: "deepl" }],
+])(
+  "%s is a MachineTranslateError, which prints without a stack trace",
+  async (_, files, env) => {
+    const error = await resolve({
+      projectPath: projectIn(files).projectPath,
+      env,
+    }).catch((error) => error);
+    expect(error).toBeInstanceOf(MachineTranslateError);
+  },
+);
+
+test("a community choice that can't be saved is a MachineTranslateError", async () => {
+  vi.spyOn(log, "prompt").mockResolvedValue("community");
+  vi.spyOn(log, "info").mockImplementation(() => undefined);
+  const { dir, projectPath } = projectIn({ ".env.local": "OTHER=1\n" });
+  fs.chmodSync(nodePath.join(dir, ".env.local"), 0o444);
+  try {
+    const error = await resolve({ projectPath, interactive: true }).catch(
+      (error) => error,
+    );
+    expect(error).toBeInstanceOf(MachineTranslateError);
+    expect(error.message).toMatch(
+      /^Couldn't save your choice to \.env\.local: EACCES/,
+    );
+  } finally {
+    fs.chmodSync(nodePath.join(dir, ".env.local"), 0o644);
+  }
 });
 
 test("passes noBrowser to the sign-in chosen in the menu", async () => {

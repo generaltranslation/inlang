@@ -38,7 +38,7 @@ export const translate = new Command()
   .option("-n, --nobar", "disable progress bar", false)
   .option(
     "--no-browser",
-    "Sign in to General Translation with a code instead of a browser on this machine.",
+    "Sign in to General Translation with a code instead of a browser on this machine, also outside a terminal, as for coding agents.",
   )
   .description("Machine translate bundles.")
   .action(async (args: { force: boolean; project: string }) => {
@@ -211,6 +211,7 @@ export async function translateCommandAction(args: {
               isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
               env: process.env,
             }),
+            noBrowserRequested: !options.browser,
           })));
     if (provider && !provider.supportsContext) planned = planBundles(false);
     const { plans, missing } = planned;
@@ -348,6 +349,8 @@ export async function translateCommandAction(args: {
       process.on("SIGTERM", interrupt);
     }
     let saveError: Error | undefined;
+    /** the locales whose translations a save wrote */
+    const saved: string[] = [];
     let saving = Promise.resolve();
     const finish = (
       locale: string,
@@ -360,7 +363,10 @@ export async function translateCommandAction(args: {
         try {
           const translatedInLocale = await applyLocale(locale, translations);
           translated += translatedInLocale;
-          if (translatedInLocale > 0) await args.save?.();
+          if (translatedInLocale > 0) {
+            await args.save?.();
+            saved.push(locale);
+          }
         } catch (error) {
           saveError = error as Error;
           stop.abort();
@@ -389,10 +395,16 @@ export async function translateCommandAction(args: {
       warnPlurals();
     }
     if (saveError) {
-      // a failed save mustn't hide why translation stopped
-      const lines = failureLines();
-      throw lines.length > 0
-        ? new MachineTranslateError([...lines, saveError.message].join("\n"))
+      // a failed save mustn't hide why translation stopped, nor what is on
+      // disk already
+      const savedLine =
+        saved.length > 0
+          ? `Saved before that: ${shortList(saved)}. Run again to translate the rest.`
+          : undefined;
+      const lines = [...failureLines(), saveError.message];
+      if (savedLine) lines.push(savedLine);
+      throw lines.length > 1
+        ? new MachineTranslateError(lines.join("\n"))
         : saveError;
     }
     if (stopped) errors.add("Machine translation was stopped.");

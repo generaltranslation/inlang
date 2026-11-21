@@ -83,7 +83,7 @@ function resolveMachineTranslateProviderName(
       providerName !== "gt" &&
       providerName !== "demosjarco"
     ) {
-      throw new Error(
+      throw new MachineTranslateError(
         [
           `Unsupported ${PROVIDER_ENV} value: "${env[PROVIDER_ENV]}".`,
           "Supported values: google, deepl, openai, gt, demosjarco.",
@@ -115,6 +115,12 @@ export async function resolveMachineTranslateProvider(args: {
   interactive: boolean;
   /** Sign in with a code instead of a browser on this machine. */
   noBrowser?: boolean;
+  /**
+   * `--no-browser` was passed: outside a terminal too, sign in to General
+   * Translation with a code, as `gt login --no-browser` does. Coding agents
+   * sign in this way.
+   */
+  noBrowserRequested?: boolean;
   signIn?: typeof signInToGt;
 }): Promise<AnyMachineTranslateProvider> {
   const dir = nodePath.dirname(nodePath.resolve(args.projectPath));
@@ -140,7 +146,7 @@ export async function resolveMachineTranslateProvider(args: {
   let credentials: { apiKey: string; projectId?: string };
   if (found) {
     // As gt does: a key for another project would translate into that one.
-    const configured = await readGtConfigProjectId(dir);
+    const configured = await readGtConfigProjectId(dir).catch(configError);
     if (configured && found.projectId && found.projectId !== configured) {
       throw new MachineTranslateError(
         projectIdMismatch(configured, found.source, found.projectId),
@@ -154,8 +160,8 @@ export async function resolveMachineTranslateProvider(args: {
     // teammate without a key would pick another service in the menu.
     const projectChoseGt =
       Boolean(env[PROVIDER_ENV]?.trim()) ||
-      Boolean(await findGtProjectId(dir, env));
-    if (!projectChoseGt && !args.interactive) {
+      Boolean(await findGtProjectId(dir, env).catch(configError));
+    if (!projectChoseGt && !args.interactive && !args.noBrowserRequested) {
       // Keyless automation keeps the community service it used before GT was
       // the default.
       log.info(
@@ -163,7 +169,7 @@ export async function resolveMachineTranslateProvider(args: {
       );
       return createCommunityProvider(env);
     }
-    if (!projectChoseGt) {
+    if (!projectChoseGt && args.interactive) {
       // consola otherwise resolves a cancelled prompt with `initial`, a sign-in.
       const choice = await log.prompt(
         "Which translation provider should this project use?",
@@ -189,6 +195,10 @@ export async function resolveMachineTranslateProvider(args: {
         const addedIgnoreRule = await appendToEnvLocal({
           dir,
           text: `${PROVIDER_ENV}=demosjarco\n`,
+        }).catch((error: Error) => {
+          throw new MachineTranslateError(
+            `Couldn't save your choice to .env.local: ${error.message}`,
+          );
         });
         log.info(
           [
@@ -203,13 +213,14 @@ export async function resolveMachineTranslateProvider(args: {
       log.info("This project uses General Translation. Sign in to translate.");
     }
     // Outside a terminal, a `gt` sign-in on this machine still makes a key,
-    // without asking. The sign-in saves the key and its project ID to
-    // .env.local.
+    // without asking, and `--no-browser` signs in with a code. The sign-in
+    // saves the key and its project ID to .env.local.
     const signedIn = await (args.signIn ?? signInToGt)({
       dir,
       settings: args.settings,
       env,
       interactive: args.interactive,
+      login: args.interactive || Boolean(args.noBrowserRequested),
       noBrowser: args.noBrowser,
     }).catch(userError);
     if (!signedIn) {
@@ -237,6 +248,16 @@ function userError(error: Error): never {
   throw new MachineTranslateError(error.message);
 }
 
+/**
+ * Rethrows an invalid gt.config.json or a project ID mismatch as a
+ * MachineTranslateError. A file system error, such as an unreadable
+ * gt.config.json, keeps its code.
+ */
+function configError(error: Error & { code?: unknown }): never {
+  if (error.code !== undefined) throw error;
+  throw new MachineTranslateError(error.message);
+}
+
 function noProviderError(): MachineTranslateError {
   return new MachineTranslateError(
     `No translation provider. Run again to sign in to General Translation, or bring your own key: ${BYOK_URL}`,
@@ -255,7 +276,7 @@ async function missingGtKeyError(dir: string): Promise<MachineTranslateError> {
       `- CI: set GT_API_KEY and GT_PROJECT_ID from your project at ${GT_DASHBOARD_URL}.`,
       problem
         ? `- Agents: a development key can't be saved: ${problem}, then run this command again.`
-        : "- Agents: have the user run this command in their terminal, or sign in with `npx gt login --no-browser`, then run this command again. Signed in, it saves a development key to .env.local.",
+        : "- Agents: run this command with --no-browser, and give the user the sign-in URL and code it prints. It waits until they sign in, then saves a development key to .env.local and translates. Or have the user run this command in their terminal.",
       `- Or use the community-operated service: set ${PROVIDER_ENV}=demosjarco.`,
       `- Or bring your own key: ${BYOK_URL}`,
     ].join("\n"),
@@ -282,7 +303,7 @@ function resolveNamedProvider(
   if (providerName === "deepl") {
     const apiKey = env[DEEPL_API_KEY_ENV];
     if (!apiKey) {
-      throw new Error(
+      throw new MachineTranslateError(
         [
           `${DEEPL_API_KEY_ENV} must be set to use machine translate with DeepL.`,
           "Create your own DeepL API key and export it before running this command.",
@@ -297,7 +318,7 @@ function resolveNamedProvider(
   if (providerName === "openai") {
     const apiKey = env[OPENAI_API_KEY_ENV];
     if (!apiKey) {
-      throw new Error(
+      throw new MachineTranslateError(
         [
           `${OPENAI_API_KEY_ENV} must be set to use machine translate with OpenAI.`,
           "Create an OpenAI API key and export it before running this command.",
@@ -314,7 +335,7 @@ function resolveNamedProvider(
 
   const apiKey = env[GOOGLE_API_KEY_ENV];
   if (!apiKey) {
-    throw new Error(
+    throw new MachineTranslateError(
       [
         `${GOOGLE_API_KEY_ENV} must be set to use machine translate.`,
         "Create your own Google Cloud Translation API key and export it before running this command.",
