@@ -52,5 +52,6 @@
 				"dist/fileSchema.d.ts"
 			]
 		}
-	}
+	},
+	"license": "MIT"
 }

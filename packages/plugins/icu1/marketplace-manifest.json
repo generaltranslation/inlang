@@ -23,6 +23,6 @@
 	],
 	"publisherName": "inlang",
 	"publisherIcon": "https://inlang.com/favicon/safari-pinned-tab.svg",
-	"license": "Apache-2.0",
+	"license": "MIT",
 	"module": "https://cdn.jsdelivr.net/npm/@inlang/plugin-icu1@latest/dist/index.js"
 }

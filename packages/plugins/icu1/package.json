@@ -40,5 +40,6 @@
     "@messageformat/parser": "^5.1.1",
     "@inlang/sdk": "workspace:*",
     "@sinclair/typebox": "^0.31.17"
-  }
+  },
+  "license": "MIT"
 }

@@ -77,5 +77,5 @@
     "uuid": "^14.0.0",
     "vitest": "2.1.8"
   },
-  "license": "Apache-2.0"
+  "license": "MIT"
 }
