@@ -673,6 +673,23 @@ describe("signInToGt", () => {
     expect(gt.login).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ["the repository's folder", ""],
+    ["a folder in the repository", "app"],
+  ])("refuses before signing in without git in %s", async (_, subfolder) => {
+    captureLog();
+    vi.stubEnv("PATH", tree());
+    const root = tree({ ".env.local": "OTHER=1\n" });
+    fs.mkdirSync(nodePath.join(root, ".git"));
+    const dir = nodePath.join(root, subfolder);
+    fs.mkdirSync(dir, { recursive: true });
+    const gt = fakeAccount();
+    await expect(signIn({ dir, account: gt.account })).rejects.toThrow(
+      "Can't save the General Translation key: git isn't installed, so whether git tracks .env.local in this repository can't be checked. Install git, then run again.",
+    );
+    expect(gt.login).not.toHaveBeenCalled();
+  });
+
   test("refuses before signing in when git fails in the repository", async () => {
     captureLog();
     const dir = gitTree({ ".env.local": "OTHER=1\n" });

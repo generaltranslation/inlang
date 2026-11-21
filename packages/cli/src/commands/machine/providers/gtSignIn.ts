@@ -365,9 +365,7 @@ async function isSignedIn(account: GtAccount): Promise<boolean> {
  */
 async function envLocalProblem(dir: string): Promise<string | undefined> {
   const tracked = await gitTracksEnvLocal(dir);
-  if (typeof tracked === "string") {
-    return `git can't tell whether it tracks .env.local (${tracked}). Fix that`;
-  }
+  if (typeof tracked === "string") return tracked;
   if (tracked) {
     return ".env.local is tracked by git. Untrack it with `git rm --cached .env.local`";
   }
@@ -504,9 +502,10 @@ async function findGtProjectId(
 }
 
 /**
- * Whether git tracks `dir/.env.local`: false without git or outside a
- * repository, and git's error when it fails otherwise, as in a repository it
- * refuses for "dubious ownership".
+ * Whether git tracks `dir/.env.local`: false outside a repository, and why it
+ * can't tell otherwise, as the start of a sentence that says how to fix it:
+ * git fails, as in a repository it refuses for "dubious ownership", or isn't
+ * installed in a folder that is in a repository.
  */
 function gitTracksEnvLocal(dir: string): Promise<boolean | string> {
   return new Promise((resolve) =>
@@ -515,19 +514,36 @@ function gitTracksEnvLocal(dir: string): Promise<boolean | string> {
       ["ls-files", "--error-unmatch", "--", ".env.local"],
       // English messages, for "not a git repository".
       { cwd: dir, env: { ...process.env, LC_ALL: "C" } },
-      (error, _stdout, stderr) => {
+      async (error, _stdout, stderr) => {
         if (!error) return resolve(true);
-        if (
-          error.code === 1 ||
-          error.code === "ENOENT" ||
-          /not a git repository/.test(stderr)
-        ) {
+        if (error.code === 1 || /not a git repository/.test(stderr)) {
           return resolve(false);
         }
-        resolve(stderr.trim().split("\n")[0] || error.message);
+        // Without git, a tracked .env.local looks untracked.
+        if (error.code === "ENOENT") {
+          return resolve(
+            (await inGitRepository(dir)) &&
+              "git isn't installed, so whether git tracks .env.local in this repository can't be checked. Install git",
+          );
+        }
+        resolve(
+          `git can't tell whether it tracks .env.local (${stderr.trim().split("\n")[0] || error.message}). Fix that`,
+        );
       },
     ),
   );
+}
+
+/** Whether `dir` or a folder above it has a `.git` folder or file. */
+async function inGitRepository(dir: string): Promise<boolean> {
+  for (let folder = nodePath.resolve(dir); ; ) {
+    if (await fs.lstat(nodePath.join(folder, ".git")).catch(() => undefined)) {
+      return true;
+    }
+    const parent = nodePath.dirname(folder);
+    if (parent === folder) return false;
+    folder = parent;
+  }
 }
 
 /** Whether git exits with 0; false without git, where the folder is no work tree. */
