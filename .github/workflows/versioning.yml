@@ -17,6 +17,12 @@ jobs:
     name: versioning
     environment: production
     runs-on: ubuntu-24.04
+    # The generaltranslation organization gives workflows a read-only token by
+    # default. Pushing changeset-release/main and opening the release pull
+    # request need write access.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v3
