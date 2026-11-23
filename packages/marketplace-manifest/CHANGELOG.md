@@ -1,5 +1,11 @@
 # @inlang/marketplace-manifest
 
+## 1.5.1
+
+### Patch Changes
+
+- 0aacd29: License under MIT, copyright General Translation, Inc. Packages previously under Apache-2.0 or ISC, or with no declared license, now declare MIT and ship a `LICENSE` file.
+
 ## 1.5.0
 
 ### Minor Changes
