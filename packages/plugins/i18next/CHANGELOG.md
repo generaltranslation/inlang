@@ -1,5 +1,15 @@
 # @inlang/plugin-i18next
 
+## 6.5.4
+
+### Patch Changes
+
+- 0aacd29: License under MIT, copyright General Translation, Inc. Packages previously under Apache-2.0 or ISC, or with no declared license, now declare MIT and ship a `LICENSE` file.
+- Updated dependencies [0aacd29]
+- Updated dependencies [7992423]
+- Updated dependencies [ac172cb]
+  - @inlang/sdk@4.3.0
+
 ## 6.5.3
 
 ### Patch Changes
@@ -109,6 +119,7 @@
   Every `{locale}` of a `pathPattern` is replaced when files are read, as when they are saved, so a pattern like `./{locale}/common.{locale}.json` reads the file it writes.
 
 - 5423aa7: Export ICU `#` (imported by `@inlang/plugin-icu1` as `icu:pound`) that no longer sits in a plural, for example after an editor removed the plural.
+
   - `#` without a plural offset exports as `{{count, number}}`, which i18next formats like ICU formats `#`. It used to export as `{{count, icu:pound}}`, an unknown i18next format.
   - `#` with a plural offset displays `count - offset`, which i18next cannot express. The export fails with an error naming the bundle, locale and offset instead of "Not implemented".
   - Other functions with options fail the export with an error naming the options, function, variable, bundle and locale instead of "Not implemented".
@@ -424,6 +435,7 @@
   If you still want to use Sherlock v1, please use the previous major version of the plugin. For Sherlock itself, [please pin the version to `1.x.x`](https://github.com/microsoft/vscode-docs/blob/vnext/release-notes/v1_91.md#extension-install-options) in the VS Code extension settings.
 
   ### Breaking changes
+
   - Lint rules are now polyfilled (and therefore may work different), as we are currently reworking how lint rules are working with [Lix Validation Rules](https://lix.dev).
   - The `messageId` parameter in the `extractMessages` function has been renamed to `bundleId`. This change is due to the new API in Sherlock v2. If you are using the `extractMessages` function, please update the parameter name to `bundleId`.
 
@@ -505,6 +517,7 @@
 - 3d5a454: Upgrade to the @inlang/sdk v2.0.0.
 
   No breaking change is expected. But, if you encounter issues, fix the version of the plugin to the previous major version. This version of the i18next plugin adds support for
+
   - pluralization
   - selectors
   - and more

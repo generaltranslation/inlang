@@ -1,5 +1,24 @@
 # @inlang/sdk
 
+## 4.3.0
+
+### Minor Changes
+
+- 7992423: Add `sourceVariantFor`: the reference variant a form of a translation is translated from, the one the reference shows at runtime for the form's inputs. A plural category comes from the reference's category for the same numbers, not the one with the same name: Russian `few` from English `*`, and Russian `many` from French `*` rather than French `many` (millions).
+
+  `pluralRules` takes a form's matches to resolve a plural whose type is a variable (i18next's `type=$pluralType`), and gives each category's sample numbers (`sampleNumbers`).
+
+  Move `pluralExamples` from `@inlang/editor-component` (which still exports it) to `@inlang/sdk`.
+
+  `missing-variant` treats a plural category that selects only 0 as the exact 0 form: Arabic "zero" is `=0`, so Arabic i18next `_zero` no longer reports a missing `=0`, with ordinal forms too.
+
+  Expose `spelledOutInputs` so translation validation can share the SDK's exact-number and single-number plural exceptions.
+
+### Patch Changes
+
+- 0aacd29: License under MIT, copyright General Translation, Inc. Packages previously under Apache-2.0 or ISC, or with no declared license, now declare MIT and ship a `LICENSE` file.
+- ac172cb: The README that `saveProjectToDirectory` writes into `project.inlang` describes General Translation as the default for `inlang machine translate`, and the community translation service as the alternative. It tells coding agents to run the command with `--no-browser` and give the user the sign-in URL and code it prints.
+
 ## 4.2.0
 
 ### Minor Changes
@@ -38,6 +57,7 @@
 ### Patch Changes
 
 - 9725173: Improved loading, reading, and exporting projects with hundreds of thousands of translations, with lower memory use for large reads.
+
   - Large directory loads and partial imports process data in batches. Imports remain atomic by default; `allowPartialImport: true` keeps earlier successful batches if a later batch fails.
   - Project exports preserve a consistent view of files and translations.
 
@@ -85,6 +105,7 @@
   | `"variant.messageId"`   | `"inlang_variant.message_id"`  |
 
   Also changed:
+
   - `selectBundleNested()` returns messages with `bundle_id` and variants with `message_id`, and filters with `.where("inlang_bundle.id", "=", id)` (`"bundle.id"` throws).
   - `createMessage()` and `createVariant()` return `bundle_id` and `message_id`.
   - `insertBundleNested()`, `upsertBundleNested()` and `updateBundleNested()` take snake_case rows, as do `insertInto()` and `updateTable()`.
@@ -101,6 +122,7 @@
 
 - f45a761: Add the `empty-variant` check: a variant (form) whose pattern is empty while another variant of the message has text, e.g. an ICU `=0 {}`, is reported with its `variantId` and `matches`, the reference locale's included. `checkTranslation()` reports it as `{ type: "empty-variant" }`.
 - 356a50a: `exportFiles` receives the files it overwrites, so that plugins can keep the text of unchanged entries.
+
   - The plugin API's `exportFiles` has a new optional argument `files`: the current content of the files that `toBeImportedFiles` lists, as `{ path, locale, content, metadata? }` (type `ExistingFile`). Only files that exist are passed. Plugins that ignore it work as before, and plugins that use it still work on hosts that don't pass it.
   - `saveProjectToDirectory` reads the files of `toBeImportedFiles` from disk and passes them to `exportFiles`.
   - `project.exportFiles({ pluginKey, files })` passes `files` through, for apps that write the exported files themselves.
@@ -127,7 +149,7 @@
   A file counts as read only as the locale (and namespace) it was read or written as, so a file that a settings change assigns to another locale (e.g. a new base locale for `values/`) is not emptied.
 
 - fb83c18: Translation checks are more precise: variables and markup are compared with the reference forms that have the same exact numbers and select values (plural categories mean different numbers per locale, so a plural's input is needed in every form that isn't one number), a form for one exact number may leave out only that number's input variable, and an empty reference expects no variables. A translation that can't choose like the reference (no selector for a select's values, no plural the locale needs, or no exact-number selector for the reference's `=0`) gets the new `missing-selector` diagnostic with the `values` it can't express. Plural categories only millions select (French, Spanish, Italian, Portuguese, Catalan `many`) are no longer required; `pluralRules().requiredCategories` lists the required ones. Locales such as `pt_BR` are read as `pt-BR`. Full scans read patterns with one query per table, lowering peak memory.
-- 3e9bd54: Usage analysis issues can locate the construct that makes the analysis incomplete. `UsageIssue` has optional `start` and `end` positions (1-based lines, 0-based columns, as for references), which `checkProject` and `findUsages` pass through. The m-function matcher reports one issue per unresolved construct, in source order, e.g. `src/Field.tsx` line 14 for ``m[`${fieldName}_label`]()``, instead of one issue per reason and file.
+- 3e9bd54: Usage analysis issues can locate the construct that makes the analysis incomplete. `UsageIssue` has optional `start` and `end` positions (1-based lines, 0-based columns, as for references), which `checkProject` and `findUsages` pass through. The m-function matcher reports one issue per unresolved construct, in source order, e.g. `src/Field.tsx` line 14 for `` m[`${fieldName}_label`]() ``, instead of one issue per reason and file.
 
 ### Patch Changes
 
@@ -276,6 +298,7 @@
 - 6defee0: Extend the SDK pattern AST with richer markup metadata.
 
   Added support for markup `options` and `attributes` on:
+
   - `markup-start`
   - `markup-end`
   - `markup-standalone`

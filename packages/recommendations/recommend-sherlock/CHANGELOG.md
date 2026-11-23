@@ -1,5 +1,11 @@
 # @inlang/recommend-sherlock
 
+## 0.2.2
+
+### Patch Changes
+
+- 0aacd29: License under MIT, copyright General Translation, Inc. Packages previously under Apache-2.0 or ISC, or with no declared license, now declare MIT and ship a `LICENSE` file.
+
 ## 0.2.1
 
 ### Patch Changes

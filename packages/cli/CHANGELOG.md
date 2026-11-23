@@ -1,5 +1,40 @@
 # @inlang/cli
 
+## 3.7.0
+
+### Minor Changes
+
+- ae5a52a: `@inlang/cli` now declares Node.js 20.3 or later. Its `@inlang/sdk` already requires Node.js 20, without which the CLI can't open a project, and signing in to General Translation needs 20.3.
+- 6121bcd: General Translation is the default machine translation provider for `inlang machine translate`. Without a provider setting or a bring-your-own key, the command uses the General Translation key from `GT_API_KEY` (or `.env` / `.env.local` next to `project.inlang`). In an interactive terminal without a key, it asks which translation provider the project should use. General Translation (recommended) signs in, in the browser or, where none can be shown or with `--no-browser`, with a code; lets you choose one of your General Translation projects or create one; and saves a development key to `.env.local` and the project ID to `gt.config.json`, so teammates use the same project. Community translation service uses the free community service, as before, and saves that choice to `.env.local`, so later runs don't ask again. Other links to the setup for another provider and saves nothing. In CI and other non-interactive runs without a key, it keeps using the free community service, as before, and prints how to set up General Translation. A project that chose General Translation, with a project ID in `gt.config.json` or `GT_PROJECT_ID`, or with `INLANG_MACHINE_TRANSLATE_PROVIDER=gt`, fails instead and explains how to get a key, so a missing CI secret never sends its text to another service. In a terminal, such a project signs in without offering other services. A General Translation key whose project ID differs from `gt.config.json`'s fails with a project ID mismatch, as in `gt`. On a machine signed in to General Translation, as with the `gt` CLI, such a run saves a development key instead, without asking; without a project ID, it creates a project only for an account that has none. Outside a terminal, `--no-browser` signs in with a code, as `gt login --no-browser` does, so coding agents can have a person complete the sign-in; the setup steps tell agents to do this.
+
+  Bring-your-own keys keep working and still take precedence over General Translation when no provider is set. A provider setting, in the shell, `.env` or `.env.local`, takes precedence over any key. `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` selects General Translation explicitly. General Translation authentication, billing and service failures never fall back to another provider. `INLANG_MACHINE_TRANSLATE_PROVIDER=demosjarco` still selects the community service. Each run that uses it now names it in one line instead of a three-line warning.
+
+  A run with nothing to translate no longer needs a provider.
+
+  Unreadable or invalid `gt.config.json` fails instead of being treated as an unconfigured project. Equivalent project paths, including `--project .` from inside the inlang project, find the same adjacent GT configuration and credentials.
+
+- 943a559: `inlang machine translate` now translates every plural form a locale needs when the provider uses context (Russian `one`, `few`, `many` and `*` for an English `one` and `*`). Each form's context names its input, the form and the numbers it is used for, even when source and target category names match. Exact-number forms retain their exact meaning. Forms a translation already has are kept. A literal `other` it has doesn't replace the catch-all, which is added next to it, unless the source writes its catch-all as `other` too: Paraglide selects a literal `other` only for its category, such as French `many` for millions. With a provider without context, or when a translation's selectors differ from the source's or it has a select value the source doesn't (whose forms couldn't be translated, and would lose numbers to the forms added), such messages get the source's forms, as before, and are reported.
+
+### Patch Changes
+
+- ab7f174: `inlang check` now suggests `inlang machine translate` when translations are missing or empty.
+- cf2dbc6: `inlang machine translate` sends at most 4 batch requests at once, or 16 for a provider that translates one text per request (the community service sends 6 of them at a time), and keeps translating unrelated messages when an individual text fails. A rate-limited request (429, or Google's 403 for a per-minute quota) is sent again up to 3 times, after the provider's `Retry-After` or 2, 4 and 8 seconds, waiting at most a minute in total; other failures aren't retried. The community service instead sends a request up to 3 times on a 429, a server error or a network failure, after 5 and 10 seconds. Authentication, billing, and service failures, and rate limits that outlast the retries, stop new requests. It still saves the translations that came back, says how many, and exits with code 1; run it again to translate the rest. If that save fails, it reports both why translation stopped and why the save failed. A new message gets a language only when all its translations came back; a message that exists keeps those that did. A blank source text is copied as it is instead of being sent for translation.
+- 8338378: Signing in to General Translation from `inlang machine translate` now says what it is waiting for while it loads your projects and organizations and creates the project and key.
+- 6121bcd: `inlang machine translate` writes the translation files as soon as each target locale is done, one locale at a time, while the requests of all locales still share the provider's request slots. A run that is stopped, times out in CI or hits a provider failure keeps every locale it finished, so the next run doesn't translate and pay for them again. A provider failure or Ctrl+C sends no further requests and saves the translations that came back, from requests already in flight too; a second Ctrl+C quits without saving them. A failed text doesn't stop the other locales.
+- 3039d2f: `inlang machine translate` no longer writes a translation that came back empty, or with a variable or markup tag of the source dropped, added or changed, or with markup that doesn't nest, such as a translated `{count}`, another `currency` option or a missing `</link>`, and doesn't create a new message that would have one. It saves the other translations, lists the rejected ones by locale with their bundle ids and why, and exits with 1. A message without forms counts as new here too, and a message that isn't created isn't listed in the plural warnings.
+
+  An exact-number or single-number plural form may spell out its own count, including ICU `#` (such as Arabic duals). Other variables, currency and unit formatters, and markup must still be preserved; changed formatter options and added expressions are rejected.
+
+- 0c61998: `inlang machine translate` reports messages whose plurals need forms the source doesn't have in a target locale, such as Russian `few` and `many` for an English `one` and `other`. It still translates the source's forms, as before. The missing forms stay missing until they are added by hand; whether those numbers fall back to another form depends on the message format (i18next shows the message key). A translation whose selectors aren't the source's, in any order, such as a hand-written plural of a text or a text without the source's plural, is left as it is, and reported when it has an empty form, including a select value only it has, or lacks one its selectors need. A translation without forms gets the source's, with the source's selectors, like a new one: only with all its translations. The report lists the forms and message ids by locale, the first five and how many more. It is printed before anything is written, so a failed write keeps it, and leaves out a message that isn't created because one of its translations failed.
+
+  It also warns when a locale's plural rules are unknown.
+
+- 0aacd29: License under MIT, copyright General Translation, Inc. Packages previously under Apache-2.0 or ISC, or with no declared license, now declare MIT and ship a `LICENSE` file.
+- Updated dependencies [0aacd29]
+- Updated dependencies [7992423]
+- Updated dependencies [ac172cb]
+  - @inlang/sdk@4.3.0
+
 ## 3.6.0
 
 ### Minor Changes
@@ -86,7 +121,7 @@
 
   - All checks run by default: missing and empty translations, empty forms, missing or unknown variables, missing markup, missing plural/select forms and selectors, and unused messages. Per-check flags such as `--missing-translations` or `--unused-messages` run only those checks.
   - `--locales de,fr` reports only findings for these locales and validates them against the project's settings (`--languageTags` is accepted as an alias).
-  - Unused messages are found with the project's usage-analysis plugin (`@inlang/plugin-m-function-matcher` ≥ 2.3.0 for Paraglide) in the source under the project's parent directory, or `--source <paths...>`. Git-ignored files (outside git: dot directories and a top-level `dist`, `build` and `coverage`), `node_modules`, Paraglide's compiled output and known build tool configs are skipped. When usages can't all be resolved, e.g. a dynamic ``m[`${fieldName}_label`]()``, `check` lists the file, line and code instead of reporting unused messages. With an older matcher, it asks to update the module URL in `settings.json`.
+  - Unused messages are found with the project's usage-analysis plugin (`@inlang/plugin-m-function-matcher` ≥ 2.3.0 for Paraglide) in the source under the project's parent directory, or `--source <paths...>`. Git-ignored files (outside git: dot directories and a top-level `dist`, `build` and `coverage`), `node_modules`, Paraglide's compiled output and known build tool configs are skipped. When usages can't all be resolved, e.g. a dynamic `` m[`${fieldName}_label`]() ``, `check` lists the file, line and code instead of reporting unused messages. With an older matcher, it asks to update the module URL in `settings.json`.
   - `--format json` prints the full report (with a `version`).
   - Exits with 1 when there are findings or project errors, and with 0 otherwise or with `--no-fail`.
 
@@ -100,6 +135,7 @@
 - 43f9216: The CLI no longer collects telemetry or error reports. Unexpected errors in a command now exit with code 1 instead of 0.
 - 3d2a49c: `inlang machine translate` puts the variants it translates into an existing message at their place in the source message. It appended them, so with `en` = `one`, `*` and `de` = `*`, `de` became `*`, `one`, and runtimes that select the first matching variant (Paraglide JS) never selected `one`. The target message's variants are now ordered like the source: translated variants go to their source position, existing variants keep their text, and a variant the source doesn't have (e.g. a plural category of the target language) stays after the one it followed. Because variants are ordered by id, the variants from the first one that moves on get new ids. Messages that weren't translated, and their entries in the translation files, don't change.
 - 772c0c8: Make `machine translate` resilient on large projects when using the community-operated service at translate.demosjarco.dev.
+
   - Requests to the service are limited to 6 in flight, matching the Cloudflare Workers per-invocation connection limit, instead of firing every bundle at once. Google and DeepL are unaffected.
   - Each request to the service now times out after 20 seconds instead of 15, leaving room for slower models and gateway fallbacks.
   - Throttled (429), server-error (5xx), timed-out and network-failed requests are retried up to 2 times (3 attempts total), waiting 5 seconds before the first retry and doubling the wait for each retry after it.
@@ -451,6 +487,7 @@ Fix @inlang/rpc is a bundled dependency that is not published on npm
 - 4b710df: Upgrade to the inlang SDK v2.
 
   BREAKING:
+
   - The `inlang lint` command has been removed. Please upvote https://github.com/opral/lix/issues/239 to re-introduce linting in a future release.
 
   ```diff
@@ -898,6 +935,7 @@ Fix @inlang/rpc is a bundled dependency that is not published on npm
 ### Minor Changes
 
 - 1502c0deb: refactor: removed the project migrate command
+
   - migration command is not used anymore
   - removed the command to reduce complexity
 

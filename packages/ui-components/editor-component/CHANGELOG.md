@@ -1,5 +1,25 @@
 # @inlang/message-bundle-component
 
+## 16.0.0
+
+### Patch Changes
+
+- 0aacd29: License under MIT, copyright General Translation, Inc. Packages previously under Apache-2.0 or ISC, or with no declared license, now declare MIT and ship a `LICENSE` file.
+- 7992423: Add `sourceVariantFor`: the reference variant a form of a translation is translated from, the one the reference shows at runtime for the form's inputs. A plural category comes from the reference's category for the same numbers, not the one with the same name: Russian `few` from English `*`, and Russian `many` from French `*` rather than French `many` (millions).
+
+  `pluralRules` takes a form's matches to resolve a plural whose type is a variable (i18next's `type=$pluralType`), and gives each category's sample numbers (`sampleNumbers`).
+
+  Move `pluralExamples` from `@inlang/editor-component` (which still exports it) to `@inlang/sdk`.
+
+  `missing-variant` treats a plural category that selects only 0 as the exact 0 form: Arabic "zero" is `=0`, so Arabic i18next `_zero` no longer reports a missing `=0`, with ordinal forms too.
+
+  Expose `spelledOutInputs` so translation validation can share the SDK's exact-number and single-number plural exceptions.
+
+- Updated dependencies [0aacd29]
+- Updated dependencies [7992423]
+- Updated dependencies [ac172cb]
+  - @inlang/sdk@4.3.0
+
 ## 15.0.0
 
 ### Minor Changes
@@ -43,6 +63,7 @@
   Breaking: the components use the `@inlang/sdk` 4 database rows. The `change` event's `newData` and the `message` / `variants` properties carry `bundle_id` / `message_id` instead of `bundleId` / `messageId`.
 
   Breaking changes in `<inlang-pattern-editor>`:
+
   - Expressions and markup are atomic tokens (deleted as a whole). Markup is now preserved instead of being dropped from the pattern, and text between known markup is shown formatted.
   - Styles no longer leak: the global `div` / `p` selectors were removed and all styles are scoped to the element. Padding, min-height, background, font size and colors are themeable via `--inlang-pattern-*` custom properties (current values are the defaults).
   - New `placeholder` and `aria-label` support and an `insertExpression(name)` method. The `variant` property and the `change`, `pattern-editor-focus` and `pattern-editor-blur` events are unchanged.
@@ -61,6 +82,7 @@
 ### Patch Changes
 
 - 5d93f32: Review follow-up:
+
   - `<inlang-pattern-editor>`: a `variant` with another `id` ("+ Add form") replaces the content and forgets pending echoes, so unsaved text of the previous variant is never saved into the new one. Echoes are compared structurally, so a store that returns patterns with sorted keys (the SDK database) no longer reverts text typed after a token was inserted. A lone `markup-start` is kept, and keys are left to an IME while it composes. Undo stays with the host (documented).
   - `addExactNumber` / `removeExactNumber` find the exact-number selector in any language (no more `countPluralExact1` when only some locales use `=0`). `removeSelector` on a plural removes its exact-number partner. `addSelector` throws for an input that already is a plural and `selectableVariables` no longer offers it; select values get their forms before the catch-all.
   - `selectVariant` and `<inlang-message-forms>` respect an ICU `offset`; `pluralExamples` takes `offset` and returns copies. `<inlang-message-forms>` shows a plural's explicit `other` once.

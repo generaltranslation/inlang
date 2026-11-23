@@ -1,5 +1,15 @@
 # @inlang/plugin-m-function-matcher
 
+## 2.4.4
+
+### Patch Changes
+
+- 0aacd29: License under MIT, copyright General Translation, Inc. Packages previously under Apache-2.0 or ISC, or with no declared license, now declare MIT and ship a `LICENSE` file.
+- Updated dependencies [0aacd29]
+- Updated dependencies [7992423]
+- Updated dependencies [ac172cb]
+  - @inlang/sdk@4.3.0
+
 ## 2.4.3
 
 ### Patch Changes
@@ -75,7 +85,7 @@
 
 ### Patch Changes
 
-- 3e9bd54: Usage analysis issues can locate the construct that makes the analysis incomplete. `UsageIssue` has optional `start` and `end` positions (1-based lines, 0-based columns, as for references), which `checkProject` and `findUsages` pass through. The m-function matcher reports one issue per unresolved construct, in source order, e.g. `src/Field.tsx` line 14 for ``m[`${fieldName}_label`]()``, instead of one issue per reason and file.
+- 3e9bd54: Usage analysis issues can locate the construct that makes the analysis incomplete. `UsageIssue` has optional `start` and `end` positions (1-based lines, 0-based columns, as for references), which `checkProject` and `findUsages` pass through. The m-function matcher reports one issue per unresolved construct, in source order, e.g. `src/Field.tsx` line 14 for `` m[`${fieldName}_label`]() ``, instead of one issue per reason and file.
 - Updated dependencies [5c0a84b]
 - Updated dependencies [2390c5a]
 - Updated dependencies [f45a761]
@@ -353,6 +363,7 @@
   If you still want to use Sherlock v1, please use the previous major version of the plugin. For Sherlock itself, [please pin the version to `1.x.x`](https://github.com/microsoft/vscode-docs/blob/vnext/release-notes/v1_91.md#extension-install-options) in the VS Code extension settings.
 
   ### Breaking changes
+
   - Lint rules are now polyfilled (and therefore may work different), as we are currently reworking how lint rules are working with [Lix Validation Rules](https://lix.dev).
   - The `messageId` parameter in the `extractMessages` function has been renamed to `bundleId`. This change is due to the new API in Sherlock v2. If you are using the `extractMessages` function, please update the parameter name to `bundleId`.
 
