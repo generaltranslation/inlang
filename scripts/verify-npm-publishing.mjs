@@ -125,10 +125,16 @@ if (process.argv.includes("--build")) {
       assert.ok(!target.includes("*"), `Add explicit wildcard archive validation: ${entry.name} ${target}`);
       assert.ok(files.has(`package/${target.replace(/^\.\//, "")}`), `Missing package entry: ${entry.name} ${target}`);
     }
+    // npm renders frontmatter as a heading (see scripts/readme-frontmatter.mjs).
+    if (files.has("package/README.md")) {
+      const readme = spawnSync("tar", ["-xOf", archive, "package/README.md"], { encoding: "utf8" });
+      assert.equal(readme.status, 0);
+      assert.ok(!readme.stdout.startsWith("---"), `README starts with frontmatter: ${entry.name}`);
+    }
     for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
       assert.ok(!Object.values(packed[field] || {}).some((version) => version.startsWith("workspace:")), `Unresolved workspace dependency: ${entry.name}`);
     }
-    console.log(`PASS ${entry.name}@${packed.version}: archive identity, repository, entry points, and workspace dependencies.`);
+    console.log(`PASS ${entry.name}@${packed.version}: archive identity, repository, entry points, README, and workspace dependencies.`);
   }
   assert.equal((await readdir(destination)).filter((name) => name.endsWith(".tgz")).length, packages.length);
   console.log(`Verified ${packages.length} package archives without publishing.`);

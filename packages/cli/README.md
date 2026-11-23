@@ -1,16 +1,24 @@
 ---
 title: "inlang CLI: check translations in CI and machine translate"
-description: "Run npx @inlang/cli check to find missing, empty and unused translations. It exits with code 1 on findings. Machine translate missing messages with one command. No inlang account."
+description: "Run npx @inlang/cli check to find missing, empty and unused translations. It exits with code 1 on findings. Machine translate missing messages with General Translation in one command."
 og:image: https://cdn.jsdelivr.net/gh/opral/inlang@latest/packages/cli/assets/cli-banner.svg
 ---
 
 # @inlang/cli
 
-Find missing translations, wrong variables and unused messages. Fail your CI when a translation is broken.
+Find missing translations, wrong variables and unused messages, and fill missing translations with machine translation. Fail your CI when a translation is broken.
 
 ```bash
 npx @inlang/cli check --project ./project.inlang
 ```
+
+Machine translate missing messages with [General Translation](https://generaltranslation.com), the default. The first run signs you in; signing up is free:
+
+```bash
+npx @inlang/cli machine translate --project ./project.inlang
+```
+
+For coding agents, add `--no-browser`. For CI, see [`machine translate`](#machine-translate).
 
 Read the announcement: [inlang check: find missing translations and unused keys in CI](https://inlang.com/blog/inlang-check).
 
@@ -112,7 +120,7 @@ npx @inlang/cli [command]
 
 ## Minimum requirements
 
-Minimum node version: `v18.0.0`
+Minimum node version: `v20.3.0`
 
 If one of the commands can't be found, you probably use an outdated CLI version. You can always get the **latest version** by running `npx @inlang/cli@latest [command]`.
 

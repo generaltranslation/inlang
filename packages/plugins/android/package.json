@@ -1,6 +1,7 @@
 {
   "name": "@inlang/plugin-android",
   "version": "0.3.1",
+  "description": "Import and export Android strings.xml files, with variables and CLDR plurals, in your Git repo. Add plugin.inlang.android with a pathPattern to project.inlang/settings.json.",
   "type": "module",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -25,7 +26,9 @@
     "build": "NODE_ENV=production node ./build.js",
     "test": "tsc --noEmit && vitest run",
     "format": "prettier ./src --write",
-    "clean": "rm -rf ./dist ./node_modules"
+    "clean": "rm -rf ./dist ./node_modules",
+    "prepack": "node ../../../scripts/readme-frontmatter.mjs strip",
+    "postpack": "node ../../../scripts/readme-frontmatter.mjs restore"
   },
   "dependencies": {
     "@inlang/sdk": "workspace:*",

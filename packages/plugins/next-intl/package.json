@@ -1,6 +1,7 @@
 {
 	"name": "@inlang/plugin-next-intl",
 	"version": "2.4.8",
+	"description": "Import and export next-intl message files in your Git repo, one file per locale or per namespace. Add plugin.inlang.nextIntl with a pathPattern to project.inlang/settings.json.",
 	"type": "module",
 	"types": "./dist/index.d.ts",
 	"exports": {
@@ -26,7 +27,9 @@
 		"build": "NODE_ENV=production node ./build.js",
 		"test": "tsc --noEmit && vitest run --passWithNoTests --coverage",
 		"format": "prettier ./src --write",
-		"clean": "rm -rf ./dist ./node_modules"
+		"clean": "rm -rf ./dist ./node_modules",
+		"prepack": "node ../../../scripts/readme-frontmatter.mjs strip",
+		"postpack": "node ../../../scripts/readme-frontmatter.mjs restore"
 	},
 	"dependencies": {
 		"@babel/parser": "^7.28.5",
