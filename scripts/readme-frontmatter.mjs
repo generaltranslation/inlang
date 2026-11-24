@@ -11,6 +11,7 @@
 
 import { existsSync } from "node:fs";
 import { readFile, rename, writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const README = "README.md";
 const ORIGINAL = ".README.md.with-frontmatter";
@@ -21,19 +22,43 @@ export function stripFrontmatter(markdown) {
   return match ? markdown.slice(match[0].length) : markdown;
 }
 
-const mode = process.argv[2];
-if (mode === "strip") {
-  // A run that stopped before `postpack` left the original aside: keep it.
-  if (existsSync(ORIGINAL)) await rename(ORIGINAL, README);
+/**
+ * Puts the original README back, if one was moved aside. Only while README.md
+ * is still the copy `strip` wrote: after an interrupted pack, README.md may
+ * have been edited or come from another branch, and is kept then.
+ */
+export async function restore() {
+  if (!existsSync(ORIGINAL)) return;
+  const original = await readFile(ORIGINAL, "utf8");
+  const current = existsSync(README) ? await readFile(README, "utf8") : undefined;
+  if (current !== undefined && current !== stripFrontmatter(original)) {
+    throw new Error(
+      `${README} changed after a pack stopped before restoring it. ${ORIGINAL} holds the README from before that pack. Keep the README you want as ${README}, delete ${ORIGINAL}, then pack again.`,
+    );
+  }
+  await rename(ORIGINAL, README);
+}
+
+/** Moves README.md aside and writes it without its frontmatter. */
+export async function strip() {
+  // A pack that stopped before `postpack` left the original aside.
+  await restore();
   const markdown = await readFile(README, "utf8");
   const stripped = stripFrontmatter(markdown);
   if (stripped !== markdown) {
     await rename(README, ORIGINAL);
     await writeFile(README, stripped);
   }
-} else if (mode === "restore") {
-  if (existsSync(ORIGINAL)) await rename(ORIGINAL, README);
-} else if (mode !== undefined) {
-  console.error(`Unknown mode "${mode}". Use strip or restore.`);
-  process.exit(1);
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const mode = process.argv[2];
+  try {
+    if (mode === "strip") await strip();
+    else if (mode === "restore") await restore();
+    else throw new Error(`Unknown mode "${mode}". Use strip or restore.`);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
 }
