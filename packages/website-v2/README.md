@@ -14,7 +14,7 @@ pnpm --filter @inlang/website-v2 run deploy
 pnpm --filter @inlang/website-v2 run deploy:redirect
 ```
 
-Cloudflare Builds is connected to `opral/inlang`, with the working directory
+Cloudflare Builds is connected to `generaltranslation/inlang`, with the working directory
 `/packages/website-v2`. Production builds use
 `pnpm --filter @inlang/website-v2... build`; the deployment command is `npx wrangler deploy`. Deploy the redirect Worker
 separately using `deploy:redirect`; Cloudflare Builds forces its configured Worker
