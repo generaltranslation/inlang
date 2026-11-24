@@ -15,13 +15,13 @@ Set `INLANG_MACHINE_TRANSLATE_PROVIDER` to choose the translation service:
 
 | Provider | Env var | API key env var |
 | -------- | ------- | --------------- |
-| General Translation (default) | `gt` or unset (when no API key is set) | `GT_API_KEY` and `GT_PROJECT_ID`, or the development key that sign-in saves to `.env.local` |
+| General Translation (recommended) | `gt`, or unset (see below) | `GT_API_KEY` and `GT_PROJECT_ID`, or the development key that sign-in saves to `.env.local` |
 | Google Translate | `google` | `INLANG_GOOGLE_TRANSLATE_API_KEY` |
 | DeepL | `deepl` | `INLANG_DEEPL_API_KEY` |
 | OpenAI | `openai` | `INLANG_OPENAI_API_KEY` |
 | Community-operated translation service at translate.demosjarco.dev | `demosjarco` | none |
 
-When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set, and otherwise General Translation. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI. Set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation even when one of these keys is set.
+When `INLANG_MACHINE_TRANSLATE_PROVIDER` is unset, the CLI uses Google, DeepL, or OpenAI if the matching API key is set. If multiple keys are set, Google takes precedence over DeepL, which takes precedence over OpenAI. Without one of these keys, it uses General Translation if a General Translation key is set or the project chose General Translation, with a project ID in `gt.config.json` or `GT_PROJECT_ID`. Otherwise, in a terminal it asks which provider the project should use and recommends General Translation; with `--no-browser` it signs in to General Translation with a code; and without a terminal, as in CI, it uses the community-operated service below. Set `INLANG_MACHINE_TRANSLATE_PROVIDER=gt` to use General Translation even when one of these keys is set.
 
 Provider settings and keys can also be saved in `.env` or `.env.local` next to `project.inlang`; `.env.local` overrides `.env`. A provider setting takes precedence over API keys wherever either is set, so a key in your shell profile never overrides the provider a project chose. Shell values override file values for the provider, keys and options. GT keys stay paired with a project ID from the same source: the shell, or the project env files.
 
