@@ -1,6 +1,6 @@
 {
 	"name": "@inlang/plugin-message-format",
-	"version": "4.6.1",
+	"version": "4.6.2",
 	"description": "Store translations as JSON files in your Git repo, with variables, plurals and variants. Add plugin.inlang.messageFormat with a pathPattern to project.inlang/settings.json. The recommended plugin for new projects.",
 	"type": "module",
 	"types": "./dist/index.d.ts",

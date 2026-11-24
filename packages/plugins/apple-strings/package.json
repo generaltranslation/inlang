@@ -1,6 +1,6 @@
 {
   "name": "@inlang/plugin-apple-strings",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Import and export Apple .strings files, with positional variables, in your Git repo. Add plugin.inlang.apple-strings with a pathPattern to project.inlang/settings.json. For plurals use the .xcstrings plugin.",
   "type": "module",
   "types": "./dist/index.d.ts",

@@ -1,5 +1,11 @@
 # @inlang/plugin-icu1
 
+## 1.3.10
+
+### Patch Changes
+
+- bbefcc9: The README on npm no longer starts with the inlang.com marketplace's frontmatter, which npm showed as a heading, and the package has a description for npm search. The inlang CLI's README also shows how to machine translate with General Translation, and gives Node.js 20.3 as the minimum version.
+
 ## 1.3.9
 
 ### Patch Changes
