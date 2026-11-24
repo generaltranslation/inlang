@@ -1,6 +1,6 @@
 {
   "name": "@inlang/cli",
-  "version": "3.7.1",
+  "version": "3.7.2",
   "description": "Check translations in CI and machine translate missing messages with General Translation. Finds missing, empty and unused translations, and exits with code 1 on findings.",
   "private": false,
   "publishConfig": {
