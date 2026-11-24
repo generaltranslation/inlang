@@ -1,5 +1,11 @@
 # @inlang/cli
 
+## 3.7.2
+
+### Patch Changes
+
+- e32c449: The README and the bring-your-own-key guide call General Translation the recommended provider instead of the default, since the CLI asks which provider to use, and their General Translation links carry UTM parameters.
+
 ## 3.7.1
 
 ### Patch Changes
