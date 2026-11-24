@@ -5,7 +5,7 @@ description: Set your own Google Cloud Translation, DeepL API, or OpenAI key for
 
 # Bring Your Own Translation API Key
 
-By default, the `machine translate` command uses [General Translation](https://generaltranslation.com). You can bring your own Google Cloud Translation, DeepL API, or OpenAI key instead. Choose a provider with `INLANG_MACHINE_TRANSLATE_PROVIDER` and set the matching API key environment variable before running the command.
+The `machine translate` command recommends [General Translation](https://generaltranslation.com/?utm_source=inlang&utm_medium=docs&utm_content=cli-byok). You can bring your own Google Cloud Translation, DeepL API, or OpenAI key instead. Choose a provider with `INLANG_MACHINE_TRANSLATE_PROVIDER` and set the matching API key environment variable before running the command.
 
 For many projects, coding agents can produce better translation drafts than generic machine translation because they can use surrounding product and code context. Consider using an agent-driven workflow when translation quality matters more than fully automated CI output.
 
