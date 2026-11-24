@@ -1,6 +1,7 @@
 {
 	"name": "@inlang/plugin-message-format",
 	"version": "4.6.1",
+	"description": "Store translations as JSON files in your Git repo, with variables, plurals and variants. Add plugin.inlang.messageFormat with a pathPattern to project.inlang/settings.json. The recommended plugin for new projects.",
 	"type": "module",
 	"types": "./dist/index.d.ts",
 	"exports": {
@@ -31,7 +32,9 @@
 		"test": "tsc --noEmit && vitest run --passWithNoTests",
 		"test:watch": "vitest",
 		"format": "prettier ./src --write",
-		"clean": "rm -rf ./dist ./node_modules"
+		"clean": "rm -rf ./dist ./node_modules",
+		"prepack": "node ../../../scripts/readme-frontmatter.mjs strip",
+		"postpack": "node ../../../scripts/readme-frontmatter.mjs restore"
 	},
 	"devDependencies": {
 		"@inlang/plugin-icu1": "workspace:*",

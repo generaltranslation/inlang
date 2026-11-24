@@ -1,6 +1,7 @@
 {
   "name": "@inlang/plugin-icu1",
   "version": "1.3.9",
+  "description": "Import and export ICU MessageFormat v1 JSON files in your Git repo, with selects, plurals and selectordinal. Add plugin.inlang.icu-messageformat-1 with a pathPattern to project.inlang/settings.json.",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -26,7 +27,9 @@
     "build": "NODE_ENV=production node ./build.js",
     "test": "tsc --noEmit && vitest run --passWithNoTests",
     "format": "prettier ./src --write",
-    "clean": "rm -rf ./dist ./node_modules"
+    "clean": "rm -rf ./dist ./node_modules",
+    "prepack": "node ../../../scripts/readme-frontmatter.mjs strip",
+    "postpack": "node ../../../scripts/readme-frontmatter.mjs restore"
   },
   "devDependencies": {
     "@inlang/tsconfig": "workspace:*",

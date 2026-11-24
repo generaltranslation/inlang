@@ -395,3 +395,6 @@ packages/lix-docs/docs/.vitepress/cache
 packages/lix-docs/docs/.vitepress/dist
 
 artifact/*
+
+# Left by a pack that stopped before postpack (scripts/readme-frontmatter.mjs)
+.README.md.with-frontmatter

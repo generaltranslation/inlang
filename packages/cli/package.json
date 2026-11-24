@@ -1,6 +1,7 @@
 {
   "name": "@inlang/cli",
   "version": "3.7.0",
+  "description": "Check translations in CI and machine translate missing messages with General Translation. Finds missing, empty and unused translations, and exits with code 1 on findings.",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -45,7 +46,9 @@
     "test:package": "node ./scripts/test-packed-wasm-fallback.mjs",
     "test:watch": "vitest",
     "format": "prettier ./src --write",
-    "clean": "rm -rf ./dist ./node_modules"
+    "clean": "rm -rf ./dist ./node_modules",
+    "prepack": "node ../../scripts/readme-frontmatter.mjs strip",
+    "postpack": "node ../../scripts/readme-frontmatter.mjs restore"
   },
   "dependencies": {
     "@inlang/sdk": "workspace:*",

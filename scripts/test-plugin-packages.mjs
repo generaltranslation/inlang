@@ -38,16 +38,19 @@ const temporary = mkdtempSync(join(tmpdir(), "inlang-plugin-packages-"));
 try {
   const tarballs = [];
   for (const path of [join(root, "packages/sdk"), ...plugins]) {
-    const result = JSON.parse(
-      execFileSync(
-        "pnpm",
-        ["pack", "--json", "--pack-destination", temporary],
-        {
-          cwd: path,
-          encoding: "utf8",
-        },
-      ),
+    const output = execFileSync(
+      "pnpm",
+      ["pack", "--json", "--pack-destination", temporary],
+      {
+        cwd: path,
+        encoding: "utf8",
+      },
     );
+    // pnpm prints the output of lifecycle scripts, such as `prepack`, to
+    // stdout too, before the JSON.
+    const start = output.search(/^\{/m);
+    assert(start !== -1, `No pack result for ${path}:\n${output}`);
+    const result = JSON.parse(output.slice(start));
     tarballs.push(result.filename);
     const files = new Set(result.files.map((file) => file.path));
     const manifest = JSON.parse(
