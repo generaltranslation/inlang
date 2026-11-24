@@ -1,6 +1,6 @@
 {
   "name": "@inlang/plugin-android",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Import and export Android strings.xml files, with variables and CLDR plurals, in your Git repo. Add plugin.inlang.android with a pathPattern to project.inlang/settings.json.",
   "type": "module",
   "types": "./dist/index.d.ts",
